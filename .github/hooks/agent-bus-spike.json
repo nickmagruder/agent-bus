@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "node src/spike/hook-logger.ts --platform copilot --event sessionStart",
+        "powershell": "node src/spike/hook-logger.ts --platform copilot --event sessionStart",
+        "timeoutSec": 30
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "node src/spike/hook-logger.ts --platform copilot --event userPromptSubmitted",
+        "powershell": "node src/spike/hook-logger.ts --platform copilot --event userPromptSubmitted",
+        "timeoutSec": 30
+      }
+    ],
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "node src/spike/hook-logger.ts --platform copilot --event preToolUse",
+        "powershell": "node src/spike/hook-logger.ts --platform copilot --event preToolUse",
+        "timeoutSec": 30
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "node src/spike/hook-logger.ts --platform copilot --event postToolUse",
+        "powershell": "node src/spike/hook-logger.ts --platform copilot --event postToolUse",
+        "timeoutSec": 30
+      }
+    ],
+    "agentStop": [
+      {
+        "type": "command",
+        "bash": "node src/spike/hook-logger.ts --platform copilot --event agentStop",
+        "powershell": "node src/spike/hook-logger.ts --platform copilot --event agentStop",
+        "timeoutSec": 30
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "node src/spike/hook-logger.ts --platform copilot --event sessionEnd",
+        "powershell": "node src/spike/hook-logger.ts --platform copilot --event sessionEnd",
+        "timeoutSec": 30
+      }
+    ],
+    "errorOccurred": [
+      {
+        "type": "command",
+        "bash": "node src/spike/hook-logger.ts --platform copilot --event errorOccurred",
+        "powershell": "node src/spike/hook-logger.ts --platform copilot --event errorOccurred",
+        "timeoutSec": 30
+      }
+    ]
+  }
+}

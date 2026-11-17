@@ -1,0 +1,9 @@
+# agent-bus Phase 0 spike wiring. Codex reads project config only for
+# trusted projects. If hooks don't fire, also set [features] hooks = true
+# in ~/.codex/config.toml (see docs/spikes/phase-0.md).
+[features]
+hooks = true
+
+[mcp_servers.agent-bus-spike]
+url = "http://127.0.0.1:47823/mcp"
+bearer_token_env_var = "AGENT_BUS_TOKEN"

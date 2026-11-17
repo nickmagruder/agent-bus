@@ -1,0 +1,13 @@
+{
+  // markdownlint config for agent-bus (used locally and in CI).
+  "config": {
+    "default": true,
+    // Prose is wrapped by hand or not at all; long table rows are normal.
+    "MD013": false,
+    // Repeated headings are fine in different sections.
+    "MD024": { "siblings_only": true },
+    // CLAUDE.md is a single @import line, so a leading H1 isn't required.
+    "MD041": false,
+  },
+  "ignores": ["**/node_modules/**", "spike-logs/**"],
+}
