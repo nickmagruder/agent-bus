@@ -1,0 +1,57 @@
+import { App, LogLevel, SocketModeReceiver } from '@slack/bolt';
+import type { Logger } from '../log.ts';
+import type { Store } from '../store.ts';
+
+export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
+
+export interface SlackConnection {
+  readonly state: ConnectionState;
+  /** The Bolt app; Phase 2 registers message and action handlers on it. */
+  readonly app: App;
+  start(): Promise<void>;
+  stop(): Promise<void>;
+}
+
+/**
+ * The broker's single Socket Mode connection. Slack sends each event to any
+ * one of an app's connections, so there must only ever be one. The client
+ * reconnects by itself (Socket Mode URLs refresh every few hours); state
+ * changes go to the log and the audit trail.
+ */
+export function createSlackConnection(options: {
+  botToken: string;
+  appToken: string;
+  store: Store;
+  log: Logger;
+}): SlackConnection {
+  const receiver = new SocketModeReceiver({
+    appToken: options.appToken,
+    logLevel: LogLevel.WARN,
+  });
+  const app = new App({ token: options.botToken, receiver, logLevel: LogLevel.WARN });
+  let state: ConnectionState = 'disconnected';
+
+  const track = (next: ConnectionState) => () => {
+    if (next === state) return;
+    state = next;
+    options.log(next === 'connected' ? 'info' : 'warn', `Slack ${next}`);
+    options.store.appendEvent({ kind: 'slack.connection', data: { state: next } });
+  };
+  receiver.client.on('connecting', track('connecting'));
+  receiver.client.on('connected', track('connected'));
+  receiver.client.on('reconnecting', track('reconnecting'));
+  receiver.client.on('disconnected', track('disconnected'));
+
+  return {
+    get state() {
+      return state;
+    },
+    app,
+    async start() {
+      await app.start();
+    },
+    async stop() {
+      await app.stop();
+    },
+  };
+}
