@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { checkRequest } from '../shared/guard.ts';
+import { hookRequestSchema, type HookResponse } from '../shared/hook-protocol.ts';
 import type { Platform } from '../shared/platform.ts';
 import { errorMessage, type Logger } from './log.ts';
 import { createBusMcpServer } from './mcp.ts';
@@ -81,7 +82,7 @@ async function handle(
     if (req.method !== 'GET') return methodNotAllowed(res, 'GET');
     return json(res, 200, { ok: true, platform: verdict.platform, ...options.health?.() });
   }
-  if (url.pathname !== '/mcp') return reply(res, 404, 'Not found');
+  if (url.pathname !== '/mcp' && url.pathname !== '/hook') return reply(res, 404, 'Not found');
   // Stateless MCP: no server-to-client GET stream and no session DELETE.
   if (req.method !== 'POST') return methodNotAllowed(res, 'POST');
 
@@ -90,6 +91,13 @@ async function handle(
     body = await readJsonBody(req);
   } catch (error) {
     return reply(res, 400, errorMessage(error));
+  }
+
+  if (url.pathname === '/hook') {
+    const parsed = hookRequestSchema.safeParse(body);
+    if (!parsed.success) return reply(res, 400, 'Invalid hook request');
+    const result: HookResponse = options.service.hook(verdict.platform, parsed.data);
+    return json(res, 200, result);
   }
 
   const server = createBusMcpServer(options.service, verdict.platform);

@@ -9,10 +9,11 @@ desktop sessions to the `clankers` Slack workspace and to each other:
 
 Design, decisions and phases: [clankers `docs/slack-integration-plan.md`](https://github.com/nickmagruder/clankers/blob/main/docs/slack-integration-plan.md).
 
-**Current stage: Phase 1** (outbound pings). Broker core is in `src/broker/`;
-hooks, start-at-login and app wiring are still to come. Plan and checklist:
-[docs/phase-1.md](docs/phase-1.md). Phase 0 spike tools (`src/spike/`) remain
-until the hook CLI replaces them: [docs/spikes/phase-0.md](docs/spikes/phase-0.md).
+**Current stage: Phase 1** (outbound pings). Broker core (`src/broker/`) and
+hook CLI (`src/cli/`) are in; start-at-login and app wiring are still to come.
+Plan and checklist: [docs/phase-1.md](docs/phase-1.md). Phase 0 results:
+[docs/spikes/phase-0.md](docs/spikes/phase-0.md) (the spike code itself was
+removed in 0.3.0; it's in git history at `9062a63`).
 
 ## How the broker works
 
@@ -30,6 +31,29 @@ until the hook CLI replaces them: [docs/spikes/phase-0.md](docs/spikes/phase-0.m
   out per channel at about one a second, honour Slack's `Retry-After`, and
   survive a restart.
 - `GET /health` (same auth) reports the Slack connection state.
+
+## Hooks (Claude Code, Codex)
+
+`src/cli/hook.ts` is the hook command. It reads the app's hook payload,
+sends a few fields to `POST /hook` with the platform's token, and always
+exits 0, so a stopped broker never blocks an agent. Prompts, transcripts and
+full tool input stay local; only a one-line tool summary (command, file or
+question) and a short message snippet are sent.
+
+```text
+node C:/Users/nickm/source/repos/agent-bus/src/cli/hook.ts claude   # or codex
+```
+
+| Event               | What happens                                                                                                                          |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `SessionStart`      | Maps the app session to a bus session and adds its ID (`claude/agent-bus/3f2a`) to the agent's context. Nothing is posted.            |
+| `PermissionRequest` | Urgent DM with the tool and command; at most one per session per 2 minutes. The hook prints nothing: the app's own prompt decides.    |
+| `Notification`      | Claude `permission_prompt` only: same DM, sharing the 2-minute throttle with `PermissionRequest`.                                     |
+| `Stop`              | "Turn finished; waiting for you" with a snippet in the session's thread; at most one per 10 minutes. Skipped when `stop_hook_active`. |
+
+A session's thread root is posted on its first thread post, so short
+sessions that never post stay out of Slack. Wiring into each app's user
+config comes with the clankers `install.ps1` change.
 
 ## Setup
 
@@ -53,7 +77,9 @@ Environment (user environment variables, never files):
 | `SLACK_USER_ID`           | My Slack member ID (urgent DMs go here)                        |
 | `AGENT_BUS_PORT`          | Optional; default `47823`                                      |
 | `AGENT_BUS_DATA_DIR`      | Optional; default `%LOCALAPPDATA%\agent-bus`                   |
-| `AGENT_BUS_TOKEN`         | Phase 0 spike server only; retired with the spike              |
+
+The hook CLI reads `AGENT_BUS_TOKEN_<PLATFORM>` and `AGENT_BUS_PORT` too.
+`AGENT_BUS_TOKEN` (Phase 0) is no longer used and can be deleted.
 
 Generate the platform tokens without displaying them:
 
@@ -66,14 +92,28 @@ channel it should post to.
 
 ## Scripts
 
-| Command                | What it does                            |
-| ---------------------- | --------------------------------------- |
-| `npm run broker`       | Start the broker                        |
-| `npm run spike:server` | Start the Phase 0 spike MCP server      |
-| `npm run check`        | Typecheck, lint, format check and tests |
-| `npm test`             | Vitest                                  |
+| Command          | What it does                            |
+| ---------------- | --------------------------------------- |
+| `npm run broker` | Start the broker                        |
+| `npm run check`  | Typecheck, lint, format check and tests |
+| `npm test`       | Vitest                                  |
 
 ## Changelog
+
+### 0.3.0 (2026-11-17)
+
+- Hook CLI (`src/cli/hook.ts`) and `POST /hook`: `SessionStart` gives each
+  Claude Code / Codex session its bus ID as context; `PermissionRequest` (and
+  Claude's `permission_prompt` notification) DMs me with the command;
+  `Stop` posts "waiting for you" in the session thread. Per-session
+  throttles; hooks never return allow/deny or block.
+- Sessions found by the app's own session ID; announced in Slack lazily on
+  their first thread post (schema v2 migration).
+- `register` accepts a hook-minted session ID; sessions created by hooks
+  don't count against the hourly `register` cap.
+- Removed the Phase 0 spike: `src/spike/`, its tests, the repo `.mcp.json`,
+  `.claude/settings.json`, `.codex/` and `.github/hooks/` wiring, and the
+  `spike:server` script. Local `spike-logs/` deleted.
 
 ### 0.2.0 (2026-11-17)
 

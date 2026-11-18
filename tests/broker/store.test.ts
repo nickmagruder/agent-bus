@@ -2,7 +2,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { SCHEMA_VERSION, Store } from '../../src/broker/store.ts';
+import { DatabaseSync } from 'node:sqlite';
+import { MIGRATIONS, SCHEMA_VERSION, Store } from '../../src/broker/store.ts';
 
 const open: Store[] = [];
 function memoryStore(now?: () => Date): Store {
@@ -18,6 +19,50 @@ afterEach(() => {
 describe('Store migrations', () => {
   it('creates the schema at the current version', () => {
     expect(memoryStore().schemaVersion).toBe(SCHEMA_VERSION);
+  });
+
+  it('upgrades a v1 database, treating existing sessions as announced', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'agent-bus-store-'));
+    try {
+      const file = path.join(dir, 'bus.db');
+      const v1 = new DatabaseSync(file);
+      v1.exec(MIGRATIONS[0] ?? '');
+      v1.exec('PRAGMA user_version = 1');
+      v1.exec(
+        `INSERT INTO sessions (id, platform, project, channel, created_at, last_seen_at)
+         VALUES ('claude/x/abcd', 'claude', 'x', 'proj-x', '2026-11-17T10:00:00.000Z', '2026-11-17T10:00:00.000Z')`,
+      );
+      v1.close();
+
+      const store = new Store(file);
+      expect(store.schemaVersion).toBe(SCHEMA_VERSION);
+      expect(store.getSession('claude/x/abcd')).toMatchObject({
+        appSessionId: null,
+        announcedAt: '2026-11-17T10:00:00.000Z',
+      });
+      store.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps one bus session per app session and platform', () => {
+    const store = memoryStore();
+    const base = {
+      platform: 'claude' as const,
+      project: 'x',
+      branch: null,
+      purpose: null,
+      channel: 'proj-x',
+    };
+    store.insertSession({ ...base, id: 'claude/x/0001', appSessionId: 'app-1' });
+    expect(() =>
+      store.insertSession({ ...base, id: 'claude/x/0002', appSessionId: 'app-1' }),
+    ).toThrow();
+    store.insertSession({ ...base, platform: 'codex', id: 'codex/x/0001', appSessionId: 'app-1' });
+    expect(store.findByAppSession('claude', 'app-1')?.id).toBe('claude/x/0001');
+    expect(store.findByAppSession('codex', 'app-1')?.id).toBe('codex/x/0001');
+    expect(store.findByAppSession('claude', 'app-2')).toBeUndefined();
   });
 
   it('reopens an existing file without re-running migrations', async () => {

@@ -7,7 +7,7 @@ import type { Platform } from '../shared/platform.ts';
  * Each entry upgrades the schema by one version (tracked in PRAGMA user_version).
  * Never edit a released migration; append a new one.
  */
-const MIGRATIONS: readonly string[] = [
+export const MIGRATIONS: readonly string[] = [
   `
   CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
@@ -56,6 +56,15 @@ const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX outbox_queued ON outbox (state, target, id);
   `,
+  // v2: hooks identify a session by the app's own session ID; sessions are
+  // announced in Slack lazily, on their first post.
+  `
+  ALTER TABLE sessions ADD COLUMN app_session_id TEXT;
+  ALTER TABLE sessions ADD COLUMN announced_at TEXT;
+  UPDATE sessions SET announced_at = created_at;
+  CREATE UNIQUE INDEX sessions_by_app_session ON sessions (platform, app_session_id)
+    WHERE app_session_id IS NOT NULL;
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -73,6 +82,10 @@ export interface SessionRecord {
   channel: string;
   slackChannelId: string | null;
   threadTs: string | null;
+  /** The app's own session ID (from hooks), when known. */
+  appSessionId: string | null;
+  /** When the session's thread root was queued; null until its first post. */
+  announcedAt: string | null;
   createdAt: string;
   lastSeenAt: string;
 }
@@ -170,13 +183,19 @@ export class Store {
   // Sessions
 
   insertSession(
-    session: Pick<SessionRecord, 'id' | 'platform' | 'project' | 'branch' | 'purpose' | 'channel'>,
+    session: Pick<
+      SessionRecord,
+      'id' | 'platform' | 'project' | 'branch' | 'purpose' | 'channel'
+    > & {
+      appSessionId?: string | null;
+    },
   ): SessionRecord {
     const at = this.timestamp();
     this.db
       .prepare(
-        `INSERT INTO sessions (id, platform, project, branch, purpose, channel, created_at, last_seen_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO sessions
+           (id, platform, project, branch, purpose, channel, app_session_id, created_at, last_seen_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -185,6 +204,7 @@ export class Store {
         session.branch,
         session.purpose,
         session.channel,
+        session.appSessionId ?? null,
         at,
         at,
       );
@@ -194,6 +214,17 @@ export class Store {
   getSession(id: string): SessionRecord | undefined {
     const row = this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as Row | undefined;
     return row && toSession(row);
+  }
+
+  findByAppSession(platform: Platform, appSessionId: string): SessionRecord | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM sessions WHERE platform = ? AND app_session_id = ?')
+      .get(platform, appSessionId) as Row | undefined;
+    return row && toSession(row);
+  }
+
+  markAnnounced(id: string): void {
+    this.db.prepare('UPDATE sessions SET announced_at = ? WHERE id = ?').run(this.timestamp(), id);
   }
 
   /** Updates purpose/branch when given, and marks the session as seen. */
@@ -332,6 +363,8 @@ function toSession(row: Row): SessionRecord {
     channel: String(row.channel),
     slackChannelId: nullableString(row.slack_channel_id),
     threadTs: nullableString(row.thread_ts),
+    appSessionId: nullableString(row.app_session_id),
+    announcedAt: nullableString(row.announced_at),
     createdAt: String(row.created_at),
     lastSeenAt: String(row.last_seen_at),
   };

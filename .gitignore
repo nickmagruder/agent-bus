@@ -2,9 +2,6 @@ node_modules/
 dist/
 coverage/
 
-# Spike output: hook payloads can include prompts and tool input
-spike-logs/
-
 # OS / editor
 .DS_Store
 Thumbs.db
