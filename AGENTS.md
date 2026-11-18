@@ -56,6 +56,10 @@ The design and phases live in clankers: `~/.claude/clankers/docs/slack-integrati
 - `src/broker/heartbeat.ts`: progress notifications for long tool calls
 - `src/shared/guard.ts`: Host/Origin/per-platform bearer checks
 - `src/shared/config.ts`: zod-validated environment
+- `src/shared/slack-text.ts`: escaping and Markdown → Slack mrkdwn for agent text
+- `src/broker/log.ts`: JSON-lines logger and daily log files (`--log-to-file`)
+- `scripts/install-task.ps1`: registers the "agent-bus broker" logon task
+- `scripts/run-broker.ps1`: launcher the task runs; restarts after crashes, stops on exit 78
 
 ## Docs kept in this repo
 

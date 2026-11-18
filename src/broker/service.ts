@@ -1,6 +1,6 @@
 import { PLATFORM_STYLE, type Platform } from '../shared/platform.ts';
 import { newSessionId, NO_PROJECT, projectSlug } from '../shared/session-id.ts';
-import { escapeSlackText } from '../shared/slack-text.ts';
+import { escapeSlackText, toSlackMrkdwn } from '../shared/slack-text.ts';
 import { FALLBACK_CHANNEL } from './slack/directory.ts';
 import { DM_TARGET, found, type SessionRecord, type Store } from './store.ts';
 
@@ -84,6 +84,11 @@ export type Route = 'dm' | 'thread' | 'digest';
 
 type HookKind = keyof typeof HOOK_THROTTLE_MS;
 
+/** The bot's channel membership, when known (see ChannelDirectory.isMember). */
+export interface ChannelMembership {
+  isMember(name: string): boolean | undefined;
+}
+
 /**
  * The broker's rules: who may act on which session, where each message goes,
  * and how often. Everything here is written to the audit log.
@@ -92,11 +97,18 @@ export class BusService {
   private readonly store: Store;
   private readonly queue: { kick(): void };
   private readonly now: () => Date;
+  private readonly channels: ChannelMembership | undefined;
 
-  constructor(store: Store, queue: { kick(): void }, now: () => Date = () => new Date()) {
+  constructor(
+    store: Store,
+    queue: { kick(): void },
+    now: () => Date = () => new Date(),
+    channels?: ChannelMembership,
+  ) {
     this.store = store;
     this.queue = queue;
     this.now = now;
+    this.channels = channels;
   }
 
   // MCP tools
@@ -132,7 +144,7 @@ export class BusService {
 
   notify(input: NotifyInput): { route: Route } {
     const session = this.ownedSession(input.platform, input.session, 'notify');
-    const route = this.deliver(session, input.urgency, escapeSlackText(input.text), {
+    const route = this.deliver(session, input.urgency, toSlackMrkdwn(input.text), {
       source: 'mcp',
       text: input.text,
     });
@@ -285,7 +297,13 @@ export class BusService {
     cwd?: string | undefined;
   }): SessionRecord {
     const project = input.project ? projectSlug(input.project) : NO_PROJECT;
-    const channel = project === NO_PROJECT ? FALLBACK_CHANNEL : `proj-${project}`;
+    const projectChannel = `proj-${project}`;
+    // When the channel list isn't loaded yet, keep the project channel; the
+    // post queue still falls back to #agents if the bot isn't in it.
+    const channel =
+      project === NO_PROJECT || this.channels?.isMember(projectChannel) === false
+        ? FALLBACK_CHANNEL
+        : projectChannel;
     let id = newSessionId(input.platform, project);
     while (this.store.getSession(id)) id = newSessionId(input.platform, project);
     const session = this.store.insertSession({
@@ -358,7 +376,7 @@ export class BusService {
         // The root post carries the purpose, so no separate purpose post.
         this.announce(updated);
       } else if (purposeChanged) {
-        this.postInThread(updated, `*Purpose:* ${escapeSlackText(input.purpose)}`);
+        this.postInThread(updated, `*Purpose:* ${toSlackMrkdwn(input.purpose)}`);
       }
     });
     this.queue.kick();
@@ -413,7 +431,7 @@ function style(session: SessionRecord): { username: string; icon: string } {
 
 export function sessionStartText(session: SessionRecord): string {
   const branch = session.branch ? ` on \`${escapeSlackText(session.branch)}\`` : '';
-  const purpose = session.purpose ? `\n> ${escapeSlackText(session.purpose)}` : '';
+  const purpose = session.purpose ? `\n> ${toSlackMrkdwn(session.purpose)}` : '';
   return `:large_green_circle: *Session started* \`${session.id}\`${branch}${purpose}`;
 }
 
@@ -452,7 +470,7 @@ function codeBlock(text: string): string {
 }
 
 function quote(text: string): string {
-  return escapeSlackText(truncate(text))
+  return toSlackMrkdwn(truncate(text))
     .split('\n')
     .map((line) => `> ${line}`)
     .join('\n');

@@ -1,6 +1,6 @@
 # Phase 1: outbound pings
 
-Status: **in progress**: PR 1 (broker core) merged; PR 2 (hooks, spike removal) on `phase-1/hooks` (2026-11-17)
+Status: **in progress**: PRs 1–2 and the clankers wiring merged; PR 3 (start at login, polish) on `phase-1/login-and-polish`. Claude Code verified live; Codex and Copilot to check (2026-11-17)
 
 Goal: a session on any of the three apps can post to its Slack thread, and
 DM me when it is blocked. Design and phases: clankers
@@ -26,7 +26,7 @@ src/
   shared/   config (zod), guard, hook protocol, session IDs, platforms
   broker/   store (SQLite), slack (Bolt + post queue), http (/mcp, /hook, /health), service, main.ts
   cli/      hook.ts (node src/cli/hook.ts <platform> [--event NAME])
-scripts/    install-task.ps1 (Task Scheduler)
+scripts/    install-task.ps1 (Task Scheduler), run-broker.ps1 (launcher with restarts)
 ```
 
 ## Work
@@ -64,50 +64,73 @@ scripts/    install-task.ps1 (Task Scheduler)
       `.github/hooks/` spike wiring and `spike:server`; delete local
       `spike-logs/`
 
-### PR 3: run at login
+### PR 3: run at login and live-test fixes
 
-- [ ] `scripts/install-task.ps1`: hidden Task Scheduler task at logon,
-      restart on failure, logs in the data dir
-- [ ] README setup section
+- [x] `scripts/install-task.ps1`: current-user Task Scheduler task at
+      logon running hidden `scripts/run-broker.ps1`, which restarts the
+      broker after a crash and stops on exit code 78 (config or port)
+- [x] `--log-to-file`: daily logs in the data dir, 14-day retention, Bolt
+      warnings included; uncaught errors exit 1
+- [x] README start-at-login section
+- [x] Live-test fixes: Markdown → Slack mrkdwn; argument summary in
+      approval DMs for MCP/other tools; `#agents` chosen up front when the
+      bot isn't in the project channel; "Slack connecting" at info; README
+      token command for Windows PowerShell 5.1
 
-### clankers PR
+### clankers PR ([clankers#6](https://github.com/nickmagruder/clankers/pull/6), merged)
 
-- [ ] `install.ps1`: Claude user MCP entry + hooks (`SessionStart`,
-      `PermissionRequest`, `Stop`); Codex `~/.codex/config.toml`
-      `[mcp_servers]` + `hooks.json` (same events); link
-      `global/AGENTS.md` → `~/.codex/AGENTS.md`
-- [ ] `standards/agent-comms.md` v1 (when to ping, what context, bus ID
+- [x] `install.ps1 -AgentBus`: Claude user MCP entry (`~/.claude.json`) +
+      hooks (`SessionStart`, `PermissionRequest`, `Stop`); Codex
+      `~/.codex/config.toml` `[mcp_servers]` + `hooks.json` (same events);
+      `global/AGENTS.md` → `~/.codex/AGENTS.md` (symlink or generated copy)
+- [x] `standards/agent-comms.md` v1 (when to ping, what context, bus ID
       usage), linked from `global/AGENTS.md`
-- [ ] Update the plan's Phase 1 checklist
+- [x] Update the plan's Phase 1 checklist (run-at-login item still open there)
 
 ### Verify
 
-- [ ] Each app: a session posts to its thread and DMs me when blocked
+- [x] Claude Code: session posts to its thread and DMs me when blocked
+- [ ] Codex: same, after trusting the hooks in Settings > Hooks
 - [ ] Copilot: added by hand in Customize › MCP; `notify_human` works
+- [ ] Broker starts at logon from the scheduled task
+
+## Live results
+
+### Claude Code (desktop, 2026-11-17)
+
+| Check                                                        | Result                                                                                                                                          |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Broker connects to Slack, `/health` with a platform token    | ✅ connected in < 0.3 s; `/health` → `{"platform":"claude","slack":"connected"}`; no token → 401                                                |
+| User-level MCP entry with `${AGENT_BUS_TOKEN_CLAUDE}`        | ✅ expanded, once Claude was **fully restarted** after the token was set (before that: 401 "Missing or invalid bearer token")                   |
+| `SessionStart` hook adds the bus ID to context               | ✅ `claude/agent-bus/38bc`, project and branch detected                                                                                         |
+| `Stop` hook → thread root + "Turn finished"                  | ✅ in `#agents` (no `#proj-agent-bus`); name "Claude Code · agent-bus" and icon shown                                                           |
+| `PermissionRequest` hook → DM                                | ✅ DM names the tool; later prompts in the burst recorded as `throttled`                                                                        |
+| `register` (hook-minted ID) and `notify_human` normal/urgent | ✅ purpose line and status update in the thread, urgent DM; all 6 posts sent on the first attempt                                               |
+| Findings                                                     | Raw `**bold**` in snippets; MCP approval DMs had no detail; `register` reported `#proj-agent-bus` while posting to `#agents`; all fixed in PR 3 |
 
 ## Build notes
 
-- **Tested only against a fake Slack so far.** The live check (real
-  Socket Mode, posts in `#proj-clankers`, a DM) waits for `SLACK_USER_ID`
-  and the per-platform tokens to be set.
 - Delivery is at-least-once: a crash between Slack accepting a post and the
   outbox marking it sent repeats that post on restart.
-- Lanes are keyed by channel name, so a project without its own channel and
-  `#agents` itself can each send about 1 msg/s to `#agents`. Fine at 3–5
-  agents; key lanes by channel ID if it ever trips rate limits.
+- New sessions use `#agents` directly when the bot's channel list (loaded at
+  startup) shows no `#proj-<name>`; before the list loads, the queue still
+  falls back per post, and lanes are then keyed by the requested name.
 - `register` takes an optional `project`; without one the session is
   `platform/misc/xxxx` and posts in `#agents`.
 - `node:sqlite` prints an ExperimentalWarning; `npm run broker` passes
   `--disable-warning=ExperimentalWarning`.
 - The hook sends only the fields in `src/shared/hook-protocol.ts`: no
   prompts, transcripts or full tool input; the tool summary is the command,
-  file path, URL or first question.
+  file path, URL or first question, else up to three short scalar arguments
+  (names matching token/secret/password/key/auth/content/body are skipped).
+- Every app and the broker read environment variables only at start: after
+  setting one, restart them (a Claude MCP 401 was exactly this).
 - Hook-created sessions don't count against the hourly `register` cap (an
   agent can't create them; the app's session start does).
 - The Phase 0 stdio bridge went with the spike; it's in git history
   (`9062a63`) if a client ever needs stdio.
 
-## To check in the live test
+## Still to check live
 
 - Codex `SessionStart` honours `hookSpecificOutput.additionalContext` (docs
   say yes; the docs fetch was partly a summary, so confirm).
