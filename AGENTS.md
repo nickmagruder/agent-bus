@@ -15,7 +15,7 @@ The design and phases live in clankers: `~/.claude/clankers/docs/slack-integrati
 ## Stack
 
 - **Runtime:** Node 24, TypeScript run directly by Node (type stripping; no build step)
-- **Libraries:** `@modelcontextprotocol/sdk` (≥ 1.24), `zod`; `@slack/bolt` and SQLite from Phase 1
+- **Libraries:** `@modelcontextprotocol/sdk` (≥ 1.24), `zod`, `@slack/bolt`, `@slack/web-api`; SQLite via built-in `node:sqlite`
 - **Tests/tooling:** Vitest, ESLint (typescript-eslint, strict), Prettier
 - **Hosting/CI:** runs locally on Windows; GitHub Actions for checks and gitleaks
 
@@ -40,13 +40,24 @@ The design and phases live in clankers: `~/.claude/clankers/docs/slack-integrati
 
 - `README.md`: overview, setup, changelog
 - `docs/spikes/phase-0.md`: Phase 0 spike runbook and results
+- `docs/phase-1.md`: Phase 1 plan, decisions, checklist and build notes
+- `src/broker/main.ts`: broker entry (`npm run broker`); wires store, Slack, queue, HTTP
+- `src/broker/service.ts`: register/notify rules, routing, ownership checks, rate caps
+- `src/broker/mcp.ts`: MCP tools (`register`, `notify_human`)
+- `src/broker/http.ts`: `127.0.0.1` HTTP server (`/mcp`, `/health`) behind the guard
+- `src/broker/store.ts`: SQLite (`node:sqlite`) sessions, append-only audit log, outbox, migrations
+- `src/broker/slack/`: Socket Mode connection, Web API adapter, channel directory, post queue
+- `src/broker/heartbeat.ts`: progress notifications for long tool calls
+- `src/shared/guard.ts`: Host/Origin/per-platform bearer checks
+- `src/shared/config.ts`: zod-validated environment
 - `src/spike/echo-server.ts`: throwaway MCP server for the spikes
 - `src/spike/hook-logger.ts`: hook command for all three platforms
 - `src/spike/arm.ts`: arms/disarms the active hook tests
 - `src/spike/stdio-bridge.ts`: stdio MCP server forwarding to the HTTP spike server
-- `src/spike/guard.ts`: Host/Origin/bearer checks (will move into the broker)
+- `src/spike/guard.ts`: spike copy of the guard (single token); goes with the spike in PR 2
 - `.mcp.json`, `.claude/settings.json`, `.codex/`, `.github/hooks/`: per-app spike wiring
 
 ## Docs kept in this repo
 
 - `docs/spikes/phase-0.md`
+- `docs/phase-1.md`: Phase 1 plan, decisions and checklist
