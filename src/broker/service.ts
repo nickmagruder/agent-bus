@@ -410,6 +410,13 @@ export class BusService {
     return { session: this.reload(id), created: false };
   }
 
+  /** A session the calling platform may act on (for tools outside this class, e.g. check_inbox). */
+  requireSession(platform: Platform, id: string, action: string): SessionRecord {
+    const session = this.ownedSession(platform, id, action);
+    this.store.touchSession(session.id);
+    return session;
+  }
+
   /** A session the calling platform may act on. Identity comes from the token, not the ID. */
   private ownedSession(platform: Platform, id: string, action: string): SessionRecord {
     const session = this.store.getSession(id);
@@ -470,7 +477,7 @@ export function urgentText(session: SessionRecord, mrkdwn: string): string {
 export function sessionContext(session: SessionRecord): string {
   return (
     `agent-bus: this session's bus ID is ${session.id}. ` +
-    'Pass it as `session` to the agent-bus MCP tools (register, notify_human).'
+    'Pass it as `session` to the agent-bus MCP tools (register, notify_human, check_inbox).'
   );
 }
 

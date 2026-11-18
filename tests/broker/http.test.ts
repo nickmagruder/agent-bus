@@ -134,11 +134,53 @@ describe('HTTP hardening', () => {
 });
 
 describe('MCP tools end to end', () => {
-  it('lists register and notify_human', async () => {
+  it('lists the tools', async () => {
     const client = await connect('claude');
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['notify_human', 'register']);
+    expect(tools.map((t) => t.name).sort()).toEqual(['check_inbox', 'notify_human', 'register']);
     await client.close();
+  });
+
+  it('delivers my thread reply through check_inbox, once, to the owning platform only', async () => {
+    const client = await connect('codex');
+    const registered = await client.callTool({
+      name: 'register',
+      arguments: { purpose: 'Inbox test', project: 'clankers' },
+    });
+    const { session } = registered.structuredContent as { session: string };
+    await broker.queue.idle();
+    const root = slack.posts.find((p) => p.text.includes(session));
+    if (!root) throw new Error('no thread root');
+
+    const outcome = broker.inbox.receive({
+      channel: root.channel,
+      channelType: 'channel',
+      ts: '1800000000.000100',
+      threadTs: root.ts,
+      user: USER_ID,
+      text: 'Use the *second* option &amp; ship it',
+      hasFiles: false,
+    });
+    expect(outcome).toMatchObject({ action: 'routed', sessionId: session });
+
+    const copilot = await connect('copilot');
+    const stolen = await copilot.callTool({ name: 'check_inbox', arguments: { session } });
+    expect(stolen.isError).toBe(true);
+    await copilot.close();
+
+    const first = await client.callTool({ name: 'check_inbox', arguments: { session } });
+    expect(text(first)).toContain('1 message from Nick');
+    expect(text(first)).toContain('Use the *second* option & ship it');
+    expect(first.structuredContent).toMatchObject({ remaining: 0 });
+    const second = await client.callTool({ name: 'check_inbox', arguments: { session } });
+    expect(text(second)).toBe('No new messages from Nick.');
+    await client.close();
+
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(slack.reactions.filter((r) => r.ts === '1800000000.000100').map((r) => r.name)).toEqual([
+      'inbox_tray',
+      'white_check_mark',
+    ]);
   });
 
   it('registers, posts the thread root and replies, and DMs me', async () => {

@@ -11,7 +11,8 @@ Design, decisions and phases: [clankers `docs/slack-integration-plan.md`](https:
 
 **Phase 1 (outbound pings) is complete.** Broker, hook CLI, start-at-login
 and app wiring (clankers `install.ps1 -AgentBus`) are in; verified live on
-Claude Code, Codex and Copilot. Next: Phase 2, answering agents from Slack.
+Claude Code, Codex and Copilot. **Phase 2** (answering agents from Slack) is
+in progress: [docs/phase-2.md](docs/phase-2.md).
 Plan, checklist and live results: [docs/phase-1.md](docs/phase-1.md). Phase 0 results:
 [docs/spikes/phase-0.md](docs/spikes/phase-0.md) (the spike code itself was
 removed in 0.3.0; it's in git history at `9062a63`).
@@ -27,6 +28,14 @@ removed in 0.3.0; it's in git history at `9062a63`).
   (`platform/project/xxxx`); `notify_human(session, text, urgency)` routes
   `urgent` → DM to me, `normal` → the session's thread, `fyi` → stored for
   the Phase 2 digest. Per-session and per-platform hourly caps stop loops.
+  `check_inbox(session)` returns my Slack replies to that session.
+- **Slack replies (inbound):** a reply I write in a session's thread, or
+  under a DM a session sent me, goes to that session's inbox. Only messages
+  from `SLACK_USER_ID` count; other users, bots, edits and joins are dropped
+  and audited. 📥 on my reply means it's queued, ✅ that the agent read it.
+  Top-level DMs get a "reply in a thread" hint (at most hourly). Needs the
+  `message.channels` and `message.im` event subscriptions and
+  `reactions:write`.
 - **SQLite** (`%LOCALAPPDATA%\agent-bus\bus.db`, `node:sqlite`): sessions,
   an append-only audit log of every call and denial, and the outbox. Posts go
   out per channel at about one a second, honour Slack's `Retry-After`, and
@@ -136,6 +145,16 @@ channel it should post to.
 | `npm test`       | Vitest                                  |
 
 ## Changelog
+
+### 0.5.0 (2026-11-18)
+
+- Phase 2 starts: my Slack replies reach agents. A reply in a session's
+  thread (or under an urgent DM it sent) goes to the session's inbox;
+  `check_inbox` hands it to the agent, labelled as sent from my own Slack
+  account. Sender gating: only `SLACK_USER_ID`; everything else is dropped
+  and audited without its text. Slack retries are idempotent.
+- Reactions show progress: 📥 queued, ✅ read by the agent.
+- Schema v3: `inbox` table. Plan: [docs/phase-2.md](docs/phase-2.md).
 
 ### 0.4.2 (2026-11-17)
 

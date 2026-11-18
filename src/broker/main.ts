@@ -5,11 +5,13 @@
 import path from 'node:path';
 import { defaultDataDir, loadBrokerConfig, type BrokerConfig } from '../shared/config.ts';
 import { startHttpServer, type RunningHttpServer } from './http.ts';
+import { Inbox } from './inbox.ts';
 import { createFileWriter, createLogger, errorMessage, type Logger } from './log.ts';
 import { BusService } from './service.ts';
 import { createWebSlackApi, type SlackApi } from './slack/api.ts';
 import { createSlackConnection, type SlackConnection } from './slack/connection.ts';
 import { ChannelDirectory } from './slack/directory.ts';
+import { registerInbound } from './slack/inbound.ts';
 import { PostQueue } from './slack/queue.ts';
 import { Store } from './store.ts';
 
@@ -34,6 +36,7 @@ export interface Broker {
   store: Store;
   queue: PostQueue;
   service: BusService;
+  inbox: Inbox;
   stop: () => Promise<void>;
 }
 
@@ -53,6 +56,18 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
   const directory = new ChannelDirectory(slackApi, config.slack.userId);
   const queue = new PostQueue(store, slackApi, directory, { log, ...deps.queueOptions });
   const service = new BusService(store, queue, undefined, directory);
+  const inbox = new Inbox({
+    store,
+    queue,
+    humanUserId: config.slack.userId,
+    reactions: {
+      add(channel, ts, name) {
+        slackApi.addReaction(channel, ts, name).catch((error: unknown) => {
+          log('warn', 'could not add a Slack reaction', { name, error: errorMessage(error) });
+        });
+      },
+    },
+  });
   const connection =
     deps.connection === undefined
       ? createSlackConnection({
@@ -62,6 +77,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
           log,
         })
       : deps.connection;
+  if (connection) registerInbound(connection.app, inbox, log);
 
   let http: RunningHttpServer | undefined;
   try {
@@ -69,6 +85,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
       port: config.port,
       tokens: config.tokens,
       service,
+      inbox,
       log,
       health: () => ({ slack: connection?.state ?? 'disabled' }),
     });
@@ -97,6 +114,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
     store,
     queue,
     service,
+    inbox,
     async stop() {
       await server.close();
       await queue.stop();
