@@ -117,8 +117,8 @@ agent-bus can relay my answers to agents (and, in Phase 4, approvals), so the
 broker enforces its rules itself rather than trusting agent instructions:
 
 - **Localhost only.** The broker binds `127.0.0.1`. Every request needs a
-  matching `Host` and `Origin` (DNS-rebinding protection) and a bearer token,
-  even on localhost.
+  matching `Host` and a bearer token, even on localhost, and an `Origin`
+  header, when sent, must be a local one (DNS-rebinding protection).
 - **Identity from the connection.** Each platform has its own token; the
   broker stamps the caller's platform, and a session can only read its own
   inbox and questions.

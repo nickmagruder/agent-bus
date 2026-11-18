@@ -8,9 +8,11 @@ These files decide who may call the broker, whose Slack messages reach an
 agent, which session owns what, and what leaves the machine. Review every
 change here as a possible security regression.
 
-- **Request checks:** a missing or wrong `Host`, `Origin` or bearer token must
-  be rejected before any work is done; tokens are compared in constant time;
-  one platform's token must never act as another platform.
+- **Request checks:** a missing or wrong `Host` or bearer token must be
+  rejected before any work is done. An `Origin` is optional (hooks and other
+  non-browser clients send none) but must be rejected when present and not
+  allowed. Tokens are compared in constant time; one platform's token must
+  never act as another platform.
 - **Ownership:** every tool that takes a session or question ID checks that the
   caller's platform owns it. Look for a new code path that skips the check.
 - **Slack input:** only events from `SLACK_USER_ID` count. Bots, other users,

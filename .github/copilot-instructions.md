@@ -31,8 +31,9 @@ markdownlint already catch. If nothing significant turns up, say so.
 
 ## Rules the code must keep
 
-- The broker binds `127.0.0.1` only; every request passes the `Host`,
-  `Origin` and per-platform bearer-token checks in `src/shared/guard.ts`.
+- The broker binds `127.0.0.1` only; every request passes the `Host` and
+  per-platform bearer-token checks in `src/shared/guard.ts`, and an `Origin`,
+  when sent, must be allowed (non-browser clients send none).
 - A session may only read and answer its own inbox and questions.
 - Only `SLACK_USER_ID` can answer or press buttons; other Slack senders are
   dropped and audited without their text.
