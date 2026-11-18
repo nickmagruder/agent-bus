@@ -10,7 +10,10 @@ Universal standards, skills and agents come from the **clankers** repo
 load globally. This file holds only what is specific to this project and wins
 on conflict. All projects: `~/.claude/clankers/registry/PROJECTS.md`.
 
-The design and phases live in clankers: `~/.claude/clankers/docs/slack-integration-plan.md`.
+The design and phases live in `docs/design.md` (moved from clankers
+`docs/slack-integration-plan.md`, which now points here). The repo is going
+public: never write tokens, Slack IDs, personal paths or private-repo details
+into tracked files.
 
 ## Stack
 
@@ -41,7 +44,11 @@ The design and phases live in clankers: `~/.claude/clankers/docs/slack-integrati
 
 ## Key files
 
-- `README.md`: overview, setup, changelog
+- `README.md`: public overview, status, security model, setup, changelog
+- `docs/design.md`: overall design, platform capabilities, safety rules, phases, decisions
+- `CONTRIBUTING.md`: coding standards and how changes are made (also read by Copilot review)
+- `SECURITY.md`: vulnerability reporting and scope
+- `docs/going-public.md`: plan for going public and the repo standards that follow
 - `docs/spikes/phase-0.md`: Phase 0 spike runbook and results
 - `docs/phase-1.md`: Phase 1 plan, decisions, checklist and build notes
 - `src/broker/main.ts`: broker entry (`npm run broker`); wires store, Slack, queue, HTTP
@@ -66,6 +73,9 @@ The design and phases live in clankers: `~/.claude/clankers/docs/slack-integrati
 
 ## Docs kept in this repo
 
+- `README.md` (changelog, newest first), `CONTRIBUTING.md`, `SECURITY.md`
+- `docs/design.md`: keep its status and phase table current
+- `docs/going-public.md`: going-public and repo-standards checklist
 - `docs/spikes/phase-0.md`
 - `docs/phase-1.md`: Phase 1 plan, decisions and checklist
 - `docs/phase-2.md`: Phase 2 plan (answering from Slack), decisions and checklist

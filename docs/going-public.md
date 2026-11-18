@@ -1,0 +1,201 @@
+# Going public: repo standards before Phase 3
+
+Status: **in progress** (2026-11-18): step 1 done on `docs/public-readme`.
+
+Five goals:
+
+1. Make `nickmagruder/agent-bus` public.
+2. README fully describes the project and keeps its changelog.
+3. Apply the CrashMap repo standards (lint, commit hooks, branch protection…).
+4. Copilot does the first review on every PR.
+5. clankers dev flow: trunk-based development, and GitHub issues track all
+   pending and completed work from now on.
+
+## What exists today
+
+| Area                   | agent-bus                                                                 | CrashMap                                                                                                                                      |
+| ---------------------- | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Visibility             | private                                                                   | public                                                                                                                                        |
+| Pre-commit             | `.githooks/pre-commit` (gitleaks only; needs `git config core.hooksPath`) | husky + lint-staged (`eslint --fix`, `prettier --write`)                                                                                      |
+| CI                     | typecheck, lint, format, test, markdownlint, gitleaks; on PRs and `main`  | lint, format, typecheck, test, codegen drift, build, deploy, Lighthouse; on every push                                                        |
+| Action versions        | `checkout@v4`, `setup-node@v4`                                            | `@v7`                                                                                                                                         |
+| Branch protection      | none (private repo on a free plan can't have it)                          | `main`: required `check`, strict                                                                                                              |
+| GitHub secret scanning | n/a (private)                                                             | on, with push protection                                                                                                                      |
+| Node pin               | `engines >=24`                                                            | `.nvmrc` + `engines >=24 <25`                                                                                                                 |
+| README                 | overview, how it works, setup, scripts, changelog                         | `**Version:**` line, Overview, Features, Tech Stack, Getting Started, Commands, Structure, API, Deployment, Security, Contributing, Changelog |
+| LICENSE / SECURITY.md  | none                                                                      | none                                                                                                                                          |
+| Merge settings         | merge, squash, rebase; branches kept                                      | merge, squash; branches kept                                                                                                                  |
+
+Not carried over: Lighthouse, Sentry, codegen drift, deploy hook (no web app
+here). Prettier style stays agent-bus's own (semicolons).
+
+### Pre-public audit (done 2026-11-18)
+
+- gitleaks over full history: 11 commits, no leaks.
+- No Slack user, team or channel IDs and no Slack URLs anywhere in history.
+- Commit author email becomes public: accepted (already public via CrashMap
+  and esri-exporter).
+- README has local paths (`C:/Users/nickm/...`): replace with placeholders.
+- README links to the private clankers Slack plan: the agent-bus design moves
+  here (step 1).
+- `docs/phase-2.md` has uncommitted edits (PR 1/2 merged and tested live);
+  they ship in step 1.
+
+## Decisions
+
+| #   | Question                     | Decision                                                                                                                                                            |
+| --- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | License                      | MIT                                                                                                                                                                 |
+| 2   | Private clankers design link | Move agent-bus design and phase overview into `docs/design.md`; clankers keeps a pointer                                                                            |
+| 3   | Changelog and version        | Keep agent-bus style: newest first, agents bump semver                                                                                                              |
+| 4   | Prettier                     | Keep agent-bus style; no reformat                                                                                                                                   |
+| 5   | Extra checks                 | Dependabot version updates, CodeQL, commit-msg lint, OpenSSF Scorecard                                                                                              |
+| 6   | Branching                    | Trunk-based everywhere; per-repo rules in the table below                                                                                                           |
+| 7   | Issues backfill              | Open Phase 2 items become issues; shipped work (PRs #1–#8) is backfilled as closed issues                                                                           |
+| 8   | Copilot comments             | Agent triages (fixes valid ones, replies with a reason to the rest), then pings Nick; Nick merges. Not for clankers / code-notes (below)                            |
+| 9   | Rollout                      | agent-bus, CrashMap and esri-exporter now; other projects on next touch                                                                                             |
+| 10  | Commit email                 | Leave as is                                                                                                                                                         |
+| 11  | code-notes concurrency       | Written rule now; agent-bus issue for a real lock later                                                                                                             |
+| 12  | clankers merging             | No GitHub Pro, so no auto-merge on the private repo: the agent squash-merges its own PR (`gh pr merge --squash --delete-branch`) once CI is green                   |
+| 13  | PR review skill              | Copilot code review uses an adapted `mattpocock/skills` `code-review` skill, vendored into each repo's `.github/skills/`; canonical copy in clankers as `pr-review` |
+
+### Trunk-based rules by repo type
+
+| Repo type     | Examples                           | Flow                                                      | Review                                           | Merge                                                             |
+| ------------- | ---------------------------------- | --------------------------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------------- |
+| App           | agent-bus, CrashMap, esri-exporter | Short-lived branch per issue → PR                         | Copilot auto-review; agent triages; Nick reviews | Nick, squash, branch auto-deleted                                 |
+| Shared config | clankers                           | Short-lived branch → PR (several agents may edit at once) | Copilot comments, nothing waits on it            | Agent self-merges on green CI, squash; listed in the daily digest |
+| Notes vault   | code-notes                         | Commit straight to `main`                                 | none                                             | n/a; one agent at a time                                          |
+
+## Plan
+
+Agents open PRs; Nick merges app-repo PRs. Steps run in order unless noted.
+
+### 1. Ready the content (agent-bus PR `docs/public-readme`)
+
+- [x] README rewrite for a stranger: what it is and why; how it works (diagram:
+      apps → MCP / hooks → broker → Slack); feature status by phase; security
+      model (localhost only, per-platform tokens, Host/Origin checks, sender
+      gating, hooks never block); requirements; setup; scripts; project
+      structure; contributing (issues); `**Version:**` line; changelog
+- [x] Replace machine-specific paths with placeholders
+- [x] `docs/design.md`: agent-bus design and phases, moved from clankers
+      `docs/slack-integration-plan.md` (that file keeps a pointer; clankers PR)
+- [x] `LICENSE` (MIT) and `"license": "MIT"` in `package.json`
+- [x] `SECURITY.md`: report via GitHub private vulnerability reporting; scope
+- [x] `CONTRIBUTING.md`: coding standards for public readers and the review skill
+- [x] Commit the pending `docs/phase-2.md` edits
+- [x] `AGENTS.md` key files and docs list; changelog 0.6.1
+
+### 2. Flip to public (settings, after step 1 merges)
+
+- [ ] `gh repo edit --visibility public --accept-visibility-change-consequences`
+- [ ] Secret scanning + push protection, Dependabot alerts and security
+      updates, private vulnerability reporting
+- [ ] Merge settings: squash only, PR title as commit title, delete branch on
+      merge
+- [ ] Ruleset on `main`: PR required, required check `check` (strict), no
+      force push or deletion, auto-request Copilot review (step 4)
+
+### 3. Tooling parity (agent-bus PR `chore/repo-standards`)
+
+- [ ] husky + lint-staged pre-commit: `eslint --fix` + `prettier --write` on
+      staged TS, `prettier --write` on JSON/MD, `markdownlint-cli2` on MD,
+      then the gitleaks staged scan; `prepare: husky`
+- [ ] commit-msg hook (commitlint or a small script) enforcing clankers rules:
+      imperative summary ≤ 72 chars; agent co-author trailer allowed
+- [ ] Remove `.githooks/` and the `core.hooksPath` setup step
+- [ ] `.nvmrc` (`24`); `engines` `>=24 <25`
+- [ ] CI: bump actions to current majors; job stays `check`
+- [ ] `.github/dependabot.yml`: weekly, grouped npm and Actions updates
+- [ ] CodeQL workflow (JS/TS; PRs, `main`, weekly)
+- [ ] OpenSSF Scorecard workflow + README badge
+- [ ] README setup, changelog, `AGENTS.md`
+
+### 4. Copilot first review (with step 3)
+
+- [ ] Ruleset rule "Automatically request Copilot code review", reviewing new
+      pushes
+- [ ] `.github/copilot-instructions.md` from `AGENTS.md` working rules and
+      clankers `prompts/code-review.md`: guard and approval changes need
+      tests, hooks never block, only `hook-protocol.ts` fields leave the
+      machine, no tokens in files, erasable TS only, bind `127.0.0.1`
+- [ ] Path-scoped `.github/instructions/security.instructions.md` for
+      `src/shared/guard.ts`, `src/broker/http.ts`, approval and inbound code
+- [ ] Review skill (decision 13): vendor an adapted copy of
+      [`mattpocock/skills` `code-review`](https://www.skills.sh/mattpocock/skills/code-review)
+      (MIT) at `.github/skills/code-review/SKILL.md` (Copilot code review only
+      reads skills from the repo, on the PR's head branch). Adaptations: fixed
+      point is the PR base; spec is the issue in `Closes #N` (else "no spec");
+      no asking the user; drop `/setup-matt-pocock-skills`; keep the
+      Standards / Spec split and Fowler baseline; standards come from
+      `CONTRIBUTING.md`, `AGENTS.md` and `copilot-instructions.md`
+- [x] `CONTRIBUTING.md` (also step 1): the coding standards the skill looks
+      for, since clankers `standards/` is private
+- [ ] Verify on the step 3 PR: Copilot review shows up without asking, and
+      its comments credit the `code-review` skill (use is likely, not
+      guaranteed, per GitHub's docs)
+- [ ] Agents triage Copilot comments before pinging Nick (decision 8)
+
+### 5. Issues in agent-bus (with step 3)
+
+- [ ] Labels: `phase-0`…`phase-3`, `bug`, `enhancement`, `docs`, `chore`,
+      `security`, `follow-up`
+- [ ] Milestones: Phase 0, 1, 2, 3
+- [ ] Issue forms (`.github/ISSUE_TEMPLATE/`: bug, task, config) and PR template
+      (`Closes #`, how tested, docs updated)
+- [ ] Backfill closed issues for shipped work, one per PR #1–#8 (or per phase
+      deliverable), each linked to its PR, in the right milestone
+- [ ] Open issues for the remaining Phase 2 items: PR 3 hooks, PR 4 digest,
+      clankers PR, each verify item, each follow-up
+- [ ] New issues: digest includes clankers PRs merged that day (decision 12);
+      repo lease/lock tool for single-agent repos like code-notes (decision 11)
+- [ ] `docs/phase-2.md` keeps design, decisions and live results; its
+      checklists become issue links
+
+### 6. clankers standards (clankers PR, agent self-merges)
+
+- [ ] `standards/git.md`: trunk-based flow and the repo-type table; squash
+      merge; branch names carry the issue (`feat/12-digest`); `Closes #12`;
+      Copilot first review and triage rule; clankers self-merge on green CI;
+      code-notes direct to `main`
+- [ ] New `standards/github.md`: issues track all work (status lives in
+      issues, design in docs); bugs and follow-ups found mid-task become
+      issues; labels, milestones, templates; repo setup checklist (ruleset,
+      security settings, Dependabot, CodeQL, Scorecard, Copilot review,
+      husky/lint-staged/commit-msg, LICENSE/SECURITY.md)
+- [ ] `standards/docs.md`: plans hold design and decisions; checklists link
+      to issues
+- [ ] Skills: `finish-task` and `close-out-session` create, update and close
+      issues and check the repo setup checklist; `register-project` and
+      `prompts/new-project-kickoff.md` run the setup checklist
+- [ ] `docs/slack-integration-plan.md`: agent-bus design now lives in the
+      agent-bus repo; pointer left
+- [ ] Registry: agent-bus visibility public, license
+- [ ] code-notes `AGENTS.md`: commit to `main`; never two agents at once
+- [ ] Standards index in `global/AGENTS.md` gains `github.md`
+- [ ] Canonical review skill: `skills/pr-review/` with `UPSTREAM.md` (source,
+      commit, license, our adaptations), so local agents run the same review.
+      Named `pr-review` because clankers skills install into
+      `~/.claude/skills`, where `code-review` would collide with Claude Code's
+      built-in `/code-review`. Repos get a synced copy under the name
+      `code-review`; the setup checklist covers copying it
+
+### 7. Roll out to CrashMap and esri-exporter (one PR each, in their repos)
+
+- [ ] Ruleset (PR required, required checks, Copilot auto-review), squash-only
+      merges, branch auto-delete, Dependabot alerts
+- [ ] Labels, milestones, issue forms, PR template
+- [ ] `.github/copilot-instructions.md` from each repo's AGENTS.md
+- [ ] `.github/skills/code-review/` synced from clankers `pr-review`
+- [ ] Open issues for each repo's pending `PLAN.md` items; `PLAN.md` links to
+      issues (no backfill of shipped work unless asked)
+- [ ] Bring esri-exporter's hooks and CI up to the checklist (to be surveyed;
+      it has a Python part)
+- [ ] CrashMap AGENTS.md git rule mentions issues and Copilot triage
+
+### 8. Close out
+
+- [ ] `npm run check`, markdownlint, link check
+- [ ] Changelog entries and version bumps
+- [ ] Mark this doc done and link the issues that replaced its checklists

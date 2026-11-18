@@ -6,7 +6,7 @@ Status: **complete** (2026-11-17)
 > PR 2). They're in git history at `9062a63`; the results stay here as the
 > record.
 
-The plan (clankers `docs/slack-integration-plan.md`) marks several platform
+The plan (then in my private config repo; now [design.md](../design.md)) marked several platform
 capabilities as "verify". These spikes settle them before any broker code is
 written. Nothing here talks to Slack.
 
@@ -44,7 +44,7 @@ decide without ever auto-approving anything.
 1. `AGENT_BUS_TOKEN` is already set as a user environment variable. **Quit
    and reopen** Claude, Codex and Copilot so they see it.
 2. In a terminal in this folder: `npm run spike:server`. Leave it running.
-3. Open this folder (`C:\Users\nickm\source\repos\agent-bus`) as the project
+3. Open this folder (the agent-bus clone) as the project
    in each app, and trust it when asked. Codex also asks you to review and
    trust the hooks (Settings > Hooks).
 

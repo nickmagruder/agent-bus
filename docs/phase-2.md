@@ -1,13 +1,14 @@
 # Phase 2: I answer from Slack
 
-Status: **in progress** (2026-11-18): PR 1 (inbound Slack and inbox) merged
-([#7](https://github.com/nickmagruder/agent-bus/pull/7)); PR 2 (questions)
-built on `feat/phase-2-questions`. Neither tried against live Slack yet.
+Status: **in progress** (2026-11-18): PR 1 (inbound Slack and inbox,
+[#7](https://github.com/nickmagruder/agent-bus/pull/7)) and PR 2 (questions,
+[#8](https://github.com/nickmagruder/agent-bus/pull/8)) merged and tested
+live with Slack (see Live results). Next: PR 3 (hooks).
 
 Goal: an agent on any of the three apps can ask me a question and get my
 answer from Slack (buttons or free text), and anything I write in a
-session's thread reaches that session. Design: clankers
-`docs/slack-integration-plan.md`; Phase 1: [phase-1.md](phase-1.md).
+session's thread reaches that session. Design: [design.md](design.md);
+Phase 1: [phase-1.md](phase-1.md).
 
 ## What exists to build on
 
@@ -130,9 +131,10 @@ and leave (a) to the app's reconnect (decided below).
 
 ### PR 1: inbound Slack and inbox
 
-- [ ] Check the Slack app (Nick): Interactivity on; event subscriptions
+- [x] Check the Slack app (Nick): Interactivity on; event subscriptions
       `message.channels`, `message.im` (and `message.groups` if a project
-      channel is private); `reactions:write` scope
+      channel is private); `reactions:write` scope (all shown working live,
+      2026-11-18)
 - [x] Migration 3: `inbox` (questions move to migration 4 in PR 2)
 - [x] Bolt `message` handler (`src/broker/slack/inbound.ts`) and routing
       (`src/broker/inbox.ts`): sender gating, thread → session and DM-post →
@@ -143,7 +145,8 @@ and leave (a) to the app's reconnect (decided below).
       empty), routing (thread, DM post, other channel, top-level, thread
       root), retries, long messages, files, hint throttle, ownership of
       `check_inbox` end to end
-- [ ] Live: a reply in a session thread reaches `check_inbox` on one app
+- [x] Live: a reply in a session thread reaches `check_inbox` (2026-11-18,
+      see Live results)
 
 ### PR 2: questions
 
@@ -168,8 +171,8 @@ and leave (a) to the app's reconnect (decided below).
 - [ ] Not tested: a broker restart during a held call (the call drops; the
       question survives and `wait_for_reply` picks it up, by design) and a
       client disconnect mid-hold (the hold ends at its timeout)
-- [ ] Live (Nick): turn on **Interactivity** in the Slack app; answer a
-      question by button and by reply from the phone
+- [x] Live: answered by button from the phone and by thread reply; left
+      to remind and expire (2026-11-18, see Live results)
 
 ### PR 3: hooks
 
@@ -205,3 +208,54 @@ and leave (a) to the app's reconnect (decided below).
 - [ ] Someone else's reply / a bot message is ignored (second Slack account or
       a workflow post)
 - [ ] Digest arrives once
+- [ ] Claude Code through the app's own MCP connection (2026-11-18 run used
+      a client script because this session's agent-bus never reconnected)
+- [ ] A top-level DM to the bot gets the "reply in a thread" hint, at most
+      hourly
+
+### Follow-ups
+
+- [ ] Quieter approval DMs: a testing session got a 🚨 DM for every Bash,
+      PowerShell and Claude in Chrome prompt (one per 2 min). Consider
+      skipping read-only tools or a per-session quiet mode (2026-11-18)
+- [ ] Don't DM approvals I'm already answering in the app: `PermissionRequest`
+      DMs at once (`hookPing` → `deliver`), so a prompt I approve within
+      seconds still buzzes Slack. Hold the DM for a grace period (~60 s) and
+      drop it if the prompt was resolved first (e.g. a `PostToolUse` or any
+      later hook event from the same app session); needs tests for the
+      held, cancelled and sent paths (2026-11-18)
+- [ ] Reminder DM uses the bot's name and icon: apply `style(session)` like
+      the question DM (2026-11-18)
+- [ ] Keep a live-test MCP client in the repo (e.g. `scripts/mcp-call.ts`):
+      the 2026-11-18 run used a throwaway script in the session scratchpad
+      (2026-11-18)
+
+## Live results
+
+### Broker 0.6.0 with Slack, driven by an MCP client script (2026-11-18)
+
+The Claude session's own agent-bus MCP connection was down (ECONNREFUSED
+since the session started), so the tools were called by a small MCP client
+using `AGENT_BUS_TOKEN_CLAUDE` and the session's real bus ID
+(`claude/agent-bus/43b2`, created by its `Stop` hook). This exercises the
+broker, Slack and my phone, but **not the Claude app's own MCP client**.
+
+| Test                                   | Result                                                                                                                                                                                      |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Button answer from the phone        | ✅ `ask_human` returned `answered` / "It works" / `button` after 113 s; one heartbeat at 60 s; DM edited to "Answered (button): It works", buttons gone                                     |
+| 2. Text reply in the question's thread | ✅ `ask_human` returned `pending` at 150 s (heartbeats at 60 and 120 s); my thread reply answered `q-92b0d7` as `reply`; `wait_for_reply(question_id)` returned it at once                  |
+| 3. Plain reply in the session thread   | ✅ routed from `#agents` to the session; `check_inbox` returned it labelled as mine; no reaction errors logged                                                                              |
+| 4. Unanswered question (5 min timeout) | ✅ one reminder DM at 2½ min; expired at 5 min; DM edited to "Expired …: the agent went with …"; a waiting `wait_for_reply` (no ID) woke 9 s later with the expired outcome and the default |
+| Echoes of the bot's own edits          | ✅ arrive as `message_changed` and are dropped (`inbound.dropped`, reason `subtype`)                                                                                                        |
+| Slack app settings                     | ✅ Interactivity, `message.im`, `message.channels` and `reactions:write` all work                                                                                                           |
+
+Findings:
+
+- **Approval DMs flood a testing session.** Every permission prompt
+  (Bash, PowerShell, each Claude in Chrome action) sends a 🚨 DM, throttled
+  to one per 2 minutes. Fine for real blocks, noisy for read-only tools.
+- The reminder DM is posted under the bot's own name and icon, not the
+  agent's (`style()` isn't applied to it); cosmetic.
+- Not yet covered live: Codex and Copilot (heartbeats past 300 s / 180 s),
+  the Claude app's own MCP client, a foreign user's or bot's reply, the
+  top-level DM hint.

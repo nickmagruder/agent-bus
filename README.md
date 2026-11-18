@@ -1,68 +1,100 @@
 # agent-bus
 
-Local broker that connects Claude Code, OpenAI Codex and GitHub Copilot
-desktop sessions to the `clankers` Slack workspace and to each other:
+**Version:** 0.6.1 · [MIT license](LICENSE)
+
+A local broker that connects AI coding agents (Claude Code, OpenAI Codex and
+GitHub Copilot desktop sessions) to Slack and to each other:
 
 - agents ping me in Slack when they're blocked on me,
-- I answer (and, for lower-risk actions, approve) from Slack,
-- agents hand tasks to each other across platforms.
+- I answer their questions from Slack (buttons or a reply in a thread),
+- later: I approve lower-risk actions from Slack, and agents hand tasks to
+  each other across platforms.
 
-Design, decisions and phases: [clankers `docs/slack-integration-plan.md`](https://github.com/nickmagruder/clankers/blob/main/docs/slack-integration-plan.md).
+## Why
 
-**Phase 1 (outbound pings) is complete.** Broker, hook CLI, start-at-login
-and app wiring (clankers `install.ps1 -AgentBus`) are in; verified live on
-Claude Code, Codex and Copilot. **Phase 2** (answering agents from Slack) is
-in progress: [docs/phase-2.md](docs/phase-2.md).
-Plan, checklist and live results: [docs/phase-1.md](docs/phase-1.md). Phase 0 results:
-[docs/spikes/phase-0.md](docs/spikes/phase-0.md) (the spike code itself was
-removed in 0.3.0; it's in git history at `9062a63`).
+I run several coding agents at once, on three different platforms, and they
+spend a lot of time waiting for me: a permission prompt, a question, a
+finished turn. The desktop apps can't push a message into a running session
+and don't talk to each other, so agent-bus gives them one shared, local
+place to reach me (Slack, on my phone) and, from Phase 3, each other.
 
-## How the broker works
+It's a personal tool, built in the open. It runs on one Windows machine,
+talks to one Slack workspace, and answers only to one Slack user.
 
-- **One Slack connection** (Socket Mode via Bolt; reconnects on its own).
-- **MCP endpoint** at `http://127.0.0.1:47823/mcp` (stateless streamable
-  HTTP). Every request must pass Host and Origin checks and carry one of the
-  per-platform bearer tokens; the token decides the caller's platform.
-- **Tools:** `register(purpose, project?, branch?, session?)` announces a
-  session in `#proj-<project>` (or `#agents`) and returns its ID
-  (`platform/project/xxxx`); `notify_human(session, text, urgency)` routes
-  `urgent` → DM to me, `normal` → the session's thread, `fyi` → stored for
-  the Phase 2 digest. Per-session and per-platform hourly caps stop loops.
-  `check_inbox(session)` returns my Slack replies to that session and the
-  outcomes of its questions. `ask_human(session, question, options?,
-default_action, timeout_minutes?)` DMs me the question (buttons for the
-  options; a reply in its thread works too) and waits up to 150 s, then
-  returns `pending` with a question ID for `wait_for_reply(session,
-question_id?)`. One reminder at 15 min; at the timeout (default 60 min)
-  the question expires and the agent takes its `default_action`.
-- **Slack replies (inbound):** a reply I write in a session's thread, or
-  under a DM a session sent me, goes to that session's inbox. Only messages
-  from `SLACK_USER_ID` count; other users, bots, edits and joins are dropped
-  and audited. 📥 on my reply means it's queued, ✅ that the agent read it.
-  Top-level DMs get a "reply in a thread" hint (at most hourly). Needs the
-  `message.channels` and `message.im` event subscriptions and
-  `reactions:write`.
-- **SQLite** (`%LOCALAPPDATA%\agent-bus\bus.db`, `node:sqlite`): sessions,
-  an append-only audit log of every call and denial, and the outbox. Posts go
-  out per channel at about one a second, honour Slack's `Retry-After`, and
-  survive a restart.
-- `GET /health` (same auth) reports the Slack connection state.
-- **Formatting:** agent text is escaped (no `@channel`, no disguised links),
-  then common Markdown is turned into Slack mrkdwn (`**bold**` → `*bold*`,
-  headings, bullets; links shown as `text (url)`).
-
-## Hooks (Claude Code, Codex)
-
-`src/cli/hook.ts` is the hook command. It reads the app's hook payload,
-sends a few fields to `POST /hook` with the platform's token, and always
-exits 0, so a stopped broker never blocks an agent. Prompts, transcripts and
-full tool input stay local; only a one-line tool summary (command, file or
-question, else up to three short arguments, never ones named like secrets or
-bodies) and a short message snippet are sent.
+## How it works
 
 ```text
-node C:/Users/nickm/source/repos/agent-bus/src/cli/hook.ts claude   # or codex
+ Slack                                         this PC
+┌──────────────────────┐  Socket Mode  ┌───────────────────────────────┐
+│ #agents  #proj-*     │◄─────────────►│ agent-bus broker (1 process)  │
+│ DM: me ↔ bot         │  (outbound    │  MCP  http://127.0.0.1/mcp    │
+└──────────────────────┘   WebSocket)  │  hooks  /hook   SQLite store  │
+                                       └──▲──────────▲──────────▲──────┘
+                              MCP + hooks │ MCP+hooks│      MCP │
+                                ┌─────────┴─┐ ┌──────┴────┐ ┌───┴─────────┐
+                                │Claude Code│ │  Codex    │ │  Copilot    │
+                                └───────────┘ └───────────┘ └─────────────┘
 ```
+
+- **One broker process** holds the only Slack connection (Socket Mode via
+  Bolt; outbound WebSocket, so no public URL) and reconnects on its own.
+- **Agents call MCP tools** at `http://127.0.0.1:47823/mcp` (stateless
+  streamable HTTP). Each platform has its own bearer token, which tells the
+  broker who's calling.
+- **Hooks** (Claude Code and Codex) send a few fields of each lifecycle event
+  to `POST /hook`, so pings happen even when the agent doesn't think to send
+  one.
+- **SQLite** (`node:sqlite`) keeps sessions, inboxes, questions, the outgoing
+  post queue and an append-only audit log, so nothing is lost on a restart.
+- **Slack layout:** one thread per session in `#proj-<project>` (or
+  `#agents` when the bot isn't in that channel); urgent items DM me.
+
+The full design (platform capabilities, architecture, safety rules, roadmap
+and decisions) is in [docs/design.md](docs/design.md).
+
+## Status
+
+| Phase | What                                                                                   | Status                         |
+| ----- | -------------------------------------------------------------------------------------- | ------------------------------ |
+| 0     | Spikes: MCP, hooks and timeouts on each app                                            | [Done](docs/spikes/phase-0.md) |
+| 1     | Outbound pings, hook pings, start at login; verified on Claude Code, Codex and Copilot | [Done](docs/phase-1.md)        |
+| 2     | Answering from Slack: inbox, `ask_human` with buttons, reminders and expiry            | [In progress](docs/phase-2.md) |
+| 3     | Cross-platform task handoffs between agents                                            | Planned                        |
+| 4     | Approving lower-risk actions from Slack                                                | Planned                        |
+| 5     | CLI agents, true push, optional A2A endpoint                                           | Later                          |
+
+## Features
+
+### MCP tools
+
+| Tool                                                                       | What it does                                                                                                                                                                                     |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `register(purpose, project?, branch?, session?)`                           | Announces a session in `#proj-<project>` (or `#agents`) and returns its ID (`platform/project/xxxx`)                                                                                             |
+| `notify_human(session, text, urgency)`                                     | `urgent` → DM to me, `normal` → the session's thread, `fyi` → stored for the digest. Per-session and per-platform hourly caps stop loops                                                         |
+| `check_inbox(session)`                                                     | Returns my Slack replies to the session and the outcomes of its questions                                                                                                                        |
+| `ask_human(session, question, options?, default_action, timeout_minutes?)` | DMs me the question with buttons for up to five options (a reply in its thread works too) and waits up to 150 s, then returns `pending` with a question ID. A pointer goes in the session thread |
+| `wait_for_reply(session, question_id?)`                                    | Waits again, for one question or for anything new                                                                                                                                                |
+
+Questions get one reminder at 15 minutes. At the timeout (default 60) the
+question expires and the agent takes its own `default_action`. The first
+answer wins, and the DM is edited to show the outcome.
+
+### Replies from Slack
+
+A reply I write in a session's thread, or under a DM a session sent me, goes
+to that session's inbox. Only messages from `SLACK_USER_ID` count; other
+users, bots, edits and joins are dropped and audited without their text. 📥
+on my reply means it's queued, ✅ that the agent read it. Top-level DMs to the
+bot get a "reply in a thread" hint (at most hourly).
+
+### Hooks (Claude Code, Codex)
+
+`src/cli/hook.ts` is the hook command. It reads the app's hook payload, sends
+a few fields to `POST /hook` with the platform's token, and always exits 0, so
+a stopped broker never blocks an agent. Prompts, transcripts and full tool
+input stay local; only a one-line tool summary (command, file or question,
+else up to three short arguments, never ones named like secrets or bodies)
+and a short message snippet are sent.
 
 | Event               | What happens                                                                                                                                                                                                         |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -71,12 +103,91 @@ node C:/Users/nickm/source/repos/agent-bus/src/cli/hook.ts claude   # or codex
 | `Notification`      | Claude `permission_prompt` only: same DM, sharing the 2-minute throttle with `PermissionRequest`.                                                                                                                    |
 | `Stop`              | "Turn finished; waiting for you" with a snippet in the session's thread; at most one per 10 minutes. Skipped when `stop_hook_active`.                                                                                |
 
-A session's thread root is posted on its first thread post, so short
-sessions that never post stay out of Slack. clankers `scripts/install.ps1
--AgentBus` wires the MCP server and these hooks into Claude Code and Codex;
-Copilot is added by hand (Customize › MCP).
+A session's thread root is posted on its first thread post, so short sessions
+that never post stay out of Slack. Copilot's desktop app has no hooks, so it
+uses the MCP tools only.
 
-## Start at login
+## Security model
+
+agent-bus can relay my answers to agents (and, in Phase 4, approvals), so the
+broker enforces its rules itself rather than trusting agent instructions:
+
+- **Localhost only.** The broker binds `127.0.0.1`. Every request needs a
+  matching `Host` and `Origin` (DNS-rebinding protection) and a bearer token,
+  even on localhost.
+- **Identity from the connection.** Each platform has its own token; the
+  broker stamps the caller's platform, and a session can only read its own
+  inbox and questions.
+- **Sender gating.** Only my Slack user ID can answer or press buttons;
+  everything else is dropped and audited.
+- **Hooks only notify.** They never return allow/deny or block a stop.
+- **Minimal data leaves the machine.** Hooks send only the fields in
+  [`src/shared/hook-protocol.ts`](src/shared/hook-protocol.ts), with size
+  limits.
+- **Escaped output.** Agent text can't trigger `@channel` or disguise links.
+- **Caps and throttles** stop runaway agents from flooding Slack.
+- **Secrets** are user environment variables, never files; gitleaks runs
+  before every commit and in CI.
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
+
+## Requirements
+
+- Windows (the start-at-login scripts are PowerShell; the broker itself is
+  plain Node and should run elsewhere, untested)
+- Node 24+ (TypeScript runs directly through Node's type stripping; no build)
+- A Slack workspace where you can install an app
+- [gitleaks](https://github.com/gitleaks/gitleaks) for the pre-commit secret
+  scan (`winget install Gitleaks.Gitleaks`)
+
+## Setup
+
+### 1. Install
+
+```bash
+git clone https://github.com/nickmagruder/agent-bus.git
+cd agent-bus
+npm install
+git config core.hooksPath .githooks
+```
+
+### 2. Create the Slack app
+
+- Turn on **Socket Mode** and **Interactivity**.
+- Bot token scopes: `chat:write`, `chat:write.customize`, `channels:history`,
+  `channels:read`, `groups:history`, `im:history`, `im:write`,
+  `reactions:write`, `users:read`.
+- Event subscriptions (bot events): `message.channels`, `message.im` (and
+  `message.groups` for private project channels).
+- An app-level token with `connections:write`.
+- Install it to the workspace, create `#agents` (and any `#proj-<name>`
+  channels), and invite the bot to each.
+
+### 3. Set environment variables
+
+User environment variables, never files:
+
+| Variable                  | Purpose                                                        |
+| ------------------------- | -------------------------------------------------------------- |
+| `AGENT_BUS_TOKEN_CLAUDE`  | Bearer token for Claude Code (≥ 32 chars, unique per platform) |
+| `AGENT_BUS_TOKEN_CODEX`   | Bearer token for Codex                                         |
+| `AGENT_BUS_TOKEN_COPILOT` | Bearer token for Copilot                                       |
+| `SLACK_BOT_TOKEN`         | `xoxb-` bot token                                              |
+| `SLACK_APP_TOKEN`         | `xapp-` Socket Mode token                                      |
+| `SLACK_USER_ID`           | Your Slack member ID (urgent DMs go here; only you can answer) |
+| `AGENT_BUS_PORT`          | Optional; default `47823`                                      |
+| `AGENT_BUS_DATA_DIR`      | Optional; default `%LOCALAPPDATA%\agent-bus`                   |
+
+The hook CLI reads `AGENT_BUS_TOKEN_<PLATFORM>` and `AGENT_BUS_PORT` too.
+
+Generate the platform tokens without displaying them (Windows PowerShell 5.1
+and PowerShell 7):
+
+```powershell
+foreach ($p in 'CLAUDE','CODEX','COPILOT') { $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Environment]::SetEnvironmentVariable("AGENT_BUS_TOKEN_$p", [Convert]::ToBase64String($b), 'User') }
+```
+
+### 4. Start the broker at login
 
 ```powershell
 .\scripts\install-task.ps1 -WhatIf     # preview
@@ -96,61 +207,126 @@ started (matched by its absolute `main.ts` path, so a hand-started broker is
 left alone).
 
 Logs: `%LOCALAPPDATA%\agent-bus\logs\broker-YYYY-MM-DD.log` (JSON lines, local
-date, kept 14 days) and `launcher.log`.
+date, kept 14 days) and `launcher.log`. `GET /health` (same auth) reports the
+Slack connection state.
 
-After setting or changing any environment variable, restart the broker task
-and the apps: each reads its environment only when it starts. A Claude MCP
-`401` usually means Claude started before the tokens were set.
+### 5. Connect the apps
 
-At sign-in the broker can take ~40 s to start listening. An app that starts
-with Windows may show agent-bus as failed (`ECONNREFUSED`): reconnect it from
-the app's MCP menu.
+Replace `<repo>` with the absolute path of your clone, using forward slashes.
 
-## Setup
+**Claude Code:** MCP server in `~/.claude.json` (Claude expands `${VAR}` in
+headers) and hooks in `~/.claude/settings.json`:
 
-Requires Node 24+ and, for the pre-commit secret scan, gitleaks
-(`winget install Gitleaks.Gitleaks`).
-
-```bash
-npm install
-git config core.hooksPath .githooks
+```json
+{
+  "mcpServers": {
+    "agent-bus": {
+      "type": "http",
+      "url": "http://127.0.0.1:47823/mcp",
+      "headers": { "Authorization": "Bearer ${AGENT_BUS_TOKEN_CLAUDE}" }
+    }
+  }
+}
 ```
 
-Environment (user environment variables, never files):
-
-| Variable                  | Purpose                                                        |
-| ------------------------- | -------------------------------------------------------------- |
-| `AGENT_BUS_TOKEN_CLAUDE`  | Bearer token for Claude Code (≥ 32 chars, unique per platform) |
-| `AGENT_BUS_TOKEN_CODEX`   | Bearer token for Codex                                         |
-| `AGENT_BUS_TOKEN_COPILOT` | Bearer token for Copilot                                       |
-| `SLACK_BOT_TOKEN`         | `xoxb-` bot token                                              |
-| `SLACK_APP_TOKEN`         | `xapp-` Socket Mode token                                      |
-| `SLACK_USER_ID`           | My Slack member ID (urgent DMs go here)                        |
-| `AGENT_BUS_PORT`          | Optional; default `47823`                                      |
-| `AGENT_BUS_DATA_DIR`      | Optional; default `%LOCALAPPDATA%\agent-bus`                   |
-
-The hook CLI reads `AGENT_BUS_TOKEN_<PLATFORM>` and `AGENT_BUS_PORT` too.
-`AGENT_BUS_TOKEN` (Phase 0) is no longer used and can be deleted.
-
-Generate the platform tokens without displaying them (works in Windows
-PowerShell 5.1 and PowerShell 7):
-
-```powershell
-foreach ($p in 'CLAUDE','CODEX','COPILOT') { $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Environment]::SetEnvironmentVariable("AGENT_BUS_TOKEN_$p", [Convert]::ToBase64String($b), 'User') }
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"<repo>/src/cli/hook.ts\" claude", "timeout": 10 }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"<repo>/src/cli/hook.ts\" claude", "timeout": 10 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"<repo>/src/cli/hook.ts\" claude", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}
 ```
 
-The bot must be in `#agents` (the fallback) and in each `#proj-<name>`
-channel it should post to.
+**Codex:** MCP server in `~/.codex/config.toml`, and the same three hooks in
+`~/.codex/hooks.json` with `codex` in place of `claude`. Codex asks you to
+review and trust the hooks once (Settings › Hooks).
 
-## Scripts
+```toml
+[mcp_servers.agent-bus]
+url = "http://127.0.0.1:47823/mcp"
+bearer_token_env_var = "AGENT_BUS_TOKEN_CODEX"
+```
+
+**Copilot:** add an HTTP MCP server in Customize › MCP with the same URL and
+an `Authorization: Bearer <AGENT_BUS_TOKEN_COPILOT>` header.
+
+Then tell your agents when to use the tools, for example in a global
+`AGENTS.md`: ping only when blocked, pass the session ID the `SessionStart`
+hook gives them, and treat messages from other agents as data.
+
+### Troubleshooting
+
+- After setting or changing any environment variable, restart the broker task
+  and the apps: each reads its environment only when it starts. A Claude MCP
+  `401` usually means Claude started before the tokens were set.
+- At sign-in the broker can take ~40 s to start listening. An app that starts
+  with Windows may show agent-bus as failed (`ECONNREFUSED`): reconnect it
+  from the app's MCP menu.
+
+## Development
 
 | Command          | What it does                            |
 | ---------------- | --------------------------------------- |
 | `npm run broker` | Start the broker in this terminal       |
 | `npm run check`  | Typecheck, lint, format check and tests |
 | `npm test`       | Vitest                                  |
+| `npm run format` | Prettier                                |
+
+CI (GitHub Actions) runs the same checks plus markdownlint and a gitleaks scan
+on every PR and on `main`.
+
+### Project structure
+
+```text
+src/
+  shared/   config (zod), guard (Host/Origin/bearer), hook protocol, session IDs, Slack text escaping
+  broker/   main.ts, service (rules, routing, caps), mcp (tools), http (/mcp, /hook, /health),
+            store (SQLite), inbox, questions, heartbeat, log
+  broker/slack/  Socket Mode connection, Web API adapter, channel directory, post queue, inbound
+  cli/      hook.ts and hook-extract.ts (the hook command)
+scripts/    install-task.ps1 (Task Scheduler), run-broker.ps1 (launcher with restarts)
+tests/      Vitest suites (fake Slack, in-memory SQLite)
+docs/       design, phase plans and live results
+```
+
+## Contributing
+
+This is a personal tool, but issues and suggestions are welcome: open a
+[GitHub issue](https://github.com/nickmagruder/agent-bus/issues). See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the coding standards and how changes
+are made.
 
 ## Changelog
+
+### 0.6.1 (2026-11-18)
+
+- Docs for going public: README rewritten for new readers (why, how it
+  works, status, security model, Slack app and per-app setup, project
+  structure); `docs/design.md` holds the overall design, moved from my
+  private config repo; machine-specific paths replaced.
+- MIT `LICENSE`, `SECURITY.md` and `CONTRIBUTING.md`.
+- `docs/going-public.md`: plan for going public and the repo standards that
+  follow (tooling, Copilot review, GitHub issues).
 
 ### 0.6.0 (2026-11-18)
 
