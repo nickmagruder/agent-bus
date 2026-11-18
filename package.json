@@ -1,6 +1,6 @@
 {
   "name": "agent-bus",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Local broker connecting Claude Code, Codex and GitHub Copilot sessions to Slack and to each other.",
   "type": "module",
@@ -14,8 +14,7 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm test",
-    "broker": "node --disable-warning=ExperimentalWarning src/broker/main.ts",
-    "spike:server": "node src/spike/echo-server.ts"
+    "broker": "node --disable-warning=ExperimentalWarning src/broker/main.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

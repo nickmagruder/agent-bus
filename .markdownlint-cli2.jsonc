@@ -9,5 +9,5 @@
     // CLAUDE.md is a single @import line, so a leading H1 isn't required.
     "MD041": false,
   },
-  "ignores": ["**/node_modules/**", "spike-logs/**"],
+  "ignores": ["**/node_modules/**"],
 }

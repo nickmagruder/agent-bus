@@ -2,6 +2,10 @@
 
 Status: **complete** (2026-11-17)
 
+> The spike code and wiring described below were removed in 0.3.0 (Phase 1
+> PR 2). They're in git history at `9062a63`; the results stay here as the
+> record.
+
 The plan (clankers `docs/slack-integration-plan.md`) marks several platform
 capabilities as "verify". These spikes settle them before any broker code is
 written. Nothing here talks to Slack.

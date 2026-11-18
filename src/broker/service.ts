@@ -9,12 +9,22 @@ export type Urgency = (typeof URGENCIES)[number];
 
 /** Per-hour caps that stop a looping agent from flooding Slack or my DMs. */
 export const LIMITS = {
+  /** Sessions an agent may create through `register` (hooks create theirs from app sessions). */
   registerPerPlatform: 30,
   notifyPerSession: 60,
   urgentPerSession: 10,
 } as const;
 
+/** Minimum gap between hook pings of one kind for one session. */
+export const HOOK_THROTTLE_MS = {
+  /** Permission prompts often come in bursts; one DM brings me to the app. */
+  permission: 2 * 60_000,
+  /** Stop fires after every turn; one "waiting for you" per stretch is enough. */
+  stop: 10 * 60_000,
+} as const;
+
 const HOUR_MS = 60 * 60_000;
+const SNIPPET_CHARS = 300;
 
 export type BusErrorCode = 'unknown_session' | 'wrong_platform' | 'rate_limited';
 
@@ -45,7 +55,34 @@ export interface NotifyInput {
   urgency: Urgency;
 }
 
+/** What the hook CLI extracted from an app's hook payload (already size-limited). */
+export interface HookInput {
+  event: string;
+  appSessionId: string;
+  project?: string | undefined;
+  branch?: string | undefined;
+  cwd?: string | undefined;
+  source?: string | undefined;
+  notificationType?: string | undefined;
+  message?: string | undefined;
+  toolName?: string | undefined;
+  toolSummary?: string | undefined;
+  lastMessage?: string | undefined;
+  stopHookActive?: boolean | undefined;
+}
+
+export type HookAction = 'context' | 'sent' | 'throttled' | 'rate_limited' | 'ignored';
+
+export interface HookResult {
+  session: string;
+  action: HookAction;
+  /** Text for the app to add to the model's context (SessionStart). */
+  context?: string;
+}
+
 export type Route = 'dm' | 'thread' | 'digest';
+
+type HookKind = keyof typeof HOOK_THROTTLE_MS;
 
 /**
  * The broker's rules: who may act on which session, where each message goes,
@@ -62,56 +99,143 @@ export class BusService {
     this.now = now;
   }
 
+  // MCP tools
+
   register(input: RegisterInput): { session: SessionRecord; created: boolean } {
     if (input.session) return this.reregister(input, input.session);
 
-    const since = new Date(this.now().getTime() - HOUR_MS);
-    if (
-      this.store.countEvents({ kind: 'session.created', platform: input.platform, since }) >=
-      LIMITS.registerPerPlatform
-    ) {
+    const created = this.store.countEvents({
+      kind: 'session.created',
+      platform: input.platform,
+      since: this.hourAgo(),
+      dataField: { name: 'source', value: 'mcp' },
+    });
+    if (created >= LIMITS.registerPerPlatform) {
       this.deny(input.platform, null, 'rate_limited', 'register');
       throw new BusError('rate_limited', 'Too many new sessions this hour; try again later.');
     }
 
-    const project = input.project ? projectSlug(input.project) : NO_PROJECT;
-    const channel = project === NO_PROJECT ? FALLBACK_CHANNEL : `proj-${project}`;
     const session = this.store.transaction(() => {
-      let id = newSessionId(input.platform, project);
-      while (this.store.getSession(id)) id = newSessionId(input.platform, project);
-      const created = this.store.insertSession({
-        id,
+      const record = this.createSession({
         platform: input.platform,
-        project,
-        branch: input.branch ?? null,
+        project: input.project,
+        branch: input.branch,
         purpose: input.purpose,
-        channel,
+        source: 'mcp',
       });
-      this.store.appendEvent({
-        kind: 'session.created',
-        platform: input.platform,
-        sessionId: id,
-        data: { project, branch: input.branch ?? null, purpose: input.purpose },
-      });
-      this.store.enqueue({
-        target: channel,
-        sessionId: id,
-        inThread: true,
-        text: sessionStartText(created),
-        ...style(created),
-      });
-      return created;
+      this.announce(record);
+      return record;
     });
     this.queue.kick();
-    return { session, created: true };
+    return { session: this.reload(session.id), created: true };
   }
 
   notify(input: NotifyInput): { route: Route } {
     const session = this.ownedSession(input.platform, input.session, 'notify');
-    const since = new Date(this.now().getTime() - HOUR_MS);
+    const route = this.deliver(session, input.urgency, escapeSlackText(input.text), {
+      source: 'mcp',
+      text: input.text,
+    });
+    return { route };
+  }
+
+  // Hooks
+
+  /**
+   * Handles one hook event. Hooks never decide anything for the app (no
+   * allow/deny, no blocking); they only ping me and hand the agent its bus ID.
+   */
+  hook(platform: Platform, input: HookInput): HookResult {
+    const session = this.hookSession(platform, input);
+    let action: HookAction = 'ignored';
+    let context: string | undefined;
+
+    switch (input.event) {
+      case 'SessionStart':
+        action = 'context';
+        context = sessionContext(session);
+        break;
+      case 'PermissionRequest':
+        action = this.hookPing(session, 'permission', 'urgent', permissionText(input));
+        break;
+      case 'Notification':
+        if (input.notificationType === 'permission_prompt') {
+          action = this.hookPing(session, 'permission', 'urgent', permissionText(input));
+        }
+        break;
+      case 'Stop':
+        // A Stop hook (ours or another) already kept the agent going; it isn't waiting yet.
+        if (!input.stopHookActive) {
+          action = this.hookPing(session, 'stop', 'normal', stopText(input));
+        }
+        break;
+    }
+
+    this.store.appendEvent({
+      kind: 'hook',
+      platform,
+      sessionId: session.id,
+      data: { event: input.event, action, source: input.source ?? null },
+    });
+    return { session: session.id, action, ...(context ? { context } : {}) };
+  }
+
+  /** Finds the bus session for an app session, creating it on first sight. */
+  private hookSession(platform: Platform, input: HookInput): SessionRecord {
+    const existing = this.store.findByAppSession(platform, input.appSessionId);
+    if (existing) {
+      this.store.touchSession(existing.id, input.branch ? { branch: input.branch } : {});
+      return this.reload(existing.id);
+    }
+    return this.store.transaction(() =>
+      this.createSession({
+        platform,
+        project: input.project,
+        branch: input.branch,
+        purpose: undefined,
+        appSessionId: input.appSessionId,
+        source: 'hook',
+        cwd: input.cwd,
+      }),
+    );
+  }
+
+  private hookPing(
+    session: SessionRecord,
+    kind: HookKind,
+    urgency: Urgency,
+    mrkdwn: string,
+  ): HookAction {
+    const since = new Date(this.now().getTime() - HOOK_THROTTLE_MS[kind]);
+    const recent = this.store.countEvents({
+      kind: 'notify',
+      sessionId: session.id,
+      since,
+      dataField: { name: 'hook', value: kind },
+    });
+    if (recent > 0) return 'throttled';
+    try {
+      this.deliver(session, urgency, mrkdwn, { source: 'hook', hook: kind });
+      return 'sent';
+    } catch (error) {
+      if (error instanceof BusError && error.code === 'rate_limited') return 'rate_limited';
+      throw error;
+    }
+  }
+
+  // Shared rules
+
+  /** Applies the per-session caps, audits, and queues the post. `mrkdwn` must already be escaped. */
+  private deliver(
+    session: SessionRecord,
+    urgency: Urgency,
+    mrkdwn: string,
+    audit: Record<string, unknown>,
+  ): Route {
+    const since = this.hourAgo();
     const sent = this.store.countEvents({ kind: 'notify', sessionId: session.id, since });
     const urgentSent =
-      input.urgency === 'urgent'
+      urgency === 'urgent'
         ? this.store.countEvents({
             kind: 'notify',
             sessionId: session.id,
@@ -120,42 +244,96 @@ export class BusService {
           })
         : 0;
     if (sent >= LIMITS.notifyPerSession || urgentSent >= LIMITS.urgentPerSession) {
-      this.deny(input.platform, session.id, 'rate_limited', 'notify');
+      this.deny(session.platform, session.id, 'rate_limited', 'notify');
       throw new BusError(
         'rate_limited',
         'Notification limit reached for this session; batch updates or wait before sending more.',
       );
     }
 
-    const route: Route =
-      input.urgency === 'urgent' ? 'dm' : input.urgency === 'normal' ? 'thread' : 'digest';
+    const route: Route = urgency === 'urgent' ? 'dm' : urgency === 'normal' ? 'thread' : 'digest';
     this.store.transaction(() => {
       this.store.touchSession(session.id);
       this.store.appendEvent({
         kind: 'notify',
-        platform: input.platform,
+        platform: session.platform,
         sessionId: session.id,
-        data: { urgency: input.urgency, route, text: input.text },
+        data: { urgency, route, ...audit },
       });
       if (route === 'dm') {
         this.store.enqueue({
           target: DM_TARGET,
           sessionId: session.id,
-          text: urgentText(session, input.text),
+          text: urgentText(session, mrkdwn),
           ...style(session),
         });
       } else if (route === 'thread') {
-        this.store.enqueue({
-          target: session.channel,
-          sessionId: session.id,
-          inThread: true,
-          text: escapeSlackText(input.text),
-          ...style(session),
-        });
+        this.postInThread(session, mrkdwn);
       }
     });
     if (route !== 'digest') this.queue.kick();
-    return { route };
+    return route;
+  }
+
+  private createSession(input: {
+    platform: Platform;
+    project: string | undefined;
+    branch: string | undefined;
+    purpose: string | undefined;
+    appSessionId?: string;
+    source: 'mcp' | 'hook';
+    cwd?: string | undefined;
+  }): SessionRecord {
+    const project = input.project ? projectSlug(input.project) : NO_PROJECT;
+    const channel = project === NO_PROJECT ? FALLBACK_CHANNEL : `proj-${project}`;
+    let id = newSessionId(input.platform, project);
+    while (this.store.getSession(id)) id = newSessionId(input.platform, project);
+    const session = this.store.insertSession({
+      id,
+      platform: input.platform,
+      project,
+      branch: input.branch ?? null,
+      purpose: input.purpose ?? null,
+      channel,
+      appSessionId: input.appSessionId ?? null,
+    });
+    this.store.appendEvent({
+      kind: 'session.created',
+      platform: input.platform,
+      sessionId: id,
+      data: {
+        source: input.source,
+        project,
+        branch: input.branch ?? null,
+        purpose: input.purpose ?? null,
+        ...(input.cwd ? { cwd: input.cwd } : {}),
+      },
+    });
+    return session;
+  }
+
+  /** Queues the thread root once per session; it becomes the thread for later posts. */
+  private announce(session: SessionRecord): void {
+    if (session.announcedAt) return;
+    this.store.enqueue({
+      target: session.channel,
+      sessionId: session.id,
+      inThread: true,
+      text: sessionStartText(session),
+      ...style(session),
+    });
+    this.store.markAnnounced(session.id);
+  }
+
+  private postInThread(session: SessionRecord, mrkdwn: string): void {
+    this.announce(this.reload(session.id));
+    this.store.enqueue({
+      target: session.channel,
+      sessionId: session.id,
+      inThread: true,
+      text: mrkdwn,
+      ...style(session),
+    });
   }
 
   private reregister(
@@ -175,18 +353,16 @@ export class BusService {
         sessionId: id,
         data: { purpose: input.purpose, branch: input.branch ?? null },
       });
-      if (purposeChanged) {
-        this.store.enqueue({
-          target: session.channel,
-          sessionId: id,
-          inThread: true,
-          text: `*Purpose:* ${escapeSlackText(input.purpose)}`,
-          ...style(session),
-        });
+      const updated = this.reload(id);
+      if (!updated.announcedAt) {
+        // The root post carries the purpose, so no separate purpose post.
+        this.announce(updated);
+      } else if (purposeChanged) {
+        this.postInThread(updated, `*Purpose:* ${escapeSlackText(input.purpose)}`);
       }
     });
-    if (purposeChanged) this.queue.kick();
-    return { session: found(this.store.getSession(id), `session ${id}`), created: false };
+    this.queue.kick();
+    return { session: this.reload(id), created: false };
   }
 
   /** A session the calling platform may act on. Identity comes from the token, not the ID. */
@@ -220,6 +396,14 @@ export class BusService {
       data: { action, reason, ...(claimed ? { claimedSession: claimed } : {}) },
     });
   }
+
+  private reload(id: string): SessionRecord {
+    return found(this.store.getSession(id), `session ${id}`);
+  }
+
+  private hourAgo(): Date {
+    return new Date(this.now().getTime() - HOUR_MS);
+  }
 }
 
 function style(session: SessionRecord): { username: string; icon: string } {
@@ -233,6 +417,43 @@ export function sessionStartText(session: SessionRecord): string {
   return `:large_green_circle: *Session started* \`${session.id}\`${branch}${purpose}`;
 }
 
-export function urgentText(session: SessionRecord, text: string): string {
-  return `:rotating_light: \`${session.id}\` needs you\n${escapeSlackText(text)}`;
+/** `mrkdwn` must already be escaped. */
+export function urgentText(session: SessionRecord, mrkdwn: string): string {
+  return `:rotating_light: \`${session.id}\` needs you\n${mrkdwn}`;
+}
+
+export function sessionContext(session: SessionRecord): string {
+  return (
+    `agent-bus: this session's bus ID is ${session.id}. ` +
+    'Pass it as `session` to the agent-bus MCP tools (register, notify_human).'
+  );
+}
+
+export function permissionText(input: HookInput): string {
+  const tool = input.toolName ? `*${escapeSlackText(input.toolName)}*` : 'a tool';
+  const detail = input.toolSummary ?? input.message;
+  const block = detail ? `\n${codeBlock(detail)}` : '';
+  return `:lock: Waiting for your approval to use ${tool}${block}\nAnswer in the app.`;
+}
+
+export function stopText(input: HookInput): string {
+  const snippet = input.lastMessage ? `\n${quote(input.lastMessage)}` : '';
+  return `:hourglass_flowing_sand: Turn finished; waiting for you${snippet}`;
+}
+
+function truncate(text: string, max = SNIPPET_CHARS): string {
+  const trimmed = text.trim();
+  return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
+}
+
+function codeBlock(text: string): string {
+  // A ``` inside the text would end the block early.
+  return '```' + escapeSlackText(truncate(text)).replaceAll('```', "'''") + '```';
+}
+
+function quote(text: string): string {
+  return escapeSlackText(truncate(text))
+    .split('\n')
+    .map((line) => `> ${line}`)
+    .join('\n');
 }

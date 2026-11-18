@@ -4,7 +4,7 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['node_modules/', 'spike-logs/', 'coverage/'] },
+  { ignores: ['node_modules/', 'coverage/'] },
   js.configs.recommended,
   ...tseslint.configs.strict,
   prettier,

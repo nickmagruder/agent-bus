@@ -1,0 +1,192 @@
+import { spawn } from 'node:child_process';
+import { request } from 'node:http';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { silentLogger } from '../../src/broker/log.ts';
+import { startBroker, type Broker } from '../../src/broker/main.ts';
+import { runHook } from '../../src/cli/hook.ts';
+import { FakeSlack, TOKENS, USER_ID } from '../broker/fakes.ts';
+
+const repoRoot = path.resolve(import.meta.dirname, '..', '..');
+let dir: string;
+let broker: Broker;
+const slack = new FakeSlack();
+
+beforeAll(async () => {
+  dir = await mkdtemp(path.join(tmpdir(), 'agent-bus-hook-'));
+  broker = await startBroker(
+    {
+      port: 0,
+      dataDir: dir,
+      tokens: TOKENS,
+      slack: { botToken: 'xoxb-test', appToken: 'xapp-test', userId: USER_ID },
+    },
+    { log: silentLogger, slackApi: slack, connection: null, queueOptions: { minIntervalMs: 0 } },
+  );
+});
+
+afterAll(async () => {
+  await broker.stop();
+  await rm(dir, { recursive: true, force: true });
+});
+
+function env(platform: 'CLAUDE' | 'CODEX' = 'CLAUDE'): NodeJS.ProcessEnv {
+  const token = platform === 'CLAUDE' ? TOKENS.claude : TOKENS.codex;
+  return { [`AGENT_BUS_TOKEN_${platform}`]: token, AGENT_BUS_PORT: String(broker.port) };
+}
+
+function payload(fields: Record<string, unknown>): string {
+  return JSON.stringify({ session_id: 'app-1', cwd: repoRoot, ...fields });
+}
+
+describe('runHook against the broker', () => {
+  it('SessionStart prints the bus ID as added context', async () => {
+    const result = await runHook({
+      argv: ['claude'],
+      stdin: payload({ hook_event_name: 'SessionStart', source: 'startup' }),
+      env: env(),
+      cwd: repoRoot,
+    });
+    const output = JSON.parse(result.stdout) as {
+      hookSpecificOutput: { hookEventName: string; additionalContext: string };
+    };
+    expect(output.hookSpecificOutput.hookEventName).toBe('SessionStart');
+    expect(output.hookSpecificOutput.additionalContext).toMatch(/claude\/agent-bus\/[0-9a-f]{4}/);
+  });
+
+  it('PermissionRequest DMs me and prints nothing, leaving the decision to the app', async () => {
+    const result = await runHook({
+      argv: ['codex'],
+      stdin: payload({
+        hook_event_name: 'PermissionRequest',
+        tool_name: 'shell',
+        tool_input: { command: 'rm -rf build' },
+      }),
+      env: env('CODEX'),
+      cwd: repoRoot,
+    });
+    expect(result).toEqual({ stdout: '' });
+    await broker.queue.idle();
+    const dm = slack.posts.find((p) => p.channel === `D_${USER_ID}`);
+    expect(dm?.text).toContain('rm -rf build');
+    expect(dm?.username).toBe('Codex · agent-bus');
+  });
+
+  it('uses the platform from the token: a Codex token cannot post as Claude', async () => {
+    await runHook({
+      argv: ['claude'],
+      stdin: payload({ hook_event_name: 'Stop', last_assistant_message: 'done' }),
+      env: { AGENT_BUS_TOKEN_CLAUDE: TOKENS.codex, AGENT_BUS_PORT: String(broker.port) },
+      cwd: repoRoot,
+    });
+    await broker.queue.idle();
+    const stop = slack.posts.find((p) => p.text.includes('Turn finished'));
+    expect(stop?.username).toBe('Codex · agent-bus');
+  });
+
+  it('notes a missing token without calling the broker', async () => {
+    let called = false;
+    const result = await runHook({
+      argv: ['claude'],
+      stdin: payload({ hook_event_name: 'Stop' }),
+      env: {},
+      cwd: repoRoot,
+      fetch: (async () => {
+        called = true;
+        return new Response('{}');
+      }) as typeof fetch,
+    });
+    expect(result).toEqual({ stdout: '', note: 'AGENT_BUS_TOKEN_CLAUDE is not set' });
+    expect(called).toBe(false);
+  });
+
+  it.each([
+    ['not JSON', '{nope', 'hook payload is not JSON'],
+    ['null', 'null', 'hook payload has no event or session ID'],
+    ['no session', JSON.stringify({ hook_event_name: 'Stop' }), 'hook payload has no event'],
+  ])('handles a %s payload quietly', async (_, stdin, note) => {
+    const result = await runHook({ argv: ['claude'], stdin, env: env(), cwd: repoRoot });
+    expect(result.stdout).toBe('');
+    expect(result.note).toContain(note);
+  });
+
+  it('rejects an unknown platform', async () => {
+    const result = await runHook({ argv: ['gemini'], stdin: '{}', env: env(), cwd: repoRoot });
+    expect(result.note).toContain('must be one of');
+  });
+
+  it('prints nothing when the broker refuses', async () => {
+    const result = await runHook({
+      argv: ['claude'],
+      stdin: payload({ hook_event_name: 'SessionStart' }),
+      env: env(),
+      cwd: repoRoot,
+      fetch: (async () => new Response('nope', { status: 500 })) as typeof fetch,
+    });
+    expect(result).toEqual({ stdout: '', note: 'broker answered 500' });
+  });
+});
+
+describe('POST /hook', () => {
+  function post(body: string, token = TOKENS.claude): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const req = request(
+        {
+          host: '127.0.0.1',
+          port: broker.port,
+          path: '/hook',
+          method: 'POST',
+          headers: { host: `127.0.0.1:${broker.port}`, authorization: `Bearer ${token}` },
+        },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        },
+      );
+      req.on('error', reject);
+      req.end(body);
+    });
+  }
+
+  it('requires a platform token', async () => {
+    expect(await post('{}', 'z'.repeat(48))).toBe(401);
+  });
+
+  it.each([
+    ['missing session', { event: 'Stop' }],
+    ['unknown field', { event: 'Stop', appSessionId: 'a', decision: 'allow' }],
+    ['oversized text', { event: 'Stop', appSessionId: 'a', lastMessage: 'x'.repeat(2001) }],
+    ['wrong type', { event: 'Stop', appSessionId: 'a', stopHookActive: 'yes' }],
+  ])('rejects %s with 400', async (_, body) => {
+    expect(await post(JSON.stringify(body))).toBe(400);
+  });
+
+  it('accepts a valid request', async () => {
+    expect(await post(JSON.stringify({ event: 'UserPromptSubmit', appSessionId: 'a' }))).toBe(200);
+  });
+});
+
+describe('hook process', () => {
+  it('exits 0 with empty stdout when the broker is down', async () => {
+    const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>(
+      (resolve, reject) => {
+        const child = spawn(process.execPath, [path.join(repoRoot, 'src/cli/hook.ts'), 'claude'], {
+          env: { ...process.env, AGENT_BUS_TOKEN_CLAUDE: TOKENS.claude, AGENT_BUS_PORT: '1' },
+        });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
+        child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
+        child.on('error', reject);
+        child.on('close', (code) => resolve({ code, stdout, stderr }));
+        child.stdin.end(payload({ hook_event_name: 'SessionStart' }));
+      },
+    );
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('agent-bus hook:');
+    expect(result.stderr).not.toContain(TOKENS.claude);
+  });
+});
