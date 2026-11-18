@@ -1,6 +1,6 @@
 # Going public: repo standards before Phase 3
 
-Status: **in progress** (2026-11-18): steps 1–6 done (step 6 merged as [clankers#11](https://github.com/nickmagruder/clankers/pull/11)); step 7 in review as [crashmap#212](https://github.com/nickmagruder/crashmap/pull/212) and [esri-exporter#50](https://github.com/nickmagruder/esri-exporter/pull/50).
+Status: **done** (2026-11-18). All eight steps shipped; step 7 merged as [crashmap#212](https://github.com/nickmagruder/crashmap/pull/212), [crashmap#219](https://github.com/nickmagruder/crashmap/pull/219) (MIT license) and [esri-exporter#50](https://github.com/nickmagruder/esri-exporter/pull/50). Open follow-ups live in issues, listed under step 8.
 
 Five goals:
 
@@ -111,7 +111,7 @@ Agents open PRs; Nick merges app-repo PRs. Steps run in order unless noted.
 - [x] `.github/dependabot.yml`: weekly, grouped npm and Actions updates
 - [x] CodeQL workflow (JS/TS; PRs, `main`, weekly); first run green on #33
 - [x] OpenSSF Scorecard workflow + README badge
-- [ ] Scorecard first run on `main` (runs only after merge) publishes the badge
+- [x] Scorecard first run on `main` (runs only after merge) publishes the badge
 - [x] README setup, changelog, `AGENTS.md`
 
 ### 4. Copilot first review (with step 3)
@@ -247,15 +247,36 @@ grouped issues; esri-exporter gets the full checklist but no formatter yet.
 - [x] CrashMap: actions pinned by SHA, CodeQL, Scorecard, Dependabot,
       gitleaks pre-commit and commit-msg hook added to its husky setup
 - [x] CrashMap AGENTS.md git rule mentions issues and Copilot triage
-- [ ] Copilot's first review on both PRs: blocked on 2026-11-18, when
-      GitHub reported the Copilot review quota used up. Re-request once it
-      resets
-- [ ] Nick merges both PRs; CrashMap's merge deploys (check the `main` run's
-      `check`, `deploy` and `lighthouse` jobs with the pinned actions)
-- [ ] Nick: CrashMap has no `LICENSE`; choose one
+- [x] Copilot's first review on both PRs: skipped. GitHub reported the
+      Copilot review quota used up on 2026-11-18, and Nick merged without
+      it; the ruleset requests a review on the next PR in each repo
+- [x] Nick merged both PRs; CrashMap's `main` run passed `check`, `deploy`
+      and `lighthouse` with the pinned actions, and CI, CodeQL and Scorecard
+      passed on both `main` branches
+- [x] CrashMap license: MIT
+      ([crashmap#219](https://github.com/nickmagruder/crashmap/pull/219))
+- [x] Dependabot's first CrashMap PRs (#213–#217, mostly deferred majors)
+      are held for the deferred-upgrades phase,
+      [crashmap#202](https://github.com/nickmagruder/crashmap/issues/202)
 
 ### 8. Close out
 
-- [ ] `npm run check`, markdownlint, link check
-- [ ] Changelog entries and version bumps
-- [ ] Mark this doc done and link the issues that replaced its checklists
+- [x] `npm run check`, markdownlint, link check
+- [x] Changelog entries and version bumps
+- [x] Mark this doc done and link the issues that replaced its checklists
+
+Follow-ups now tracked as issues:
+
+- agent-bus: Phase 2 work, #21–#32; repo lease, #31
+- clankers: `install.ps1 -AgentBus` drops Codex tool approvals inside its
+  marked block,
+  [clankers#18](https://github.com/nickmagruder/clankers/issues/18)
+- CrashMap: PLAN.md items,
+  [crashmap#198](https://github.com/nickmagruder/crashmap/issues/198) to
+  [crashmap#211](https://github.com/nickmagruder/crashmap/issues/211)
+- esri-exporter: formatter decision
+  ([esri-exporter#51](https://github.com/nickmagruder/esri-exporter/issues/51)),
+  input validation
+  ([esri-exporter#52](https://github.com/nickmagruder/esri-exporter/issues/52)),
+  deferred upgrades
+  ([esri-exporter#53](https://github.com/nickmagruder/esri-exporter/issues/53))
