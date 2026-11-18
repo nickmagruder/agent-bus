@@ -1,6 +1,7 @@
 import type { App } from '@slack/bolt';
 import type { InboundMessage, Inbox } from '../inbox.ts';
 import { errorMessage, type Logger } from '../log.ts';
+import { ANSWER_ACTION, type ButtonOutcome, type Questions } from '../questions.ts';
 
 /**
  * Reduces a Slack `message` event to the fields the inbox routes on.
@@ -42,6 +43,52 @@ export function registerInbound(app: App, inbox: Inbox, log: Logger): void {
       }
     } catch (error) {
       log('error', 'Slack message handling failed', { error: errorMessage(error) });
+    }
+  });
+}
+
+export interface ButtonClick {
+  questionId: string;
+  optionIndex: number;
+  userId: string;
+}
+
+/** Reads a question button click from a `block_actions` payload. */
+export function toButtonClick(body: unknown, action: unknown): ButtonClick | undefined {
+  if (typeof action !== 'object' || action === null) return undefined;
+  const a = action as Record<string, unknown>;
+  const match = ANSWER_ACTION.exec(str(a.action_id) ?? '');
+  const questionId = str(a.block_id);
+  const user = (body as { user?: { id?: unknown } } | null)?.user?.id;
+  if (a.type !== 'button' || !match || !questionId || typeof user !== 'string') return undefined;
+  return { questionId, optionIndex: Number(match[1]), userId: user };
+}
+
+/** Feedback for a click that didn't answer, shown only to the clicker. */
+export const CLICK_REPLIES: Partial<Record<ButtonOutcome, string>> = {
+  closed: 'This question was already answered or has expired.',
+  not_human: 'Only Nick can answer agent questions.',
+  unknown: 'agent-bus no longer knows this question.',
+  invalid: 'That option is not part of this question.',
+};
+
+/**
+ * Handles question buttons. Needs Interactivity turned on in the Slack app
+ * (Socket Mode delivers the clicks). Acks first, then answers.
+ */
+export function registerActions(app: App, questions: Questions, log: Logger): void {
+  app.action(ANSWER_ACTION, async ({ ack, body, action, respond }) => {
+    await ack();
+    const click = toButtonClick(body, action);
+    if (!click) return;
+    try {
+      const outcome = questions.answerByButton(click.questionId, click.optionIndex, click.userId);
+      const reply = CLICK_REPLIES[outcome];
+      if (reply)
+        await respond({ response_type: 'ephemeral', replace_original: false, text: reply });
+      else log('info', 'question answered by button', { question: click.questionId });
+    } catch (error) {
+      log('error', 'Slack button handling failed', { error: errorMessage(error) });
     }
   });
 }

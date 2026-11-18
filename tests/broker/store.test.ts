@@ -65,15 +65,39 @@ describe('Store migrations', () => {
     expect(store.findByAppSession('claude', 'app-2')).toBeUndefined();
   });
 
-  it('upgrades a v2 database and adds an empty inbox', () => {
-    const store = new Store(':memory:');
-    store.db.exec(
-      'DROP TABLE inbox; DROP INDEX sessions_by_thread; DROP INDEX outbox_by_slack_ts; PRAGMA user_version = 2',
-    );
-    (store as unknown as { migrate(): void }).migrate();
-    expect(store.schemaVersion).toBe(SCHEMA_VERSION);
-    expect(store.db.prepare('SELECT COUNT(*) AS n FROM inbox').get()).toEqual({ n: 0 });
-    store.close();
+  it.each([2, 3])('upgrades a v%i database, keeping its posts', async (from) => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'agent-bus-store-'));
+    try {
+      const file = path.join(dir, 'bus.db');
+      const old = new DatabaseSync(file);
+      for (const migration of MIGRATIONS.slice(0, from)) old.exec(migration);
+      old.exec(`PRAGMA user_version = ${from}`);
+      old.exec(
+        "INSERT INTO outbox (target, text, created_at) VALUES ('agents', 'hi', '2026-11-18T10:00:00.000Z')",
+      );
+      old.close();
+
+      const store = new Store(file);
+      expect(store.schemaVersion).toBe(SCHEMA_VERSION);
+      expect(store.getPost(1)).toMatchObject({ text: 'hi', blocks: null });
+      expect(store.db.prepare('SELECT COUNT(*) AS n FROM inbox').get()).toEqual({ n: 0 });
+      expect(store.db.prepare('SELECT COUNT(*) AS n FROM questions').get()).toEqual({ n: 0 });
+      store.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('joins a nested transaction to the outer one', () => {
+    const store = memoryStore();
+    expect(() =>
+      store.transaction(() => {
+        store.transaction(() => store.appendEvent({ kind: 'inner' }));
+        throw new Error('outer fails');
+      }),
+    ).toThrow('outer fails');
+    expect(store.countEvents({ kind: 'inner', since: new Date(0) })).toBe(0);
+    expect(store.transaction(() => store.transaction(() => 42))).toBe(42);
   });
 
   it('reopens an existing file without re-running migrations', async () => {

@@ -28,7 +28,13 @@ removed in 0.3.0; it's in git history at `9062a63`).
   (`platform/project/xxxx`); `notify_human(session, text, urgency)` routes
   `urgent` → DM to me, `normal` → the session's thread, `fyi` → stored for
   the Phase 2 digest. Per-session and per-platform hourly caps stop loops.
-  `check_inbox(session)` returns my Slack replies to that session.
+  `check_inbox(session)` returns my Slack replies to that session and the
+  outcomes of its questions. `ask_human(session, question, options?,
+default_action, timeout_minutes?)` DMs me the question (buttons for the
+  options; a reply in its thread works too) and waits up to 150 s, then
+  returns `pending` with a question ID for `wait_for_reply(session,
+question_id?)`. One reminder at 15 min; at the timeout (default 60 min)
+  the question expires and the agent takes its `default_action`.
 - **Slack replies (inbound):** a reply I write in a session's thread, or
   under a DM a session sent me, goes to that session's inbox. Only messages
   from `SLACK_USER_ID` count; other users, bots, edits and joins are dropped
@@ -145,6 +151,24 @@ channel it should post to.
 | `npm test`       | Vitest                                  |
 
 ## Changelog
+
+### 0.6.0 (2026-11-18)
+
+- `ask_human`: agents ask me a question by DM, with buttons for up to five
+  options and a free-text reply in the DM's thread; a pointer goes in the
+  session thread. The call waits up to 150 s (with progress heartbeats),
+  then returns `pending`; `wait_for_reply` waits again, for one question or
+  for anything new. A `default_action` is required.
+- First answer wins (button or reply); later or foreign clicks get an
+  ephemeral note. The DM is edited to show the outcome.
+- One reminder DM at 15 minutes; at the timeout (default 60 minutes) the
+  question expires and the agent is told to take its own default. Reminders
+  and expiries survive a restart.
+- Questions count as urgent notifications for the caps; at most three open
+  per session.
+- Schema v4: `questions`, `inbox.question_id`, `outbox.blocks`. Nested
+  store transactions join the outer one.
+- Needs **Interactivity** turned on in the Slack app for the buttons.
 
 ### 0.5.0 (2026-11-18)
 

@@ -7,7 +7,9 @@ import {
   REACTION,
   type InboundMessage,
 } from '../../src/broker/inbox.ts';
+import { silentLogger } from '../../src/broker/log.ts';
 import { inboxText } from '../../src/broker/mcp.ts';
+import { Notifier, Questions } from '../../src/broker/questions.ts';
 import { BusService } from '../../src/broker/service.ts';
 import { toInboundMessage } from '../../src/broker/slack/inbound.ts';
 import { DM_TARGET, Store, type SessionRecord } from '../../src/broker/store.ts';
@@ -34,9 +36,20 @@ beforeEach(() => {
   kicks = 0;
   nextTs = 100;
   const queue = { kick: () => kicks++ };
+  const notifier = new Notifier();
   inbox = new Inbox({
     store,
     queue,
+    notifier,
+    questions: new Questions({
+      store,
+      queue,
+      notifier,
+      editor: { update: () => undefined },
+      humanUserId: ME,
+      log: silentLogger,
+      now: () => now,
+    }),
     humanUserId: ME,
     reactions: { add: (channel, ts, name) => reactions.push({ channel, ts, name }) },
     now: () => now,
@@ -201,7 +214,7 @@ describe('take', () => {
 
   it('pages when more than the limit are waiting', () => {
     for (let i = 0; i < 3; i++) inbox.receive(message({ text: `m${i}` }));
-    const page = inbox.take(session, 2);
+    const page = inbox.take(session, 'check_inbox', 2);
     expect(page.messages.map((m) => m.body)).toEqual(['m0', 'm1']);
     expect(page.remaining).toBe(1);
   });
@@ -211,11 +224,11 @@ describe('inboxText', () => {
   it('labels messages as mine and mentions what is left', () => {
     inbox.receive(message({ text: 'hello' }));
     const { messages } = inbox.take(session);
-    const text = inboxText(messages, 2);
+    const text = inboxText(messages, [], 2);
     expect(text).toContain('1 message from Nick, sent from his own Slack account');
     expect(text).toContain('hello');
     expect(text).toContain('2 more waiting');
-    expect(inboxText([], 0)).toBe('No new messages from Nick.');
+    expect(inboxText([], [], 0)).toBe('No new messages from Nick.');
   });
 });
 

@@ -1,5 +1,13 @@
 import { fromSlackText } from '../shared/slack-text.ts';
-import { DM_TARGET, type InboxRecord, type SessionRecord, type Store } from './store.ts';
+import type { Notifier, Questions } from './questions.ts';
+import {
+  DM_TARGET,
+  type DeliveryVia,
+  type InboxRecord,
+  type QuestionRecord,
+  type SessionRecord,
+  type Store,
+} from './store.ts';
 
 /** A Slack `message` event, reduced to what routing needs (see slack/inbound.ts). */
 export interface InboundMessage {
@@ -19,7 +27,7 @@ export interface InboundMessage {
 export type DropReason = 'bot' | 'subtype' | 'not_human' | 'empty';
 
 export type InboundOutcome =
-  | { action: 'routed' | 'duplicate'; sessionId: string; inboxId: number }
+  | { action: 'routed' | 'duplicate'; sessionId: string; inboxId: number; questionId?: string }
   | { action: 'dropped'; reason: DropReason }
   | { action: 'unrouted'; hinted: boolean };
 
@@ -57,15 +65,22 @@ export class Inbox {
   private readonly reactions: Reactions;
   private readonly now: () => Date;
 
+  private readonly questions: Questions;
+  private readonly notifier: Notifier;
+
   constructor(options: {
     store: Store;
     queue: { kick(): void };
     humanUserId: string;
     reactions: Reactions;
+    questions: Questions;
+    notifier: Notifier;
     now?: () => Date;
   }) {
     this.store = options.store;
     this.queue = options.queue;
+    this.questions = options.questions;
+    this.notifier = options.notifier;
     this.humanUserId = options.humanUserId;
     this.reactions = options.reactions;
     this.now = options.now ?? (() => new Date());
@@ -90,54 +105,89 @@ export class Inbox {
     const session = this.sessionFor(message);
     if (!session) return this.unrouted(message);
 
-    const { record, inserted } = this.store.transaction(() => {
+    const body = messageBody(message);
+    const { record, inserted, questionId } = this.store.transaction(() => {
+      // A Slack retry of a message already stored must not answer anything again.
+      const existing = this.store.findInbox(message.channel, message.ts);
+      if (existing) return { record: existing, inserted: false, questionId: undefined };
+
+      const threadTs = message.threadTs ?? message.ts;
+      const question = this.questions.matchReply(session, message.channel, threadTs);
+      const answered =
+        question && this.questions.closeWithAnswer(question, body, 'reply')
+          ? question.id
+          : undefined;
       const added = this.store.addToInbox({
         sessionId: session.id,
         slackUser: this.humanUserId,
-        body: messageBody(message),
+        body,
         slackChannelId: message.channel,
         slackTs: message.ts,
+        questionId: answered ?? null,
       });
-      if (added.inserted) {
-        this.store.appendEvent({
-          kind: 'inbound.routed',
-          platform: session.platform,
-          sessionId: session.id,
-          data: { inboxId: added.record.id, channel: message.channel, ts: message.ts },
-        });
-      }
-      return added;
+      this.store.appendEvent({
+        kind: 'inbound.routed',
+        platform: session.platform,
+        sessionId: session.id,
+        data: {
+          inboxId: added.record.id,
+          channel: message.channel,
+          ts: message.ts,
+          ...(answered ? { questionId: answered } : {}),
+        },
+      });
+      return { record: added.record, inserted: added.inserted, questionId: answered };
     });
     if (!inserted) return { action: 'duplicate', sessionId: session.id, inboxId: record.id };
     this.reactions.add(message.channel, message.ts, REACTION.routed);
-    return { action: 'routed', sessionId: session.id, inboxId: record.id };
+    this.notifier.notify(session.id);
+    if (questionId) this.questions.afterClose(questionId);
+    return {
+      action: 'routed',
+      sessionId: session.id,
+      inboxId: record.id,
+      ...(questionId ? { questionId } : {}),
+    };
   }
 
   /**
    * Hands a session its undelivered messages (oldest first, at most `limit`)
-   * and marks them delivered. The caller has already checked ownership.
+   * and question outcomes, and marks them delivered. The caller has already
+   * checked ownership.
    */
-  take(session: SessionRecord, limit = TAKE_LIMIT): { messages: InboxRecord[]; remaining: number } {
+  take(
+    session: SessionRecord,
+    via: DeliveryVia = 'check_inbox',
+    limit = TAKE_LIMIT,
+  ): { messages: InboxRecord[]; outcomes: QuestionRecord[]; remaining: number } {
     const result = this.store.transaction(() => {
+      const outcomes = this.questions.takeOutcomes(session.id, via);
       const messages = this.store.undelivered(session.id, limit);
       if (messages.length > 0) {
         this.store.markDelivered(
           messages.map((m) => m.id),
-          'check_inbox',
+          via,
         );
         this.store.appendEvent({
           kind: 'inbox.delivered',
           platform: session.platform,
           sessionId: session.id,
-          data: { via: 'check_inbox', ids: messages.map((m) => m.id) },
+          data: { via, ids: messages.map((m) => m.id) },
         });
       }
-      return { messages, remaining: this.store.countUndelivered(session.id) };
+      return { messages, outcomes, remaining: this.store.countUndelivered(session.id) };
     });
-    for (const message of result.messages) {
+    this.reactDelivered(result.messages);
+    for (const outcome of result.outcomes)
+      this.reactDelivered(this.store.questionReplies(outcome.id));
+    return result;
+  }
+
+  /** ✅ on my messages the agent has now read. */
+  reactDelivered(messages: readonly InboxRecord[]): void {
+    for (const message of messages) {
       this.reactions.add(message.slackChannelId, message.slackTs, REACTION.delivered);
     }
-    return result;
   }
 
   private dropReason(message: InboundMessage): DropReason | undefined {

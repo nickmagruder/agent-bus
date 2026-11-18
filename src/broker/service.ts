@@ -2,7 +2,14 @@ import { PLATFORM_STYLE, type Platform } from '../shared/platform.ts';
 import { newSessionId, NO_PROJECT, projectSlug } from '../shared/session-id.ts';
 import { escapeSlackText, toSlackMrkdwn } from '../shared/slack-text.ts';
 import { FALLBACK_CHANNEL } from './slack/directory.ts';
-import { DM_TARGET, found, type SessionRecord, type Store } from './store.ts';
+import {
+  newQuestionId,
+  QUESTION_LIMITS,
+  questionMessage,
+  questionPointer,
+  questionTimes,
+} from './questions.ts';
+import { DM_TARGET, found, type QuestionRecord, type SessionRecord, type Store } from './store.ts';
 
 export const URGENCIES = ['urgent', 'normal', 'fyi'] as const;
 export type Urgency = (typeof URGENCIES)[number];
@@ -26,7 +33,18 @@ export const HOOK_THROTTLE_MS = {
 const HOUR_MS = 60 * 60_000;
 const SNIPPET_CHARS = 300;
 
-export type BusErrorCode = 'unknown_session' | 'wrong_platform' | 'rate_limited';
+export type BusErrorCode =
+  'unknown_session' | 'wrong_platform' | 'rate_limited' | 'too_many_questions' | 'unknown_question';
+
+export interface AskInput {
+  platform: Platform;
+  session: string;
+  question: string;
+  options?: readonly string[] | undefined;
+  /** What the agent will do if I don't answer in time. */
+  defaultAnswer: string;
+  timeoutMinutes?: number | undefined;
+}
 
 /** An error the calling agent should see and can act on. */
 export class BusError extends Error {
@@ -174,6 +192,72 @@ export class BusService {
     return { route };
   }
 
+  /**
+   * Asks me a question: a DM with buttons (when there are options) and a
+   * pointer in the session's thread. Counts as an urgent notification for
+   * the caps; at most QUESTION_LIMITS.openPerSession open at once.
+   */
+  ask(input: AskInput): QuestionRecord {
+    const session = this.ownedSession(input.platform, input.session, 'ask_human');
+    const open = this.store.openQuestions(session.id).length;
+    if (open >= QUESTION_LIMITS.openPerSession) {
+      this.deny(session.platform, session.id, 'too_many_questions', 'ask_human');
+      throw new BusError(
+        'too_many_questions',
+        `This session already has ${open} open questions; wait for answers (wait_for_reply) before asking more.`,
+      );
+    }
+    this.checkCaps(session, 'urgent', 'ask_human');
+
+    const times = questionTimes(this.now(), input.timeoutMinutes);
+    const question = this.store.transaction(() => {
+      let id = newQuestionId();
+      while (this.store.getQuestion(id)) id = newQuestionId();
+      const record = this.store.insertQuestion({
+        id,
+        sessionId: session.id,
+        text: input.question,
+        options: input.options ?? [],
+        defaultAnswer: input.defaultAnswer,
+        ...times,
+      });
+      this.store.touchSession(session.id);
+      this.store.appendEvent({
+        kind: 'notify',
+        platform: session.platform,
+        sessionId: session.id,
+        data: { urgency: 'urgent', route: 'dm', source: 'ask_human', questionId: id },
+      });
+      const message = questionMessage(session, record);
+      const post = this.store.enqueue({
+        target: DM_TARGET,
+        sessionId: session.id,
+        text: message.text,
+        blocks: message.blocks,
+        ...style(session),
+      });
+      this.store.setQuestionPost(id, 'post', post.id);
+      this.postInThread(session, questionPointer(record));
+      return found(this.store.getQuestion(id), `question ${id}`);
+    });
+    this.queue.kick();
+    return question;
+  }
+
+  /** A question this platform's session asked. */
+  requireQuestion(platform: Platform, sessionId: string, questionId: string): QuestionRecord {
+    const session = this.requireSession(platform, sessionId, 'wait_for_reply');
+    const question = this.store.getQuestion(questionId);
+    if (!question || question.sessionId !== session.id) {
+      this.deny(platform, session.id, 'unknown_question', 'wait_for_reply', questionId);
+      throw new BusError(
+        'unknown_question',
+        `Unknown question "${questionId}" for session ${session.id}.`,
+      );
+    }
+    return question;
+  }
+
   // Hooks
 
   /**
@@ -271,25 +355,7 @@ export class BusService {
     mrkdwn: string,
     audit: Record<string, unknown>,
   ): Route {
-    const since = this.hourAgo();
-    const sent = this.store.countEvents({ kind: 'notify', sessionId: session.id, since });
-    const urgentSent =
-      urgency === 'urgent'
-        ? this.store.countEvents({
-            kind: 'notify',
-            sessionId: session.id,
-            since,
-            dataField: { name: 'urgency', value: 'urgent' },
-          })
-        : 0;
-    if (sent >= LIMITS.notifyPerSession || urgentSent >= LIMITS.urgentPerSession) {
-      this.deny(session.platform, session.id, 'rate_limited', 'notify');
-      throw new BusError(
-        'rate_limited',
-        'Notification limit reached for this session; batch updates or wait before sending more.',
-      );
-    }
-
+    this.checkCaps(session, urgency, 'notify');
     const route: Route = urgency === 'urgent' ? 'dm' : urgency === 'normal' ? 'thread' : 'digest';
     this.store.transaction(() => {
       this.store.touchSession(session.id);
@@ -312,6 +378,28 @@ export class BusService {
     });
     if (route !== 'digest') this.queue.kick();
     return route;
+  }
+
+  /** The per-session hourly caps; every post (and every question) counts. */
+  private checkCaps(session: SessionRecord, urgency: Urgency, action: string): void {
+    const since = this.hourAgo();
+    const sent = this.store.countEvents({ kind: 'notify', sessionId: session.id, since });
+    const urgentSent =
+      urgency === 'urgent'
+        ? this.store.countEvents({
+            kind: 'notify',
+            sessionId: session.id,
+            since,
+            dataField: { name: 'urgency', value: 'urgent' },
+          })
+        : 0;
+    if (sent >= LIMITS.notifyPerSession || urgentSent >= LIMITS.urgentPerSession) {
+      this.deny(session.platform, session.id, 'rate_limited', action);
+      throw new BusError(
+        'rate_limited',
+        'Notification limit reached for this session; batch updates or wait before sending more.',
+      );
+    }
   }
 
   private createSession(input: {
@@ -477,7 +565,8 @@ export function urgentText(session: SessionRecord, mrkdwn: string): string {
 export function sessionContext(session: SessionRecord): string {
   return (
     `agent-bus: this session's bus ID is ${session.id}. ` +
-    'Pass it as `session` to the agent-bus MCP tools (register, notify_human, check_inbox).'
+    'Pass it as `session` to the agent-bus MCP tools ' +
+    '(register, notify_human, ask_human, wait_for_reply, check_inbox).'
   );
 }
 
