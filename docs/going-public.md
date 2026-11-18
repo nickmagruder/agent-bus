@@ -165,7 +165,11 @@ Agents open PRs; Nick merges app-repo PRs. Steps run in order unless noted.
       ID) and Priority. Milestone and Repository are built in, so no Phase
       field
 - [x] Views: Board (by Status), By repo (table grouped by repository),
-      Roadmap (by milestone; empty until items or milestones have dates)
+      Roadmap (by milestone). Milestone due dates set 2026-11-18 (guesses
+      from the Phase 0–1 pace): Phase 0 2026-11-17 and Phase 1 2026-11-18
+      (actual), Phase 2 2026-11-25, Phase 3 2026-12-11, Phase 4 2027-01-08,
+      Phase 5 2027-02-05. The Roadmap shows them as milestone markers; it
+      can only place items with a date or iteration field
 - [x] Open agent-bus issues added as Todo
 - [x] Workflows: item added → Todo; PR linked → In review; merged or closed
       → Done; Done closes the issue; auto-add for agent-bus open issues and
