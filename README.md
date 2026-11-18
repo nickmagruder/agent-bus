@@ -1,6 +1,6 @@
 # agent-bus
 
-**Version:** 0.6.4 · [MIT license](LICENSE)
+**Version:** 0.6.5 · [MIT license](LICENSE)
 
 [![ci](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml)
 [![codeql](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml)
@@ -355,6 +355,10 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.6.5 (2026-11-18)
+
+- `docs/going-public.md` is done: step 7 merged in CrashMap and esri-exporter (CrashMap is now MIT-licensed), Scorecard has run on `main`, and the remaining follow-ups are linked as issues
 
 ### 0.6.4 (2026-11-18)
 
