@@ -75,16 +75,33 @@ Run each in a fresh session in this folder.
 
 Fill in as you go; these answers replace the "verify" cells in the plan.
 
-| Question                                    | Claude Code | Codex | Copilot                         |
-| ------------------------------------------- | ----------- | ----- | ------------------------------- |
-| MCP server from repo config connects?       |             |       |                                 |
-| Token from env var expanded in config?      |             |       |                                 |
-| `clientInfo` name / user-agent              |             |       |                                 |
-| Tool-call timeout (s)                       |             |       |                                 |
-| Hook events seen                            |             |       |                                 |
-| Stop hook can nudge the agent to continue?  |             |       | n/a unless agentStop honours it |
-| PermissionRequest hook can wait and decide? |             |       | n/a (no such event)             |
-| Loads a global `AGENTS.md`? From where?     |             |       |                                 |
+| Question                                    | Claude Code (desktop 2.1.325, 2026-11-17)                                                                                                                                       | Codex                                                                                                                                        | Copilot                         |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| MCP server from repo config connects?       | ✅ `.mcp.json`, after a one-time approval; probes `server/discover` first                                                                                                       | ❌ project `.codex/config.toml` `[mcp_servers]` ignored; ✅ user `~/.codex/config.toml` works (HTTP and stdio bridge)                        |                                 |
+| Token from env var expanded in config?      | ✅ `${AGENT_BUS_TOKEN}` in `headers`                                                                                                                                            | ✅ `bearer_token_env_var`; stdio needs `env_vars = ["AGENT_BUS_TOKEN"]` passthrough                                                          |                                 |
+| `clientInfo` name / user-agent              | `claude-code` 2.1.325 / `claude-code/2.1.325 (claude-desktop, agent-sdk/0.3.325)`                                                                                               | `codex-mcp-client` 0.169.0-alpha.11.1 (same user-agent); desktop app 26.1111                                                                 |                                 |
+| Tool-call timeout (s)                       | **300 s of silence** (idle, not total). Raise per server with `"timeout"` (ms) in `.mcp.json`, or `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT` (ms; `0` = off). Heartbeat retest pending | **300 s** (sends a progress token; whether progress extends it is untested)                                                                  |                                 |
+| Every MCP tool call needs approval?         | Once per tool unless "Always allow"                                                                                                                                             | Yes, per call ("Allow once" / "Always allow"); fires `PreToolUse` + `PermissionRequest`                                                      |                                 |
+| Hook events seen                            | ✅ SessionStart, UserPromptSubmit, Stop, PermissionRequest, Notification (`permission_prompt`) from project `.claude/settings.json`                                             | ✅ SessionStart, UserPromptSubmit, PreToolUse, PermissionRequest, Stop from project `.codex/hooks.json` (after trusting in Settings > Hooks) |                                 |
+| Stop hook can nudge the agent to continue?  | ✅ `{"decision":"block","reason":…}`; reason shows in the transcript; payload has `stop_hook_active` and `last_assistant_message`                                               | ✅ same JSON; reason shows as "Hook feedback"; payload has `stop_hook_active`, `last_assistant_message`, `turn_id`                           | n/a unless agentStop honours it |
+| PermissionRequest hook can wait and decide? | ✅ waited 120 s, deny honoured; the in-app prompt appears in parallel and **an in-app answer wins**; a later hook answer is ignored                                             | ✅ waited 120 s, deny honoured (MCP tool call never reached the server)                                                                      | n/a (no such event)             |
+| Loads a global `AGENTS.md`? From where?     | Yes, via `~/.claude/CLAUDE.md` → clankers (known setup)                                                                                                                         | ❌ only the project `AGENTS.md`; no `~/.codex/AGENTS.md` exists, so clankers rules don't reach Codex                                         |                                 |
+
+### Notes
+
+- Codex desktop needs MCP servers in the **user** config, so the broker's
+  Codex wiring goes in `~/.codex/config.toml` (via `install.ps1`), not the
+  repo. Codex's own logs live in `~/.codex/logs_2.sqlite` (table `logs`).
+- The stdio bridge (`src/spike/stdio-bridge.ts`) also works for Codex; keep
+  it as a fallback for clients that can't do HTTP.
+- An earlier Codex "connection failed" and Claude "transport dropped
+  mid-call" were caused by the spike server being stopped (Ctrl+C in its
+  window), not by the clients. Run the server in its own terminal.
+
+**Heartbeat retest (Claude Code):** `hold` takes `heartbeatSeconds`. Ask
+"Call agent-bus-spike hold with seconds 600 and heartbeatSeconds 60." Pass =
+`hold-end` with `outcome: completed` in `mcp.jsonl`. Claude sends a progress
+token, so heartbeats use `notifications/progress`.
 
 Also check while in the Slack app settings: what the new **Agents** and
 **MCP Servers** features offer, and whether either changes the broker design.

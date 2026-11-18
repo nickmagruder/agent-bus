@@ -21,7 +21,11 @@ interface CallContext {
 }
 
 export function createSpikeMcpServer(log: Logger, context: CallContext): McpServer {
-  const server = new McpServer({ name: 'agent-bus-spike', version: '0.1.0' });
+  const server = new McpServer(
+    { name: 'agent-bus-spike', version: '0.1.0' },
+    // Logging lets the hold heartbeat fall back to log messages when the client sends no progress token.
+    { capabilities: { logging: {} } },
+  );
 
   server.registerTool(
     'whoami',
@@ -50,19 +54,72 @@ export function createSpikeMcpServer(log: Logger, context: CallContext): McpServ
       title: 'Spike: hold',
       description:
         'agent-bus Phase 0 spike. Waits the given number of seconds before returning, to measure how long this client lets a tool call run.',
-      inputSchema: { seconds: z.number().int().min(1).max(MAX_HOLD_SECONDS) },
+      inputSchema: {
+        seconds: z.number().int().min(1).max(MAX_HOLD_SECONDS),
+        heartbeatSeconds: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_HOLD_SECONDS)
+          .optional()
+          .describe(
+            'If set, send a progress (or log) notification this often while holding, to test whether that keeps the call alive.',
+          ),
+      },
     },
-    async ({ seconds }, extra) => {
+    async ({ seconds, heartbeatSeconds }, extra) => {
       const started = Date.now();
-      await log('hold-start', { seconds, userAgent: context.userAgent });
+      const progressToken = extra._meta?.progressToken;
+      await log('hold-start', {
+        seconds,
+        heartbeatSeconds,
+        progressToken: progressToken ?? null,
+        userAgent: context.userAgent,
+      });
+      const step = (heartbeatSeconds ?? seconds) * 1000;
+      const deadline = started + seconds * 1000;
       let outcome = 'completed';
+      let heartbeats = 0;
       try {
-        await sleep(seconds * 1000, undefined, { signal: extra.signal });
+        while (Date.now() < deadline) {
+          await sleep(Math.min(step, deadline - Date.now()), undefined, { signal: extra.signal });
+          if (!heartbeatSeconds || Date.now() >= deadline) continue;
+          heartbeats++;
+          const elapsed = Math.round((Date.now() - started) / 1000);
+          // Progress needs a token from the client; without one, fall back to a log message.
+          await extra.sendNotification(
+            progressToken === undefined
+              ? {
+                  method: 'notifications/message',
+                  params: { level: 'info', data: `agent-bus spike: still holding (${elapsed}s)` },
+                }
+              : {
+                  method: 'notifications/progress',
+                  params: {
+                    progressToken,
+                    progress: elapsed,
+                    total: seconds,
+                    message: 'agent-bus spike: still holding',
+                  },
+                },
+          );
+          await log('hold-heartbeat', {
+            via: progressToken === undefined ? 'log' : 'progress',
+            elapsedSeconds: elapsed,
+            userAgent: context.userAgent,
+          });
+        }
       } catch {
         outcome = 'cancelled';
       }
       const elapsedSeconds = (Date.now() - started) / 1000;
-      await log('hold-end', { seconds, outcome, elapsedSeconds, userAgent: context.userAgent });
+      await log('hold-end', {
+        seconds,
+        outcome,
+        elapsedSeconds,
+        heartbeats,
+        userAgent: context.userAgent,
+      });
       return { content: [{ type: 'text', text: `Held for ${elapsedSeconds}s (${outcome}).` }] };
     },
   );

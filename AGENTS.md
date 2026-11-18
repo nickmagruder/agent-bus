@@ -43,6 +43,7 @@ The design and phases live in clankers: `~/.claude/clankers/docs/slack-integrati
 - `src/spike/echo-server.ts`: throwaway MCP server for the spikes
 - `src/spike/hook-logger.ts`: hook command for all three platforms
 - `src/spike/arm.ts`: arms/disarms the active hook tests
+- `src/spike/stdio-bridge.ts`: stdio MCP server forwarding to the HTTP spike server
 - `src/spike/guard.ts`: Host/Origin/bearer checks (will move into the broker)
 - `.mcp.json`, `.claude/settings.json`, `.codex/`, `.github/hooks/`: per-app spike wiring
 

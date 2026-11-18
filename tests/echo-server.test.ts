@@ -85,6 +85,19 @@ describe('spike server tools', () => {
     await client.close();
   });
 
+  it('sends progress heartbeats while holding when the client asks for progress', async () => {
+    const client = await connectClient();
+    const progress: number[] = [];
+    const result = await client.callTool(
+      { name: 'hold', arguments: { seconds: 3, heartbeatSeconds: 1 } },
+      undefined,
+      { onprogress: (update) => progress.push(update.progress) },
+    );
+    expect(JSON.stringify(result.content)).toContain('(completed)');
+    expect(progress.length).toBeGreaterThanOrEqual(2);
+    await client.close();
+  });
+
   it('logs initialize with the client name', async () => {
     const log = await readFile(path.join(dir, 'mcp.jsonl'), 'utf8');
     expect(log).toContain('"clientInfo":{"name":"vitest"');

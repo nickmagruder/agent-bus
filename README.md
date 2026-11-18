@@ -41,6 +41,15 @@ Environment (user environment variables, never files):
 
 ## Changelog
 
+### 0.1.1 (2026-11-17)
+
+- Phase 0 results for Claude Code and Codex recorded in `docs/spikes/phase-0.md`.
+- Spike `hold` tool takes `heartbeatSeconds` (progress or log notifications).
+- `src/spike/stdio-bridge.ts`: stdio MCP server that forwards to the HTTP
+  spike server, as a fallback for clients that can't use HTTP.
+- Copilot hook commands use absolute paths so they work from Copilot's own
+  working copies.
+
 ### 0.1.0 (2026-11-17)
 
 - Scaffold: TypeScript run by Node 24 directly, Vitest, ESLint, Prettier,
