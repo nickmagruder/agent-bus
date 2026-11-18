@@ -133,6 +133,13 @@ channel it should post to.
 
 ## Changelog
 
+### 0.4.2 (2026-11-17)
+
+- `install-task.ps1 -Restart` / `-Uninstall`: stop the hidden launcher by
+  process ID and wait for it before stopping the broker.
+  `Stop-ScheduledTask` returns before the launcher has exited, so the old
+  launcher could see its broker die and try to restart it.
+
 ### 0.4.1 (2026-11-17)
 
 - No approval DM for agent-bus's own tools: asking me to approve an agent's
