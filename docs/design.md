@@ -125,9 +125,9 @@ for an A2A endpoint later. `input-required` maps directly onto "needs a human".
 
 Enforced in the broker, not left to agent instructions:
 
-- **Localhost only:** bind `127.0.0.1`; check `Host` and `Origin` on every
-  request (DNS-rebinding protection); require a bearer token even on
-  localhost. Built on `@modelcontextprotocol/sdk` ≥ 1.24.
+- **Localhost only:** bind `127.0.0.1`; check `Host` on every request and
+  `Origin` whenever one is sent (DNS-rebinding protection); require a bearer
+  token even on localhost. Built on `@modelcontextprotocol/sdk` ≥ 1.24.
 - **Identity comes from the connection, not the message.** Each platform has
   its own token and the broker stamps the sender; an agent can't claim to be
   another agent or me.

@@ -1,6 +1,5 @@
 #!/bin/sh
-# agent-bus pre-commit hook: block commits whose staged changes contain secrets.
-# Enable with: git config core.hooksPath .githooks
+# Blocks commits whose staged changes contain secrets. Run by .husky/pre-commit.
 
 if command -v gitleaks >/dev/null 2>&1; then
   GITLEAKS=gitleaks

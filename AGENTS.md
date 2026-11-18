@@ -11,7 +11,7 @@ load globally. This file holds only what is specific to this project and wins
 on conflict. All projects: `~/.claude/clankers/registry/PROJECTS.md`.
 
 The design and phases live in `docs/design.md` (moved from clankers
-`docs/slack-integration-plan.md`, which now points here). The repo is going
+`docs/slack-integration-plan.md`, which now points here). The repo is
 public: never write tokens, Slack IDs, personal paths or private-repo details
 into tracked files.
 
@@ -19,8 +19,8 @@ into tracked files.
 
 - **Runtime:** Node 24, TypeScript run directly by Node (type stripping; no build step)
 - **Libraries:** `@modelcontextprotocol/sdk` (≥ 1.24), `zod`, `@slack/bolt`, `@slack/web-api`; SQLite via built-in `node:sqlite`
-- **Tests/tooling:** Vitest, ESLint (typescript-eslint, strict), Prettier
-- **Hosting/CI:** runs locally on Windows; GitHub Actions for checks and gitleaks
+- **Tests/tooling:** Vitest, ESLint (typescript-eslint, strict), Prettier, markdownlint; husky + lint-staged hooks
+- **Hosting/CI:** runs locally on Windows; GitHub Actions (checks + gitleaks, CodeQL, Scorecard), Dependabot, Copilot PR review
 
 ## Working rules
 
@@ -35,6 +35,16 @@ into tracked files.
   that is Phase 4 work and needs tests for every path.
 - Hook payloads hold prompts and tool input: send only the fields in
   `src/shared/hook-protocol.ts`, never the whole payload.
+- **Git (trunk-based):** every change has a GitHub issue (phase label and
+  milestone where it fits); branch `<type>/<issue>-<slug>` from the latest
+  `main`; PR body starts `Closes #N`; Nick squash-merges. Commit, push and
+  open PRs only when Nick asks in the session. Never `--no-verify`.
+- **Copilot review:** reviews every PR automatically. Before handing a PR
+  back, fix the valid comments and reply with a reason to the rest, then
+  resolve the threads.
+- **Tracking:** status lives in issues; phase docs keep design, decisions and
+  live results and link to the issues. Bugs and follow-ups found mid-task
+  become issues (`follow-up` label), not plan bullets.
 
 ## Conventions
 
@@ -70,6 +80,10 @@ into tracked files.
 - `src/broker/log.ts`: JSON-lines logger and daily log files (`--log-to-file`)
 - `scripts/install-task.ps1`: registers the "agent-bus broker" logon task
 - `scripts/run-broker.ps1`: launcher the task runs; restarts after crashes, stops on exit 78
+- `.husky/`: pre-commit (lint-staged, then `scripts/gitleaks-staged.sh`) and commit-msg (`scripts/commit-msg.ts`, rules in `scripts/commit-msg-rules.ts`) hooks
+- `.github/workflows/`: `ci.yml` (the required `check` job), `codeql.yml`, `scorecard.yml`; actions pinned by SHA
+- `.github/copilot-instructions.md`, `.github/instructions/security.instructions.md`, `.github/skills/code-review/`: Copilot PR review
+- `.github/ISSUE_TEMPLATE/`, `.github/pull_request_template.md`: issue forms and PR template
 
 ## Docs kept in this repo
 

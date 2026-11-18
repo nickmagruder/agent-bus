@@ -1,0 +1,34 @@
+name: Bug
+description: Something agent-bus does wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Security problem? Don't file it here: report it privately
+        (see SECURITY.md). Never paste tokens, Slack IDs or hook payloads.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: Steps, the app involved (Claude Code, Codex, Copilot) and the tool or hook event.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant broker log lines (`%LOCALAPPDATA%\agent-bus\logs`), with anything sensitive removed.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: agent-bus version (README or package.json) and Node version.

@@ -1,6 +1,10 @@
 # agent-bus
 
-**Version:** 0.6.1 · [MIT license](LICENSE)
+**Version:** 0.6.2 · [MIT license](LICENSE)
+
+[![ci](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml)
+[![codeql](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/nickmagruder/agent-bus/badge)](https://scorecard.dev/viewer/?uri=github.com/nickmagruder/agent-bus)
 
 A local broker that connects AI coding agents (Claude Code, OpenAI Codex and
 GitHub Copilot desktop sessions) to Slack and to each other:
@@ -113,8 +117,8 @@ agent-bus can relay my answers to agents (and, in Phase 4, approvals), so the
 broker enforces its rules itself rather than trusting agent instructions:
 
 - **Localhost only.** The broker binds `127.0.0.1`. Every request needs a
-  matching `Host` and `Origin` (DNS-rebinding protection) and a bearer token,
-  even on localhost.
+  matching `Host` and a bearer token, even on localhost, and an `Origin`
+  header, when sent, must be a local one (DNS-rebinding protection).
 - **Identity from the connection.** Each platform has its own token; the
   broker stamps the caller's platform, and a session can only read its own
   inbox and questions.
@@ -138,7 +142,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 - Node 24+ (TypeScript runs directly through Node's type stripping; no build)
 - A Slack workspace where you can install an app
 - [gitleaks](https://github.com/gitleaks/gitleaks) for the pre-commit secret
-  scan (`winget install Gitleaks.Gitleaks`)
+  scan (`winget install Gitleaks.Gitleaks`); commits fail without it
 
 ## Setup
 
@@ -147,8 +151,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 ```bash
 git clone https://github.com/nickmagruder/agent-bus.git
 cd agent-bus
-npm install
-git config core.hooksPath .githooks
+npm install   # also installs the git hooks (husky)
 ```
 
 ### 2. Create the Slack app
@@ -298,15 +301,33 @@ hook gives them, and treat messages from other agents as data.
 
 ## Development
 
-| Command          | What it does                            |
-| ---------------- | --------------------------------------- |
-| `npm run broker` | Start the broker in this terminal       |
-| `npm run check`  | Typecheck, lint, format check and tests |
-| `npm test`       | Vitest                                  |
-| `npm run format` | Prettier                                |
+| Command           | What it does                                              |
+| ----------------- | --------------------------------------------------------- |
+| `npm run broker`  | Start the broker in this terminal                         |
+| `npm run check`   | Typecheck, ESLint, markdownlint, Prettier check and tests |
+| `npm test`        | Vitest                                                    |
+| `npm run lint:md` | markdownlint                                              |
+| `npm run format`  | Prettier                                                  |
 
-CI (GitHub Actions) runs the same checks plus markdownlint and a gitleaks scan
-on every PR and on `main`.
+Git hooks (husky, installed by `npm install`):
+
+- **pre-commit:** lint-staged runs `eslint --fix` and Prettier on staged
+  files (and markdownlint on Markdown), then gitleaks scans the staged changes.
+- **commit-msg:** `scripts/commit-msg.ts` checks the message: imperative
+  summary of 72 characters or fewer, no trailing period, a blank line before
+  the body.
+
+On GitHub:
+
+- **CI** runs the `npm run check` steps and a gitleaks scan on every PR and
+  on `main`; `main` only accepts squash-merged PRs that pass it.
+- **CodeQL** scans the TypeScript and the workflows; **OpenSSF Scorecard**
+  rates the repo's supply-chain hygiene weekly.
+- **Dependabot** opens grouped weekly updates for npm packages and Actions
+  (pinned by commit SHA).
+- **Copilot** reviews every PR, using `.github/copilot-instructions.md` and
+  the two-axis `code-review` skill in `.github/skills/` (standards, and the
+  linked issue as the spec).
 
 ### Project structure
 
@@ -317,9 +338,13 @@ src/
             store (SQLite), inbox, questions, heartbeat, log
   broker/slack/  Socket Mode connection, Web API adapter, channel directory, post queue, inbound
   cli/      hook.ts and hook-extract.ts (the hook command)
-scripts/    install-task.ps1 (Task Scheduler), run-broker.ps1 (launcher with restarts)
+scripts/    install-task.ps1 (Task Scheduler), run-broker.ps1 (launcher with restarts),
+            commit-msg.ts, commit-msg-rules.ts and gitleaks-staged.sh (git hooks)
 tests/      Vitest suites (fake Slack, in-memory SQLite)
 docs/       design, phase plans and live results
+.github/    workflows (ci, codeql, scorecard), Dependabot, Copilot instructions and
+            review skill, issue forms, PR template
+.husky/     pre-commit and commit-msg hooks
 ```
 
 ## Contributing
@@ -330,6 +355,28 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.6.2 (2026-11-18)
+
+- Repo is public: secret scanning with push protection, Dependabot alerts
+  and security updates, private vulnerability reporting; squash-only merges;
+  a ruleset on `main` (PR and passing `check` required, no force pushes,
+  automatic Copilot review).
+- Git hooks via husky (set up by `npm install`): lint-staged (ESLint,
+  Prettier, markdownlint) then the gitleaks scan on pre-commit;
+  `scripts/commit-msg.ts` checks commit messages. `.githooks/` and the
+  `core.hooksPath` step are gone. New dev dependencies: `husky`,
+  `lint-staged`, `markdownlint-cli2`.
+- `.nvmrc` (Node 24); `engines` is `>=24 <25`. `npm run check` includes
+  markdownlint (`npm run lint:md`).
+- CI actions on current majors, pinned by commit SHA; `gitleaks-action` v3.
+  New workflows: CodeQL (TypeScript and Actions, `security-extended`) and
+  OpenSSF Scorecard; Dependabot version updates for npm and Actions.
+- Copilot review setup: `.github/copilot-instructions.md`, path-scoped
+  security instructions, and a `code-review` skill adapted from
+  `mattpocock/skills` (MIT).
+- GitHub issues track the work: phase labels and milestones, issue forms
+  (bug, task), a PR template.
 
 ### 0.6.1 (2026-11-18)
 
