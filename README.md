@@ -246,6 +246,14 @@ headers) and hooks in `~/.claude/settings.json`:
         ]
       }
     ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          { "type": "command", "command": "node \"<repo>/src/cli/hook.ts\" claude", "timeout": 10 }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
@@ -257,8 +265,13 @@ headers) and hooks in `~/.claude/settings.json`:
 }
 ```
 
-**Codex:** MCP server in `~/.codex/config.toml`, and the same three hooks in
-`~/.codex/hooks.json` with `codex` in place of `claude`. Codex asks you to
+`Notification` is optional: it shares the 2-minute throttle with
+`PermissionRequest`, so wiring both never sends two DMs for one prompt.
+
+**Codex:** MCP server in `~/.codex/config.toml`, and the `SessionStart`,
+`PermissionRequest` and `Stop` hooks in `~/.codex/hooks.json` with `codex` in
+place of `claude` (the broker handles `Notification` for Claude only). Codex
+asks you to
 review and trust the hooks once (Settings › Hooks).
 
 ```toml
