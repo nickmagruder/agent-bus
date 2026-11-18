@@ -9,9 +9,9 @@ Adapted from mattpocock/skills, skills/engineering/code-review/SKILL.md
 Copyright (c) 2026 Matt Pocock. Changes: runs unattended in pull request
 review (fixed point is the PR base, spec is the linked issue, never asks the
 user); one pass in two sections instead of parallel sub-agents; standards
-sources for clankers-managed repos added. This is the canonical copy; see
-UPSTREAM.md. Repos vendor it as `.github/skills/code-review/SKILL.md` with
-`name: code-review`.
+sources for clankers-managed repos added. This is a vendored copy: the
+canonical file is clankers skills/pr-review/SKILL.md (source, license and
+adaptations in UPSTREAM.md there). Edit the canonical file and re-sync.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

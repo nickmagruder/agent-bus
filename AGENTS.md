@@ -38,7 +38,8 @@ into tracked files.
 - **Git (trunk-based):** every change has a GitHub issue (phase label and
   milestone where it fits); branch `<type>/<issue>-<slug>` from the latest
   `main`; PR body starts `Closes #N`; add new issues to the
-  [AI Orchestration board](https://github.com/users/nickmagruder/projects/5).
+  [AI Orchestration board](https://github.com/users/nickmagruder/projects/5)
+  with Target date set to their milestone's due date.
   Branch, commit, push and open the PR as the natural next step (clankers
   `standards/git.md`); only Nick merges. Never `--no-verify`.
 - **Copilot review:** reviews every PR automatically. Before handing a PR
