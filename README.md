@@ -9,9 +9,10 @@ desktop sessions to the `clankers` Slack workspace and to each other:
 
 Design, decisions and phases: [clankers `docs/slack-integration-plan.md`](https://github.com/nickmagruder/clankers/blob/main/docs/slack-integration-plan.md).
 
-**Current stage: Phase 1** (outbound pings). Broker core (`src/broker/`) and
-hook CLI (`src/cli/`) are in; start-at-login and app wiring are still to come.
-Plan and checklist: [docs/phase-1.md](docs/phase-1.md). Phase 0 results:
+**Current stage: Phase 1** (outbound pings). Broker, hook CLI, start-at-login
+and app wiring (clankers `install.ps1 -AgentBus`) are in; verified live on
+Claude Code, with Codex and Copilot still to check.
+Plan, checklist and live results: [docs/phase-1.md](docs/phase-1.md). Phase 0 results:
 [docs/spikes/phase-0.md](docs/spikes/phase-0.md) (the spike code itself was
 removed in 0.3.0; it's in git history at `9062a63`).
 
@@ -31,6 +32,9 @@ removed in 0.3.0; it's in git history at `9062a63`).
   out per channel at about one a second, honour Slack's `Retry-After`, and
   survive a restart.
 - `GET /health` (same auth) reports the Slack connection state.
+- **Formatting:** agent text is escaped (no `@channel`, no disguised links),
+  then common Markdown is turned into Slack mrkdwn (`**bold**` → `*bold*`,
+  headings, bullets; links shown as `text (url)`).
 
 ## Hooks (Claude Code, Codex)
 
@@ -38,7 +42,8 @@ removed in 0.3.0; it's in git history at `9062a63`).
 sends a few fields to `POST /hook` with the platform's token, and always
 exits 0, so a stopped broker never blocks an agent. Prompts, transcripts and
 full tool input stay local; only a one-line tool summary (command, file or
-question) and a short message snippet are sent.
+question, else up to three short arguments, never ones named like secrets or
+bodies) and a short message snippet are sent.
 
 ```text
 node C:/Users/nickm/source/repos/agent-bus/src/cli/hook.ts claude   # or codex
@@ -52,8 +57,31 @@ node C:/Users/nickm/source/repos/agent-bus/src/cli/hook.ts claude   # or codex
 | `Stop`              | "Turn finished; waiting for you" with a snippet in the session's thread; at most one per 10 minutes. Skipped when `stop_hook_active`. |
 
 A session's thread root is posted on its first thread post, so short
-sessions that never post stay out of Slack. Wiring into each app's user
-config comes with the clankers `install.ps1` change.
+sessions that never post stay out of Slack. clankers `scripts/install.ps1
+-AgentBus` wires the MCP server and these hooks into Claude Code and Codex;
+Copilot is added by hand (Customize › MCP).
+
+## Start at login
+
+```powershell
+.\scripts\install-task.ps1 -WhatIf     # preview
+.\scripts\install-task.ps1 -StartNow   # register and start now
+.\scripts\install-task.ps1 -Uninstall
+```
+
+Registers a scheduled task, **agent-bus broker**, for your user only (no
+admin rights). At logon a hidden Windows PowerShell runs
+`scripts/run-broker.ps1`, which starts the broker with `--log-to-file` and
+restarts it after a crash (5 s, doubling to 5 min). It stops retrying on exit
+code 78: an invalid environment or the port already in use, which a restart
+can't fix. Stop any broker you started by hand before `-StartNow`.
+
+Logs: `%LOCALAPPDATA%\agent-bus\logs\broker-YYYY-MM-DD.log` (JSON lines, local
+date, kept 14 days) and `launcher.log`.
+
+After setting or changing any environment variable, restart the broker task
+and the apps: each reads its environment only when it starts. A Claude MCP
+`401` usually means Claude started before the tokens were set.
 
 ## Setup
 
@@ -81,10 +109,11 @@ Environment (user environment variables, never files):
 The hook CLI reads `AGENT_BUS_TOKEN_<PLATFORM>` and `AGENT_BUS_PORT` too.
 `AGENT_BUS_TOKEN` (Phase 0) is no longer used and can be deleted.
 
-Generate the platform tokens without displaying them:
+Generate the platform tokens without displaying them (works in Windows
+PowerShell 5.1 and PowerShell 7):
 
 ```powershell
-foreach ($p in 'CLAUDE','CODEX','COPILOT') { [Environment]::SetEnvironmentVariable("AGENT_BUS_TOKEN_$p", [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)), 'User') }
+foreach ($p in 'CLAUDE','CODEX','COPILOT') { $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Environment]::SetEnvironmentVariable("AGENT_BUS_TOKEN_$p", [Convert]::ToBase64String($b), 'User') }
 ```
 
 The bot must be in `#agents` (the fallback) and in each `#proj-<name>`
@@ -94,11 +123,28 @@ channel it should post to.
 
 | Command          | What it does                            |
 | ---------------- | --------------------------------------- |
-| `npm run broker` | Start the broker                        |
+| `npm run broker` | Start the broker in this terminal       |
 | `npm run check`  | Typecheck, lint, format check and tests |
 | `npm test`       | Vitest                                  |
 
 ## Changelog
+
+### 0.4.0 (2026-11-17)
+
+- Start at login: `scripts/install-task.ps1` (current-user scheduled task)
+  and `scripts/run-broker.ps1` (launcher that restarts after a crash).
+- `--log-to-file`: daily JSON-lines logs in `<data dir>\logs`, kept 14 days;
+  Bolt and Socket Mode warnings go there too. Uncaught errors exit 1 (the
+  launcher restarts); an invalid environment or a busy port exits 78 (it
+  doesn't), with a clear "port in use" message.
+- Agent text is converted from Markdown to Slack mrkdwn after escaping.
+- Approval DMs summarise MCP and other tools by their first short
+  arguments; argument names that look like secrets or bodies are skipped.
+- New sessions go straight to `#agents` when the bot isn't in
+  `#proj-<project>`, so `register` reports the channel actually used.
+- "Slack connecting" logs at info, not warn.
+- README token command works in Windows PowerShell 5.1.
+- Live test on Claude Code recorded in `docs/phase-1.md`.
 
 ### 0.3.0 (2026-11-17)
 

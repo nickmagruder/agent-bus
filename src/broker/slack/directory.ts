@@ -44,7 +44,18 @@ export class ChannelDirectory {
     return id;
   }
 
-  private async refresh(): Promise<void> {
+  /**
+   * Whether the bot is in a channel, from the cached list: `undefined` until
+   * the list has been loaded once. Lets new sessions pick `#agents` up front
+   * when their project has no channel.
+   */
+  isMember(name: string): boolean | undefined {
+    if (this.loadedAt === Number.NEGATIVE_INFINITY) return undefined;
+    return this.channels.has(name);
+  }
+
+  /** Loads the channel list (the broker calls this at startup). */
+  async refresh(): Promise<void> {
     this.channels = await this.api.memberChannels();
     this.loadedAt = this.now();
   }

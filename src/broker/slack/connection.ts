@@ -24,17 +24,17 @@ export function createSlackConnection(options: {
   store: Store;
   log: Logger;
 }): SlackConnection {
-  const receiver = new SocketModeReceiver({
-    appToken: options.appToken,
-    logLevel: LogLevel.WARN,
-  });
-  const app = new App({ token: options.botToken, receiver, logLevel: LogLevel.WARN });
+  const logger = boltLogger(options.log);
+  const receiver = new SocketModeReceiver({ appToken: options.appToken, logger });
+  const app = new App({ token: options.botToken, receiver, logger });
   let state: ConnectionState = 'disconnected';
 
   const track = (next: ConnectionState) => () => {
     if (next === state) return;
     state = next;
-    options.log(next === 'connected' ? 'info' : 'warn', `Slack ${next}`);
+    // Connecting (startup) and connected are normal; reconnects and drops are worth a look.
+    const level = next === 'reconnecting' || next === 'disconnected' ? 'warn' : 'info';
+    options.log(level, `Slack ${next}`);
     options.store.appendEvent({ kind: 'slack.connection', data: { state: next } });
   };
   receiver.client.on('connecting', track('connecting'));
@@ -54,4 +54,36 @@ export function createSlackConnection(options: {
       await app.stop();
     },
   };
+}
+
+/**
+ * Routes Bolt's and the Socket Mode client's own messages into the broker
+ * log (and so the log file), at warn and above.
+ */
+export function boltLogger(log: Logger) {
+  let name = 'slack';
+  const send =
+    (level: 'warn' | 'error') =>
+    (...parts: unknown[]) =>
+      log(level, `${name}: ${parts.map(formatPart).join(' ')}`);
+  return {
+    debug: ignore,
+    info: ignore,
+    warn: send('warn'),
+    error: send('error'),
+    setLevel: () => undefined,
+    getLevel: () => LogLevel.WARN,
+    setName: (next: string) => {
+      name = next;
+    },
+  };
+}
+
+function ignore(...parts: unknown[]): void {
+  void parts;
+}
+
+function formatPart(part: unknown): string {
+  if (part instanceof Error) return part.message;
+  return typeof part === 'string' ? part : JSON.stringify(part);
 }

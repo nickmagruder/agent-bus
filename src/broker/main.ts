@@ -3,15 +3,31 @@
  * for Claude Code, Codex and Copilot sessions. Run with `npm run broker`.
  */
 import path from 'node:path';
-import { loadBrokerConfig, type BrokerConfig } from '../shared/config.ts';
+import { defaultDataDir, loadBrokerConfig, type BrokerConfig } from '../shared/config.ts';
 import { startHttpServer, type RunningHttpServer } from './http.ts';
-import { createLogger, errorMessage, type Logger } from './log.ts';
+import { createFileWriter, createLogger, errorMessage, type Logger } from './log.ts';
 import { BusService } from './service.ts';
 import { createWebSlackApi, type SlackApi } from './slack/api.ts';
 import { createSlackConnection, type SlackConnection } from './slack/connection.ts';
 import { ChannelDirectory } from './slack/directory.ts';
 import { PostQueue } from './slack/queue.ts';
 import { Store } from './store.ts';
+
+/**
+ * Exit code for problems a restart can't fix (invalid environment, port
+ * already taken); `scripts/run-broker.ps1` stops retrying on it. Other
+ * failures exit 1 and are retried.
+ */
+export const EXIT_CONFIG = 78;
+
+export class PortInUseError extends Error {
+  constructor(port: number) {
+    super(
+      `Port ${port} is in use: is the broker already running (login task or another terminal)?`,
+    );
+    this.name = 'PortInUseError';
+  }
+}
 
 export interface Broker {
   port: number;
@@ -36,7 +52,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
   const slackApi = deps.slackApi ?? createWebSlackApi(config.slack.botToken);
   const directory = new ChannelDirectory(slackApi, config.slack.userId);
   const queue = new PostQueue(store, slackApi, directory, { log, ...deps.queueOptions });
-  const service = new BusService(store, queue);
+  const service = new BusService(store, queue, undefined, directory);
   const connection =
     deps.connection === undefined
       ? createSlackConnection({
@@ -60,8 +76,15 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
   } catch (error) {
     await http?.close();
     store.close();
+    if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE')
+      throw new PortInUseError(config.port);
     throw error;
   }
+
+  // Lets new sessions pick #agents up front when their project has no channel.
+  directory.refresh().catch((error: unknown) => {
+    log('warn', 'could not load the Slack channel list', { error: errorMessage(error) });
+  });
 
   store.appendEvent({ kind: 'broker.started', data: { port: http.port } });
   // Posts queued before a restart go out now.
@@ -85,9 +108,31 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
 }
 
 if (import.meta.main) {
-  const log = createLogger();
+  // --log-to-file: also write daily files under <data dir>/logs (used by the login task).
+  const toFile = process.argv.includes('--log-to-file');
+  // Set up before validating the environment, so a bad config is logged too.
+  const dataDir = process.env.AGENT_BUS_DATA_DIR ?? defaultDataDir(process.env.LOCALAPPDATA);
+  const log = toFile
+    ? createLogger((line) => console.log(line), createFileWriter(path.join(dataDir, 'logs')))
+    : createLogger();
+  let config: BrokerConfig;
   try {
-    const broker = await startBroker(loadBrokerConfig(), { log });
+    config = loadBrokerConfig();
+  } catch (error) {
+    log('error', 'broker failed to start', { error: errorMessage(error) });
+    process.exit(EXIT_CONFIG);
+  }
+  try {
+    // Crash loudly: the login launcher restarts the broker after a failed exit.
+    process.on('uncaughtException', (error) => {
+      log('error', 'uncaught exception', { error: errorMessage(error) });
+      process.exit(1);
+    });
+    process.on('unhandledRejection', (reason) => {
+      log('error', 'unhandled rejection', { error: errorMessage(reason) });
+      process.exit(1);
+    });
+    const broker = await startBroker(config, { log });
     const shutdown = (signal: string) => {
       log('info', 'shutting down', { signal });
       broker.stop().then(
@@ -102,6 +147,7 @@ if (import.meta.main) {
     process.once('SIGTERM', () => shutdown('SIGTERM'));
   } catch (error) {
     log('error', 'broker failed to start', { error: errorMessage(error) });
-    process.exit(1);
+    // Another broker already has the port: restarting won't help.
+    process.exit(error instanceof PortInUseError ? EXIT_CONFIG : 1);
   }
 }

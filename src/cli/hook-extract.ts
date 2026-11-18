@@ -40,7 +40,17 @@ export function extractHookRequest(
   ) as HookRequest;
 }
 
-/** The one line of a tool call I'd need to approve it: the command, file or question. */
+/** Arguments never shown in a summary: likely secrets, or bulky bodies. */
+const HIDDEN_ARGUMENT =
+  /token|secret|password|passwd|api[_-]?key|auth|cookie|credential|content|body/i;
+const ARGUMENT_CHARS = 80;
+const MAX_ARGUMENTS = 3;
+
+/**
+ * The one line of a tool call I'd need to approve it: the command, file or
+ * question; otherwise (MCP and other tools) up to three short scalar
+ * arguments as `name: value`.
+ */
 export function summarizeToolInput(input: unknown): string | undefined {
   if (!isRecord(input)) return undefined;
   for (const key of ['command', 'file_path', 'path', 'url', 'pattern']) {
@@ -52,7 +62,21 @@ export function summarizeToolInput(input: unknown): string | undefined {
     const question = str(questions[0].question);
     if (question) return question;
   }
-  return str(input.description);
+  return str(input.description) ?? summarizeArguments(input);
+}
+
+function summarizeArguments(input: Payload): string | undefined {
+  const parts: string[] = [];
+  for (const [name, value] of Object.entries(input)) {
+    if (parts.length >= MAX_ARGUMENTS) break;
+    if (HIDDEN_ARGUMENT.test(name)) continue;
+    if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+      continue;
+    }
+    const text = String(value).replace(/\s+/g, ' ').trim();
+    if (text) parts.push(`${name}: ${clip(text, ARGUMENT_CHARS)}`);
+  }
+  return parts.length > 0 ? parts.join('; ') : undefined;
 }
 
 /**
