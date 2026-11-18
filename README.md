@@ -1,6 +1,6 @@
 # agent-bus
 
-**Version:** 0.6.3 · [MIT license](LICENSE)
+**Version:** 0.6.4 · [MIT license](LICENSE)
 
 [![ci](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml)
 [![codeql](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml)
@@ -355,6 +355,11 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.6.4 (2026-11-18)
+
+- `docs/going-public.md`: step 7 (repo standards for CrashMap and esri-exporter) recorded with its PRs, decisions and follow-ups; step 4's Copilot check ticked
+- The vendored `code-review` skill now says it is a vendored copy of the clankers `pr-review` skill, not the canonical one
 
 ### 0.6.3 (2026-11-18)
 

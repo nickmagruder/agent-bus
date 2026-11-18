@@ -1,6 +1,6 @@
 # Going public: repo standards before Phase 3
 
-Status: **in progress** (2026-11-18): steps 1–6 done (step 6 merged as [clankers#11](https://github.com/nickmagruder/clankers/pull/11)); step 7 (CrashMap, esri-exporter) next.
+Status: **in progress** (2026-11-18): steps 1–6 done (step 6 merged as [clankers#11](https://github.com/nickmagruder/clankers/pull/11)); step 7 in review as [crashmap#212](https://github.com/nickmagruder/crashmap/pull/212) and [esri-exporter#50](https://github.com/nickmagruder/esri-exporter/pull/50).
 
 Five goals:
 
@@ -134,9 +134,10 @@ Agents open PRs; Nick merges app-repo PRs. Steps run in order unless noted.
       `CONTRIBUTING.md`, `AGENTS.md` and `copilot-instructions.md`
 - [x] `CONTRIBUTING.md` (also step 1): the coding standards the skill looks
       for, since clankers `standards/` is private
-- [ ] Verify on the step 3 PR: Copilot review shows up without asking, and
+- [x] Verify on the step 3 PR: Copilot review shows up without asking, and
       its comments credit the `code-review` skill (use is likely, not
-      guaranteed, per GitHub's docs)
+      guaranteed, per GitHub's docs). Seen on #35: separate Standards and
+      Spec sections, Spec checked against the linked issue
 - [x] Agents triage Copilot comments before pinging Nick (decision 8)
 
 ### 5. Issues in agent-bus (with step 3)
@@ -170,8 +171,12 @@ Agents open PRs; Nick merges app-repo PRs. Steps run in order unless noted.
       → Done; Done closes the issue; auto-add for agent-bus open issues and
       PRs. The free plan allows one auto-add workflow, so agents add
       clankers items with `gh project item-add`
-- [ ] CrashMap and esri-exporter boards already exist (projects 2 and 3);
-      align their Status and fields in step 7
+- [x] CrashMap and esri-exporter boards already exist (projects 2 and 3).
+      Decision (2026-11-18): they keep their Status options (Backlog, Ready,
+      In progress, In review, Done) and their Size, Estimate and Iteration
+      fields, since replacing options breaks the board workflows; their
+      workflows (item added, PR linked, merged, closed, auto-close, auto-add)
+      are all on
 
 ### 6. clankers standards ([clankers#11](https://github.com/nickmagruder/clankers/pull/11))
 
@@ -206,18 +211,43 @@ Agents open PRs; Nick merges app-repo PRs. Steps run in order unless noted.
 
 ### 7. Roll out to CrashMap and esri-exporter (one PR each, in their repos)
 
-- [ ] Ruleset (PR required, required checks, Copilot auto-review), squash-only
-      merges, branch auto-delete, Dependabot alerts
-- [ ] Labels, milestones, issue forms, PR template
-- [ ] A project board per app (CrashMap, esri-exporter), same fields minus
-      Agent if unused (decision 14)
-- [ ] `.github/copilot-instructions.md` from each repo's AGENTS.md
-- [ ] `.github/skills/code-review/` synced from clankers `pr-review`
-- [ ] Open issues for each repo's pending `PLAN.md` items; `PLAN.md` links to
-      issues (no backfill of shipped work unless asked)
-- [ ] Bring esri-exporter's hooks and CI up to the checklist (to be surveyed;
-      it has a Python part)
-- [ ] CrashMap AGENTS.md git rule mentions issues and Copilot triage
+CrashMap: issue [crashmap#197](https://github.com/nickmagruder/crashmap/issues/197),
+PR [crashmap#212](https://github.com/nickmagruder/crashmap/pull/212).
+esri-exporter: issue [esri-exporter#49](https://github.com/nickmagruder/esri-exporter/issues/49),
+PR [esri-exporter#50](https://github.com/nickmagruder/esri-exporter/pull/50).
+Decisions (2026-11-18): CrashMap's git rule now matches agent-bus (agents
+open the PR as the next step; only Nick merges, which deploys);
+esri-exporter keeps its GitHub Desktop override; its PLAN.md items become
+grouped issues; esri-exporter gets the full checklist but no formatter yet.
+
+- [x] Ruleset (PR required, required `check`, Copilot auto-review),
+      squash-only merges, branch auto-delete, "Update branch", Dependabot
+      alerts and security updates, private vulnerability reporting. CrashMap's
+      classic branch protection was replaced by the ruleset
+- [x] Labels `chore`, `security`, `follow-up`; milestones kept as they were;
+      issue forms, PR template, `CONTRIBUTING.md`, `SECURITY.md`
+- [x] Boards: fields kept (see 5b); new issues and PRs added
+- [x] `.github/copilot-instructions.md` and path-scoped security instructions
+      from each repo's AGENTS.md
+- [x] `.github/skills/code-review/` synced from clankers `pr-review`, header
+      reworded as a vendored copy
+- [x] CrashMap `PLAN.md` open items → 14 grouped issues (crashmap#198–#211),
+      linked from `PLAN.md`; esri-exporter's deferred upgrades →
+      esri-exporter#53
+- [x] esri-exporter hooks and CI: root `package.json` (husky, lint-staged,
+      commit-msg, gitleaks), `check` job (frontend lint/typecheck/build,
+      ruff, offline pytest), CodeQL (JS/TS, Python, Actions), Scorecard,
+      Dependabot. Follow-ups: formatter decision (esri-exporter#51), input
+      validation (esri-exporter#52)
+- [x] CrashMap: actions pinned by SHA, CodeQL, Scorecard, Dependabot,
+      gitleaks pre-commit and commit-msg hook added to its husky setup
+- [x] CrashMap AGENTS.md git rule mentions issues and Copilot triage
+- [ ] Copilot's first review on both PRs: blocked on 2026-11-18, when
+      GitHub reported the Copilot review quota used up. Re-request once it
+      resets
+- [ ] Nick merges both PRs; CrashMap's merge deploys (check the `main` run's
+      `check`, `deploy` and `lighthouse` jobs with the pinned actions)
+- [ ] Nick: CrashMap has no `LICENSE`; choose one
 
 ### 8. Close out
 
