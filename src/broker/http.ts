@@ -4,6 +4,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { checkRequest } from '../shared/guard.ts';
 import { hookRequestSchema, type HookResponse } from '../shared/hook-protocol.ts';
 import type { Platform } from '../shared/platform.ts';
+import type { Inbox } from './inbox.ts';
 import { errorMessage, type Logger } from './log.ts';
 import { createBusMcpServer } from './mcp.ts';
 import type { BusService } from './service.ts';
@@ -14,6 +15,7 @@ export interface HttpOptions {
   port: number;
   tokens: Record<Platform, string>;
   service: BusService;
+  inbox: Inbox;
   log: Logger;
   /** Extra fields for GET /health (e.g. the Slack connection state). */
   health?: () => Record<string, unknown>;
@@ -100,7 +102,7 @@ async function handle(
     return json(res, 200, result);
   }
 
-  const server = createBusMcpServer(options.service, verdict.platform);
+  const server = createBusMcpServer(options.service, options.inbox, verdict.platform);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on('close', () => {
     void transport.close();

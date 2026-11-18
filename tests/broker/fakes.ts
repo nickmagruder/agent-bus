@@ -36,4 +36,10 @@ export class FakeSlack implements SlackApi {
     this.memberChannelCalls++;
     return new Map(this.channels);
   }
+
+  readonly reactions: { channel: string; ts: string; name: string }[] = [];
+
+  async addReaction(channel: string, ts: string, name: string) {
+    this.reactions.push({ channel, ts, name });
+  }
 }

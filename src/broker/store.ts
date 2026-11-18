@@ -65,6 +65,26 @@ export const MIGRATIONS: readonly string[] = [
   CREATE UNIQUE INDEX sessions_by_app_session ON sessions (platform, app_session_id)
     WHERE app_session_id IS NOT NULL;
   `,
+  // v3: my Slack replies, routed to a session's inbox until the agent reads them.
+  // One row per Slack message (channel + ts), so Slack's event retries are no-ops.
+  `
+  CREATE TABLE inbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions (id),
+    sender TEXT NOT NULL CHECK (sender IN ('human')),
+    slack_user TEXT NOT NULL,
+    body TEXT NOT NULL,
+    slack_channel_id TEXT NOT NULL,
+    slack_ts TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    delivered_at TEXT,
+    delivered_via TEXT,
+    UNIQUE (slack_channel_id, slack_ts)
+  );
+  CREATE INDEX inbox_undelivered ON inbox (session_id, delivered_at, id);
+  CREATE INDEX sessions_by_thread ON sessions (slack_channel_id, thread_ts);
+  CREATE INDEX outbox_by_slack_ts ON outbox (slack_channel_id, slack_ts);
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -122,6 +142,30 @@ export interface NewPost {
   icon?: string | null;
   /** Repeating a key returns the existing post instead of queueing a duplicate. */
   idemKey?: string | null;
+}
+
+/** How an inbox message reached the agent. */
+export type DeliveryVia = 'check_inbox';
+
+export interface InboxRecord {
+  id: number;
+  sessionId: string;
+  sender: 'human';
+  slackUser: string;
+  body: string;
+  slackChannelId: string;
+  slackTs: string;
+  createdAt: string;
+  deliveredAt: string | null;
+  deliveredVia: DeliveryVia | null;
+}
+
+export interface NewInboxMessage {
+  sessionId: string;
+  slackUser: string;
+  body: string;
+  slackChannelId: string;
+  slackTs: string;
 }
 
 type Row = Record<string, unknown>;
@@ -241,6 +285,74 @@ export class Store {
     this.db
       .prepare('UPDATE sessions SET slack_channel_id = ?, thread_ts = ? WHERE id = ?')
       .run(slackChannelId, threadTs, id);
+  }
+
+  /** The session whose Slack thread starts at `threadTs` in `channelId`. */
+  findByThread(channelId: string, threadTs: string): SessionRecord | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM sessions WHERE slack_channel_id = ? AND thread_ts = ?')
+      .get(channelId, threadTs) as Row | undefined;
+    return row && toSession(row);
+  }
+
+  /** The session a sent post belongs to (e.g. an urgent DM), by its Slack channel and ts. */
+  findByPost(channelId: string, ts: string): SessionRecord | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT sessions.* FROM outbox JOIN sessions ON sessions.id = outbox.session_id
+         WHERE outbox.slack_channel_id = ? AND outbox.slack_ts = ?`,
+      )
+      .get(channelId, ts) as Row | undefined;
+    return row && toSession(row);
+  }
+
+  // Inbox
+
+  /** Stores one of my messages for a session; `inserted` is false for a repeat of the same Slack message. */
+  addToInbox(message: NewInboxMessage): { record: InboxRecord; inserted: boolean } {
+    const result = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO inbox
+           (session_id, sender, slack_user, body, slack_channel_id, slack_ts, created_at)
+         VALUES (?, 'human', ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        message.sessionId,
+        message.slackUser,
+        message.body,
+        message.slackChannelId,
+        message.slackTs,
+        this.timestamp(),
+      );
+    const row = this.db
+      .prepare('SELECT * FROM inbox WHERE slack_channel_id = ? AND slack_ts = ?')
+      .get(message.slackChannelId, message.slackTs) as Row;
+    return { record: toInbox(row), inserted: Number(result.changes) === 1 };
+  }
+
+  /** Undelivered messages for a session, oldest first. */
+  undelivered(sessionId: string, limit: number): InboxRecord[] {
+    const rows = this.db
+      .prepare(
+        'SELECT * FROM inbox WHERE session_id = ? AND delivered_at IS NULL ORDER BY id LIMIT ?',
+      )
+      .all(sessionId, limit) as Row[];
+    return rows.map(toInbox);
+  }
+
+  countUndelivered(sessionId: string): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS n FROM inbox WHERE session_id = ? AND delivered_at IS NULL')
+      .get(sessionId) as Row;
+    return Number(row.n);
+  }
+
+  markDelivered(ids: readonly number[], via: DeliveryVia): void {
+    const statement = this.db.prepare(
+      'UPDATE inbox SET delivered_at = ?, delivered_via = ? WHERE id = ? AND delivered_at IS NULL',
+    );
+    const at = this.timestamp();
+    for (const id of ids) statement.run(at, via, id);
   }
 
   // Audit log
@@ -384,6 +496,21 @@ function toOutbox(row: Row): OutboxRecord {
     lastError: nullableString(row.last_error),
     slackChannelId: nullableString(row.slack_channel_id),
     slackTs: nullableString(row.slack_ts),
+  };
+}
+
+function toInbox(row: Row): InboxRecord {
+  return {
+    id: Number(row.id),
+    sessionId: String(row.session_id),
+    sender: 'human',
+    slackUser: String(row.slack_user),
+    body: String(row.body),
+    slackChannelId: String(row.slack_channel_id),
+    slackTs: String(row.slack_ts),
+    createdAt: String(row.created_at),
+    deliveredAt: nullableString(row.delivered_at),
+    deliveredVia: nullableString(row.delivered_via) as DeliveryVia | null,
   };
 }
 

@@ -23,6 +23,8 @@ export interface SlackApi {
   openDm(userId: string): Promise<string>;
   /** Channels the bot is a member of, by name (without `#`). */
   memberChannels(): Promise<Map<string, string>>;
+  /** Adds an emoji reaction to a message; an existing reaction is not an error. */
+  addReaction(channel: string, ts: string, name: string): Promise<void>;
 }
 
 export type SlackFailure = 'rate_limited' | 'permanent' | 'transient';
@@ -133,6 +135,15 @@ export function createWebSlackApi(botToken: string): SlackApi {
         throw classifySlackError(error);
       }
       return channels;
+    },
+
+    async addReaction(channel, ts, name) {
+      try {
+        await client.reactions.add({ channel, timestamp: ts, name });
+      } catch (error) {
+        if (error instanceof WebAPIPlatformError && error.data.error === 'already_reacted') return;
+        throw classifySlackError(error);
+      }
     },
   };
 }

@@ -1,0 +1,192 @@
+# Phase 2: I answer from Slack
+
+Status: **in progress** (2026-11-18): PR 1 (inbound Slack and inbox) built
+on `feat/phase-2-inbound`, not yet tried against live Slack.
+
+Goal: an agent on any of the three apps can ask me a question and get my
+answer from Slack (buttons or free text), and anything I write in a
+session's thread reaches that session. Design: clankers
+`docs/slack-integration-plan.md`; Phase 1: [phase-1.md](phase-1.md).
+
+## What exists to build on
+
+- `BusService` (rules, routing, caps, audit) and `Store` (sessions with
+  `slack_channel_id` + `thread_ts`, append-only `events`, persisted `outbox`).
+- `SlackConnection.app` (Bolt) is exposed for message and action handlers
+  (PR 1 registers the `message` handler).
+- `startHeartbeat()` sends `notifications/progress` (or a log message) every
+  60 s. Confirmed to reset Claude Code's 300 s idle timer; **untested on
+  Codex (300 s) and Copilot (180 s)**.
+- `/mcp` is stateless streamable HTTP: one server per request, so a held
+  tool call is just an open SSE response. A broker restart drops it.
+- Hooks: `SessionStart`, `PermissionRequest`, Claude `Notification`, `Stop`.
+  Rule today: hooks never block or decide. Phase 2 changes that **for `Stop`
+  only** (see below); `AGENTS.md` and its tests change with it.
+
+## Proposed design
+
+### Data (migrations 3 and 4)
+
+| Table                    | Fields                                                                                                                                                                                                                                         |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inbox` (v3, PR 1)       | id, session_id, sender (`human`), slack_user, body, slack channel + ts (unique: idempotent on Slack retries), created, delivered_at, delivered_via (`check_inbox`; later `wait_for_reply`/`ask_human`/`stop_hook`)                             |
+| `questions` (v4, PR 2)   | id (`q-xxxxxx`), session_id, text, options (JSON, ≤ 5), default_answer, state (`open`/`answered`/`expired`/`canceled`), answer, answered_by, answer_source (`button`/`reply`), slack channel + ts, created, remind_at, expires_at, answered_at |
+| `inbox.question_id` (v4) | nullable; set when a reply answers a question                                                                                                                                                                                                  |
+
+Questions got their own migration so PR 2 can shape the table without
+editing migration 3.
+
+Every state change also goes to `events`.
+
+### MCP tools
+
+| Tool                                                                 | Behaviour                                                                                                                                                                                                                                                             |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ask_human(session, question, options?, default?, timeout_minutes?)` | Posts the question (with buttons when `options` are given; a free-text reply always works), then holds with heartbeats until answered or the **hold limit**. Returns `{state: "answered", answer}` or `{state: "pending", question_id}`. Counts as `urgent` for caps. |
+| `wait_for_reply(session, question_id?, timeout_seconds?)`            | Holds (same limit) for the answer to `question_id`, or for any new inbox message when omitted.                                                                                                                                                                        |
+| `check_inbox(session)`                                               | Returns undelivered inbox messages and marks them delivered. Never blocks.                                                                                                                                                                                            |
+
+Replies are returned as `From Nick (verified Slack user)`, with the time and
+which question they answer. Only text I typed in Slack is ever labelled as
+mine.
+
+### Slack inbound
+
+- Bolt handlers for `message` events (session threads and the DM) and
+  `block_actions` (buttons). Ack immediately, then work.
+- **Sender gating:** only `SLACK_USER_ID`. Anything else (other users, bots,
+  the bot itself, edits, `subtype` messages) is dropped and audited as
+  `inbound.dropped`.
+- **Routing:**
+  - a reply in a session's thread → that session's inbox; if the session has
+    exactly one open question, it also answers it;
+  - a reply in the thread of a question message → answers that question;
+  - a reply under a post a session sent outside its thread (an urgent DM)
+    → that session's inbox;
+  - a top-level message or an unknown thread → not routed; in my DM the bot
+    answers with a hint ("reply in a thread"), at most once an hour.
+    Top-level channel messages get no hint, so I can still talk in
+    `#agents`.
+- **Buttons:** `action_id` carries the question ID; first answer wins
+  (compare-and-swap on `state = 'open'`), then `chat.update` replaces the
+  buttons with "Answered: X by Nick at 14:02". Late clicks get an ephemeral
+  "already answered".
+- Reactions on my reply show where it is: 📥 when it's in a session's
+  inbox, ✅ when the agent has read it (needs `reactions:write`, already in
+  the plan's scopes). A failed reaction is only logged.
+
+### Reminder and timeout
+
+- A scheduler tick (every 30 s) finds questions past `remind_at` (one
+  reminder DM) or past `expires_at`.
+- On expiry: state `expired`, the question message is edited to "Expired;
+  agent took the default: …", and the agent gets `{state: "expired",
+default}` from its next `wait_for_reply` / `check_inbox` / Stop hook. Never
+  "approve" by default: the default is what the agent said it would do.
+- Survives restarts: times are stored, the tick runs on start.
+
+### Stop-hook inbox check (Claude Code, Codex)
+
+- `Stop` asks the broker for undelivered inbox messages. If there are any,
+  it prints `{"decision":"block","reason":"…"}` with the messages (labelled
+  as mine) and marks them delivered, so the agent keeps going with my reply.
+- No messages → today's behaviour ("turn finished" post, throttled).
+- Loop guard: at most N blocks per session per hour; when
+  `stop_hook_active` is set, block only if _new_ messages arrived since the
+  last block.
+- Broker down or slow (3 s timeout) → no output, the agent stops normally.
+
+### Daily digest
+
+- Once a day in `#agents`: `fyi` items since the last digest, grouped by
+  session; open and expired questions; sessions seen that day.
+- Sent on the first tick after the digest time; if the broker was off, it
+  sends one catch-up digest at start (never more than one per day).
+- Nothing to report → no post.
+
+### Sign-in race
+
+Most of the ~40 s is Node starting under sign-in load, so making the broker
+start faster is uncertain work. The cost of the race is (a) a manual MCP
+reconnect and (b) the first session missing its bus ID. Proposal: fix (b)
+only, with a `UserPromptSubmit` hook that injects the bus ID when the
+session hasn't received one yet (both apps support context from that event),
+and leave (a) to the app's reconnect (decided below).
+
+## Decisions
+
+| Topic                                         | Decision                                                                                                                                                              |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hold limit for `ask_human` / `wait_for_reply` | **150 s on every app**, then `pending`; the agent calls `wait_for_reply` again. Raise per platform once Codex and Copilot are shown to honour progress notifications. |
+| Where questions are posted                    | **DM** with the buttons (sound, phone), plus a one-line pointer in the session thread. A reply in the DM message's thread or in the session thread answers it.        |
+| Reminder and expiry defaults                  | **Remind at 15 min, expire at 60 min**; an agent may pass its own timeout (capped).                                                                                   |
+| Digest time                                   | **08:00 local** in `#agents`, covering the previous day; one catch-up at broker start if missed.                                                                      |
+| Sign-in race                                  | **`UserPromptSubmit` hook** injects the bus ID on the first prompt when `SessionStart` missed it; the MCP reconnect stays manual.                                     |
+| Hooks that block                              | **`Stop` may block** (`decision: block`) to deliver my Slack replies, with tests for every path. `PermissionRequest` still never decides (Phase 4).                   |
+| Delivery                                      | Feature branch with a few PRs (below), plus a clankers PR. Commit and open PRs only when asked.                                                                       |
+
+## Work
+
+### PR 1: inbound Slack and inbox
+
+- [ ] Check the Slack app (Nick): Interactivity on; event subscriptions
+      `message.channels`, `message.im` (and `message.groups` if a project
+      channel is private); `reactions:write` scope
+- [x] Migration 3: `inbox` (questions move to migration 4 in PR 2)
+- [x] Bolt `message` handler (`src/broker/slack/inbound.ts`) and routing
+      (`src/broker/inbox.ts`): sender gating, thread → session and DM-post →
+      session routing, idempotent on Slack retries, 📥/✅ reactions, DM hint,
+      audit
+- [x] `check_inbox` tool (owning platform only; pages of 20)
+- [x] Tests: gating (other user, bot, bot with my user ID, subtypes, edits,
+      empty), routing (thread, DM post, other channel, top-level, thread
+      root), retries, long messages, files, hint throttle, ownership of
+      `check_inbox` end to end
+- [ ] Live: a reply in a session thread reaches `check_inbox` on one app
+
+### PR 2: questions
+
+- [ ] `ask_human`, `wait_for_reply` with heartbeats and the hold limit;
+      `pending` return
+- [ ] Migration 4: `questions`, `inbox.question_id`; a reply in a question's
+      thread (or the session thread with one open question) answers it
+- [ ] Block Kit question message with buttons; `block_actions` handler
+      (gating, compare-and-swap, `chat.update`)
+- [ ] Scheduler: reminder, expiry, message edits
+- [ ] Tests: answered by button / reply / expired; double click; late click;
+      restart mid-wait; caps; held call cancelled when the client disconnects
+
+### PR 3: hooks
+
+- [ ] `Stop` inbox check → `decision: block` with reason (Claude and Codex
+      output formats); loop guard
+- [ ] `UserPromptSubmit` bus-ID injection, once per session, only when
+      `SessionStart` didn't deliver it
+- [ ] Update `AGENTS.md` working rule ("hooks only notify") and
+      `hook-protocol.ts`; tests for every path (messages / none / broker
+      down / loop guard / `stop_hook_active`)
+
+### PR 4: daily digest
+
+- [ ] Digest builder + scheduler; catch-up at start; tests with a fake clock
+
+### clankers PR
+
+- [ ] `standards/agent-comms.md` v1.1: when to use `ask_human` vs
+      `notify_human urgent`; always give a default; call `check_inbox` at
+      natural checkpoints (and always on Copilot); what `pending` /
+      `expired` mean; my replies vs other text
+- [ ] `install.ps1 -AgentBus`: new hook events (if any)
+- [ ] Plan: Phase 2 checklist and findings
+
+### Verify (on each app, answering from my phone)
+
+- [ ] Claude Code: `ask_human` answered by button, by reply, and left to
+      expire; thread reply picked up by the Stop hook
+- [ ] Codex: same; **confirm progress notifications keep a > 300 s call
+      alive**
+- [ ] Copilot: `ask_human` + `check_inbox`; **confirm progress
+      notifications keep a > 180 s call alive**
+- [ ] Someone else's reply / a bot message is ignored (second Slack account or
+      a workflow post)
+- [ ] Digest arrives once

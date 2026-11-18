@@ -24,6 +24,27 @@ export function toSlackMrkdwn(text: string): string {
     .join('');
 }
 
+/**
+ * Turns Slack message text (what I type) into plain text for an agent:
+ * `<url|label>` → `label (url)`, `<url>` → `url`, `<#C1|name>` → `#name`,
+ * `<@U1>` → `@U1`, `<!here>` → `@here`, then unescapes `&lt;`, `&gt;`, `&amp;`.
+ */
+export function fromSlackText(text: string): string {
+  return text
+    .replace(/<([^<>]+)>/g, (_, inner: string) => {
+      const [target = '', label] = inner.split('|', 2);
+      if (target.startsWith('#')) return `#${label ?? target.slice(1)}`;
+      if (target.startsWith('@') || target.startsWith('!')) {
+        const name = label ?? target.slice(1).split('^')[0] ?? '';
+        return name.startsWith('@') ? name : `@${name}`;
+      }
+      return label && label !== target ? `${label} (${target})` : target;
+    })
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&amp;', '&');
+}
+
 function convertProse(text: string): string {
   return text
     .replace(/^#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/gm, '*$1*')

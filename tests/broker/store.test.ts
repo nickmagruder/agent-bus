@@ -65,6 +65,17 @@ describe('Store migrations', () => {
     expect(store.findByAppSession('claude', 'app-2')).toBeUndefined();
   });
 
+  it('upgrades a v2 database and adds an empty inbox', () => {
+    const store = new Store(':memory:');
+    store.db.exec(
+      'DROP TABLE inbox; DROP INDEX sessions_by_thread; DROP INDEX outbox_by_slack_ts; PRAGMA user_version = 2',
+    );
+    (store as unknown as { migrate(): void }).migrate();
+    expect(store.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(store.db.prepare('SELECT COUNT(*) AS n FROM inbox').get()).toEqual({ n: 0 });
+    store.close();
+  });
+
   it('reopens an existing file without re-running migrations', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'agent-bus-store-'));
     try {
