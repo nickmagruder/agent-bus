@@ -339,7 +339,7 @@ src/
   broker/slack/  Socket Mode connection, Web API adapter, channel directory, post queue, inbound
   cli/      hook.ts and hook-extract.ts (the hook command)
 scripts/    install-task.ps1 (Task Scheduler), run-broker.ps1 (launcher with restarts),
-            commit-msg.ts and gitleaks-staged.sh (git hooks)
+            commit-msg.ts, commit-msg-rules.ts and gitleaks-staged.sh (git hooks)
 tests/      Vitest suites (fake Slack, in-memory SQLite)
 docs/       design, phase plans and live results
 .github/    workflows (ci, codeql, scorecard), Dependabot, Copilot instructions and

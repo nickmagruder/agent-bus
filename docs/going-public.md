@@ -108,8 +108,9 @@ Agents open PRs; Nick merges app-repo PRs. Steps run in order unless noted.
 - [x] `.nvmrc` (`24`); `engines` `>=24 <25`
 - [x] CI: bump actions to current majors; job stays `check`
 - [x] `.github/dependabot.yml`: weekly, grouped npm and Actions updates
-- [x] CodeQL workflow (JS/TS; PRs, `main`, weekly)
+- [x] CodeQL workflow (JS/TS; PRs, `main`, weekly); first run green on #33
 - [x] OpenSSF Scorecard workflow + README badge
+- [ ] Scorecard first run on `main` (runs only after merge) publishes the badge
 - [x] README setup, changelog, `AGENTS.md`
 
 ### 4. Copilot first review (with step 3)

@@ -1,5 +1,5 @@
 ---
-applyTo: 'src/shared/guard.ts,src/shared/config.ts,src/shared/hook-protocol.ts,src/shared/slack-text.ts,src/broker/http.ts,src/broker/mcp.ts,src/broker/service.ts,src/broker/inbox.ts,src/broker/questions.ts,src/broker/slack/inbound.ts,src/cli/**/*.ts'
+applyTo: 'src/shared/guard.ts,src/shared/config.ts,src/shared/hook-protocol.ts,src/shared/slack-text.ts,src/broker/http.ts,src/broker/mcp.ts,src/broker/service.ts,src/broker/inbox.ts,src/broker/questions.ts,src/broker/slack/inbound.ts,src/broker/store.ts,src/broker/log.ts,src/cli/**/*.ts'
 ---
 
 # Security-critical code
@@ -23,6 +23,9 @@ change here as a possible security regression.
 - **Output to Slack:** agent text goes through the escaping in
   `src/shared/slack-text.ts` so it can't mention `@channel` or disguise a link.
 - **Caps and throttles** must still apply on the new path.
+- **Storage and logs:** no token, Slack secret or full hook payload is written
+  to the database, the audit log or the log files; denied Slack messages are
+  audited without their text.
 - **Tests:** every new or changed check has a test for the accepted case and
   each rejected case. A PR that changes these files without such tests is a
   finding.

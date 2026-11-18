@@ -33,6 +33,13 @@ Review the pull request's changes against its base branch (the merge-base
 with `main`), commit by commit where that helps. Skip generated files and
 `package-lock.json` churn unless the change is the point of the PR.
 
+Outside GitHub's reviewer (for example in a local agent session), don't
+switch branches: the PR branch may be checked out in another worktree. Read
+the diff with `gh pr diff <number>` or
+`git diff origin/main...origin/<branch>`, and files with
+`git show origin/<branch>:<path>`. Say in the report which checks you did not
+run (tests, lint) rather than assuming they pass.
+
 ## 2. The spec
 
 Find the originating issue, in this order:
@@ -110,8 +117,12 @@ partial, (b) behaviour in the diff the issue didn't ask for (scope creep),
 and (c) requirements that look implemented but wrong. Quote the issue line for
 each finding.
 
-Leave inline comments on the lines concerned where a finding points at
-specific code.
+Where the review can comment on lines (GitHub's PR review), leave an inline
+comment on the lines a finding points at. Elsewhere, give `file:line` in the
+report instead.
+
+List every hard violation. For judgement calls, keep the ones worth acting
+on; drop a smell you'd only mention in passing.
 
 ## 5. Summary
 
