@@ -43,21 +43,22 @@ here). Prettier style stays agent-bus's own (semicolons).
 
 ## Decisions
 
-| #   | Question                     | Decision                                                                                                                                                            |
-| --- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | License                      | MIT                                                                                                                                                                 |
-| 2   | Private clankers design link | Move agent-bus design and phase overview into `docs/design.md`; clankers keeps a pointer                                                                            |
-| 3   | Changelog and version        | Keep agent-bus style: newest first, agents bump semver                                                                                                              |
-| 4   | Prettier                     | Keep agent-bus style; no reformat                                                                                                                                   |
-| 5   | Extra checks                 | Dependabot version updates, CodeQL, commit-msg lint, OpenSSF Scorecard                                                                                              |
-| 6   | Branching                    | Trunk-based everywhere; per-repo rules in the table below                                                                                                           |
-| 7   | Issues backfill              | Open Phase 2 items become issues; shipped work (PRs #1–#8) is backfilled as closed issues                                                                           |
-| 8   | Copilot comments             | Agent triages (fixes valid ones, replies with a reason to the rest), then pings Nick; Nick merges. Not for clankers / code-notes (below)                            |
-| 9   | Rollout                      | agent-bus, CrashMap and esri-exporter now; other projects on next touch                                                                                             |
-| 10  | Commit email                 | Leave as is                                                                                                                                                         |
-| 11  | code-notes concurrency       | Written rule now; agent-bus issue for a real lock later                                                                                                             |
-| 12  | clankers merging             | No GitHub Pro, so no auto-merge on the private repo: the agent squash-merges its own PR (`gh pr merge --squash --delete-branch`) once CI is green                   |
-| 13  | PR review skill              | Copilot code review uses an adapted `mattpocock/skills` `code-review` skill, vendored into each repo's `.github/skills/`; canonical copy in clankers as `pr-review` |
+| #   | Question                     | Decision                                                                                                                                                                                                                                           |
+| --- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | License                      | MIT                                                                                                                                                                                                                                                |
+| 2   | Private clankers design link | Move agent-bus design and phase overview into `docs/design.md`; clankers keeps a pointer                                                                                                                                                           |
+| 3   | Changelog and version        | Keep agent-bus style: newest first, agents bump semver                                                                                                                                                                                             |
+| 4   | Prettier                     | Keep agent-bus style; no reformat                                                                                                                                                                                                                  |
+| 5   | Extra checks                 | Dependabot version updates, CodeQL, commit-msg lint, OpenSSF Scorecard                                                                                                                                                                             |
+| 6   | Branching                    | Trunk-based everywhere; per-repo rules in the table below                                                                                                                                                                                          |
+| 7   | Issues backfill              | Open Phase 2 items become issues; shipped work (PRs #1–#8) is backfilled as closed issues                                                                                                                                                          |
+| 8   | Copilot comments             | Agent triages (fixes valid ones, replies with a reason to the rest), then pings Nick; Nick merges. Not for clankers / code-notes (below)                                                                                                           |
+| 9   | Rollout                      | agent-bus, CrashMap and esri-exporter now; other projects on next touch                                                                                                                                                                            |
+| 10  | Commit email                 | Leave as is                                                                                                                                                                                                                                        |
+| 11  | code-notes concurrency       | Written rule now; agent-bus issue for a real lock later                                                                                                                                                                                            |
+| 12  | clankers merging             | No GitHub Pro, so no auto-merge on the private repo: the agent squash-merges its own PR (`gh pr merge --squash --delete-branch`) once CI is green                                                                                                  |
+| 13  | PR review skill              | Copilot code review uses an adapted `mattpocock/skills` `code-review` skill, vendored into each repo's `.github/skills/`; canonical copy in clankers as `pr-review`                                                                                |
+| 14  | GitHub Projects              | One **AI Orchestration** board for agent-bus, clankers and any new repo built for orchestration; one board per other application (CrashMap, esri-exporter each their own). Milestones stay per repo for phases. Needs `gh auth refresh -s project` |
 
 ### Trunk-based rules by repo type
 
@@ -155,6 +156,18 @@ Agents open PRs; Nick merges app-repo PRs. Steps run in order unless noted.
 - [x] `docs/phase-2.md` keeps design, decisions and live results; its
       checklists become issue links
 
+### 5b. GitHub Projects (needs the `project` scope on gh)
+
+- [ ] Create the **AI Orchestration** project; link agent-bus and clankers
+- [ ] Fields: Status (Todo, In progress, In review, Done), Phase, Agent
+      (bus session ID), Priority (Repository is built in); views: board by
+      Status, table grouped by repository,
+      roadmap by milestone
+- [ ] Add all open agent-bus issues (#21–#32) and PR #33
+- [ ] Built-in workflows (Nick, in the project's Workflows settings): auto-add
+      new issues and PRs from linked repos; Done on close or merge
+- [ ] CrashMap and esri-exporter boards (step 7)
+
 ### 6. clankers standards (clankers PR, agent self-merges)
 
 - [ ] `standards/git.md`: trunk-based flow and the repo-type table; squash
@@ -163,7 +176,8 @@ Agents open PRs; Nick merges app-repo PRs. Steps run in order unless noted.
       code-notes direct to `main`
 - [ ] New `standards/github.md`: issues track all work (status lives in
       issues, design in docs); bugs and follow-ups found mid-task become
-      issues; labels, milestones, templates; repo setup checklist (ruleset,
+      issues; labels, milestones, templates; project boards (decision 14:
+      one AI Orchestration board, one per app); repo setup checklist (ruleset,
       security settings, Dependabot, CodeQL, Scorecard, Copilot review,
       husky/lint-staged/commit-msg, LICENSE/SECURITY.md)
 - [ ] `standards/docs.md`: plans hold design and decisions; checklists link
@@ -190,6 +204,8 @@ Agents open PRs; Nick merges app-repo PRs. Steps run in order unless noted.
 - [ ] Ruleset (PR required, required checks, Copilot auto-review), squash-only
       merges, branch auto-delete, Dependabot alerts
 - [ ] Labels, milestones, issue forms, PR template
+- [ ] A project board per app (CrashMap, esri-exporter), same fields minus
+      Agent if unused (decision 14)
 - [ ] `.github/copilot-instructions.md` from each repo's AGENTS.md
 - [ ] `.github/skills/code-review/` synced from clankers `pr-review`
 - [ ] Open issues for each repo's pending `PLAN.md` items; `PLAN.md` links to
