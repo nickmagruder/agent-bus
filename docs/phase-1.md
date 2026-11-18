@@ -3,8 +3,8 @@
 Status: **complete** (2026-11-17): agent-bus PRs #1–#5 and clankers #6 merged; the broker starts at sign-in; Claude Code, Codex and Copilot verified live
 
 Goal: a session on any of the three apps can post to its Slack thread, and
-DM me when it is blocked. Design and phases: clankers
-`docs/slack-integration-plan.md`; Phase 0 results: [phase-0.md](spikes/phase-0.md).
+DM me when it is blocked. Design and phases: [design.md](design.md);
+Phase 0 results: [phase-0.md](spikes/phase-0.md).
 
 ## Decisions
 
