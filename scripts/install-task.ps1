@@ -53,11 +53,27 @@ function Get-TaskBroker {
         Where-Object { $_.CommandLine -and $_.CommandLine.ToLowerInvariant().Contains($main) })
 }
 
-# Stops the launcher first (it would otherwise restart node), then the broker.
+# The hidden launcher(s) running run-broker.ps1.
+function Get-TaskLauncher {
+    $runner = $Runner.ToLowerInvariant()
+    @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" |
+        Where-Object { $_.CommandLine -and $_.CommandLine.ToLowerInvariant().Contains($runner) })
+}
+
+# Stops the launcher first (it would otherwise restart node), waits for it to
+# exit, then stops the broker and waits for the port to be free.
+# Stop-ScheduledTask returns before Windows has ended the launcher, so the
+# launcher is also stopped by process ID.
 function Stop-TaskBroker {
     Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    foreach ($process in Get-TaskLauncher) {
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+        Wait-Process -Id $process.ProcessId -Timeout 10 -ErrorAction SilentlyContinue
+        Write-Host "stopped  launcher (powershell pid $($process.ProcessId))"
+    }
     foreach ($process in Get-TaskBroker) {
-        Stop-Process -Id $process.ProcessId -Force
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+        Wait-Process -Id $process.ProcessId -Timeout 10 -ErrorAction SilentlyContinue
         Write-Host "stopped  broker (node pid $($process.ProcessId))"
     }
 }
