@@ -147,6 +147,7 @@ export class PostQueue {
       ...(thread?.threadTs ? { threadTs: thread.threadTs } : {}),
       ...(post.username ? { username: post.username } : {}),
       ...(post.icon ? { icon: post.icon } : {}),
+      ...(post.blocks ? { blocks: post.blocks } : {}),
     });
 
     this.store.transaction(() => {

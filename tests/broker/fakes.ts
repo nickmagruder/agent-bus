@@ -42,4 +42,10 @@ export class FakeSlack implements SlackApi {
   async addReaction(channel: string, ts: string, name: string) {
     this.reactions.push({ channel, ts, name });
   }
+
+  readonly updates: { channel: string; ts: string; text: string; blocks?: unknown[] }[] = [];
+
+  async updateMessage(channel: string, ts: string, text: string, blocks?: unknown[]) {
+    this.updates.push({ channel, ts, text, ...(blocks ? { blocks } : {}) });
+  }
 }

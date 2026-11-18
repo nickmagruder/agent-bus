@@ -28,9 +28,13 @@ beforeAll(async () => {
       slackApi: slack,
       connection: null,
       queueOptions: { minIntervalMs: 0 },
+      holdMs: HOLD_MS,
+      tickMs: 60_000,
     },
   );
 });
+
+const HOLD_MS = 400;
 
 afterAll(async () => {
   await broker.stop();
@@ -137,7 +141,114 @@ describe('MCP tools end to end', () => {
   it('lists the tools', async () => {
     const client = await connect('claude');
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['check_inbox', 'notify_human', 'register']);
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      'ask_human',
+      'check_inbox',
+      'notify_human',
+      'register',
+      'wait_for_reply',
+    ]);
+    await client.close();
+  });
+
+  async function registered(client: Client): Promise<string> {
+    const result = await client.callTool({
+      name: 'register',
+      arguments: { purpose: 'Questions', project: 'clankers' },
+    });
+    return (result.structuredContent as { session: string }).session;
+  }
+
+  const askArgs = (session: string) => ({
+    session,
+    question: 'Ship it?',
+    options: ['Yes', 'No'],
+    default_action: 'Wait for review',
+  });
+
+  it('ask_human returns pending after the hold, then wait_for_reply gets the answer', async () => {
+    const client = await connect('claude');
+    const session = await registered(client);
+    const asked = await client.callTool({ name: 'ask_human', arguments: askArgs(session) });
+    const pending = asked.structuredContent as { state: string; question_id: string };
+    expect(pending.state).toBe('pending');
+    expect(text(asked)).toContain('wait_for_reply');
+
+    setTimeout(() => broker.questions.answerByButton(pending.question_id, 0, USER_ID), 50);
+    const answered = await client.callTool({
+      name: 'wait_for_reply',
+      arguments: { session, question_id: pending.question_id },
+    });
+    expect(answered.structuredContent).toMatchObject({
+      state: 'answered',
+      answer: 'Yes',
+      source: 'button',
+    });
+    expect(text(answered)).toContain('Nick chose');
+    await client.close();
+  });
+
+  it('ask_human returns the answer when it comes during the hold', async () => {
+    const client = await connect('codex');
+    const session = await registered(client);
+    setTimeout(() => {
+      const [open] = broker.store.openQuestions(session);
+      if (open) broker.questions.answerByButton(open.id, 1, USER_ID);
+    }, 50);
+    const asked = await client.callTool({ name: 'ask_human', arguments: askArgs(session) });
+    expect(asked.structuredContent).toMatchObject({ state: 'answered', answer: 'No' });
+    await client.close();
+  });
+
+  it('ask_human requires a default action and refuses another platform', async () => {
+    const claude = await connect('claude');
+    const session = await registered(claude);
+    const noDefault = await claude.callTool({
+      name: 'ask_human',
+      arguments: { session, question: 'Ship it?' },
+    });
+    expect(noDefault.isError).toBe(true);
+    await claude.close();
+
+    const copilot = await connect('copilot');
+    const stolen = await copilot.callTool({ name: 'ask_human', arguments: askArgs(session) });
+    expect(stolen.isError).toBe(true);
+    expect(text(stolen)).toContain('another platform');
+    const peek = await copilot.callTool({
+      name: 'wait_for_reply',
+      arguments: { session, question_id: 'q-000000' },
+    });
+    expect(peek.isError).toBe(true);
+    await copilot.close();
+  });
+
+  it('wait_for_reply without a question returns a message that arrives while waiting', async () => {
+    const client = await connect('claude');
+    const session = await registered(client);
+    const idle = await client.callTool({
+      name: 'wait_for_reply',
+      arguments: { session, timeout_seconds: 1 },
+    });
+    expect(idle.structuredContent).toEqual({ state: 'pending' });
+
+    await broker.queue.idle();
+    const root = slack.posts.find((p) => p.text.includes(session));
+    if (!root) throw new Error('no thread root');
+    setTimeout(
+      () =>
+        broker.inbox.receive({
+          channel: root.channel,
+          channelType: 'channel',
+          ts: '1800000001.000200',
+          threadTs: root.ts,
+          user: USER_ID,
+          text: 'Also update the README',
+          hasFiles: false,
+        }),
+      50,
+    );
+    const got = await client.callTool({ name: 'wait_for_reply', arguments: { session } });
+    expect(text(got)).toContain('Also update the README');
     await client.close();
   });
 

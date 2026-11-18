@@ -11,7 +11,8 @@ import { BusService } from './service.ts';
 import { createWebSlackApi, type SlackApi } from './slack/api.ts';
 import { createSlackConnection, type SlackConnection } from './slack/connection.ts';
 import { ChannelDirectory } from './slack/directory.ts';
-import { registerInbound } from './slack/inbound.ts';
+import { registerActions, registerInbound } from './slack/inbound.ts';
+import { Notifier, Questions } from './questions.ts';
 import { PostQueue } from './slack/queue.ts';
 import { Store } from './store.ts';
 
@@ -37,10 +38,15 @@ export interface Broker {
   queue: PostQueue;
   service: BusService;
   inbox: Inbox;
+  questions: Questions;
   stop: () => Promise<void>;
 }
 
 export interface BrokerDeps {
+  /** ask_human / wait_for_reply hold limit (tests shorten it). */
+  holdMs?: number;
+  /** Reminder/expiry check interval. */
+  tickMs?: number;
   log?: Logger;
   /** Replaced by a fake in tests. */
   slackApi?: SlackApi;
@@ -56,9 +62,26 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
   const directory = new ChannelDirectory(slackApi, config.slack.userId);
   const queue = new PostQueue(store, slackApi, directory, { log, ...deps.queueOptions });
   const service = new BusService(store, queue, undefined, directory);
+  const notifier = new Notifier();
+  const questions = new Questions({
+    store,
+    queue,
+    notifier,
+    humanUserId: config.slack.userId,
+    log,
+    editor: {
+      update(channel, ts, text, blocks) {
+        slackApi.updateMessage(channel, ts, text, blocks).catch((error: unknown) => {
+          log('warn', 'could not update a Slack message', { error: errorMessage(error) });
+        });
+      },
+    },
+  });
   const inbox = new Inbox({
     store,
     queue,
+    questions,
+    notifier,
     humanUserId: config.slack.userId,
     reactions: {
       add(channel, ts, name) {
@@ -77,7 +100,10 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
           log,
         })
       : deps.connection;
-  if (connection) registerInbound(connection.app, inbox, log);
+  if (connection) {
+    registerInbound(connection.app, inbox, log);
+    registerActions(connection.app, questions, log);
+  }
 
   let http: RunningHttpServer | undefined;
   try {
@@ -86,6 +112,9 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
       tokens: config.tokens,
       service,
       inbox,
+      questions,
+      notifier,
+      holdMs: deps.holdMs,
       log,
       health: () => ({ slack: connection?.state ?? 'disabled' }),
     });
@@ -104,8 +133,9 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
   });
 
   store.appendEvent({ kind: 'broker.started', data: { port: http.port } });
-  // Posts queued before a restart go out now.
+  // Posts queued before a restart go out now; reminders and expiries missed while off run now.
   queue.kick();
+  questions.start(deps.tickMs);
   log('info', 'agent-bus broker listening', { url: `http://127.0.0.1:${http.port}/mcp` });
 
   const server = http;
@@ -115,7 +145,9 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
     queue,
     service,
     inbox,
+    questions,
     async stop() {
+      questions.stop();
       await server.close();
       await queue.stop();
       await connection?.stop();

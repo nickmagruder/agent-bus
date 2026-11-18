@@ -11,6 +11,8 @@ export interface PostMessageArgs {
   threadTs?: string;
   username?: string;
   icon?: string;
+  /** Block Kit blocks; `text` is then the notification fallback. */
+  blocks?: unknown[];
 }
 
 /**
@@ -25,6 +27,8 @@ export interface SlackApi {
   memberChannels(): Promise<Map<string, string>>;
   /** Adds an emoji reaction to a message; an existing reaction is not an error. */
   addReaction(channel: string, ts: string, name: string): Promise<void>;
+  /** Replaces a message the bot posted (e.g. a question's buttons once answered). */
+  updateMessage(channel: string, ts: string, text: string, blocks?: unknown[]): Promise<void>;
 }
 
 export type SlackFailure = 'rate_limited' | 'permanent' | 'transient';
@@ -90,6 +94,7 @@ export function createWebSlackApi(botToken: string): SlackApi {
           ...(args.threadTs ? { thread_ts: args.threadTs } : {}),
           ...(args.username ? { username: args.username } : {}),
           ...(args.icon ? { icon_emoji: args.icon } : {}),
+          ...(args.blocks ? { blocks: args.blocks as never } : {}),
           unfurl_links: false,
           unfurl_media: false,
         });
@@ -142,6 +147,19 @@ export function createWebSlackApi(botToken: string): SlackApi {
         await client.reactions.add({ channel, timestamp: ts, name });
       } catch (error) {
         if (error instanceof WebAPIPlatformError && error.data.error === 'already_reacted') return;
+        throw classifySlackError(error);
+      }
+    },
+
+    async updateMessage(channel, ts, text, blocks) {
+      try {
+        await client.chat.update({
+          channel,
+          ts,
+          text,
+          ...(blocks ? { blocks: blocks as never } : {}),
+        });
+      } catch (error) {
         throw classifySlackError(error);
       }
     },

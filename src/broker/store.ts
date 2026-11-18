@@ -85,6 +85,35 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX sessions_by_thread ON sessions (slack_channel_id, thread_ts);
   CREATE INDEX outbox_by_slack_ts ON outbox (slack_channel_id, slack_ts);
   `,
+  // v4: questions an agent asks me (ask_human), answered by button or reply,
+  // reminded once and expired to the agent's own default. Posts can carry
+  // Block Kit blocks (the question's buttons).
+  `
+  CREATE TABLE questions (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions (id),
+    text TEXT NOT NULL,
+    options TEXT NOT NULL DEFAULT '[]',
+    default_answer TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'answered', 'expired')),
+    answer TEXT,
+    answered_by TEXT,
+    answer_source TEXT CHECK (answer_source IN ('button', 'reply')),
+    post_id INTEGER REFERENCES outbox (id),
+    reminder_post_id INTEGER REFERENCES outbox (id),
+    created_at TEXT NOT NULL,
+    remind_at TEXT,
+    reminded_at TEXT,
+    expires_at TEXT NOT NULL,
+    closed_at TEXT,
+    delivered_at TEXT,
+    delivered_via TEXT
+  );
+  CREATE INDEX questions_by_state ON questions (state, expires_at);
+  CREATE INDEX questions_by_session ON questions (session_id, state);
+  ALTER TABLE inbox ADD COLUMN question_id TEXT REFERENCES questions (id);
+  ALTER TABLE outbox ADD COLUMN blocks TEXT;
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -130,9 +159,12 @@ export interface OutboxRecord {
   lastError: string | null;
   slackChannelId: string | null;
   slackTs: string | null;
+  /** Block Kit blocks; `text` is the notification fallback. */
+  blocks: unknown[] | null;
 }
 
 export interface NewPost {
+  blocks?: unknown[] | null;
   target: string;
   sessionId?: string | null;
   /** Post into the session's thread (or start it). */
@@ -144,8 +176,42 @@ export interface NewPost {
   idemKey?: string | null;
 }
 
-/** How an inbox message reached the agent. */
-export type DeliveryVia = 'check_inbox';
+/** How an inbox message or question outcome reached the agent. */
+export type DeliveryVia = 'check_inbox' | 'wait_for_reply' | 'ask_human';
+
+export type QuestionState = 'open' | 'answered' | 'expired';
+export type AnswerSource = 'button' | 'reply';
+
+export interface QuestionRecord {
+  id: string;
+  sessionId: string;
+  text: string;
+  options: string[];
+  defaultAnswer: string;
+  state: QuestionState;
+  answer: string | null;
+  answeredBy: string | null;
+  answerSource: AnswerSource | null;
+  postId: number | null;
+  reminderPostId: number | null;
+  createdAt: string;
+  remindAt: string | null;
+  remindedAt: string | null;
+  expiresAt: string;
+  closedAt: string | null;
+  deliveredAt: string | null;
+  deliveredVia: DeliveryVia | null;
+}
+
+export interface NewQuestion {
+  id: string;
+  sessionId: string;
+  text: string;
+  options: readonly string[];
+  defaultAnswer: string;
+  remindAt: Date | null;
+  expiresAt: Date;
+}
 
 export interface InboxRecord {
   id: number;
@@ -158,9 +224,12 @@ export interface InboxRecord {
   createdAt: string;
   deliveredAt: string | null;
   deliveredVia: DeliveryVia | null;
+  /** Set when this reply answered a question; delivered with the question's outcome. */
+  questionId: string | null;
 }
 
 export interface NewInboxMessage {
+  questionId?: string | null;
   sessionId: string;
   slackUser: string;
   body: string;
@@ -208,8 +277,18 @@ export class Store {
     }
   }
 
+  /** Runs `work` in one transaction; a nested call joins the outer transaction. */
   transaction<T>(work: () => T): T {
+    if (this.depth > 0) {
+      this.depth++;
+      try {
+        return work();
+      } finally {
+        this.depth--;
+      }
+    }
     this.db.exec('BEGIN IMMEDIATE');
+    this.depth = 1;
     try {
       const result = work();
       this.db.exec('COMMIT');
@@ -217,8 +296,12 @@ export class Store {
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;
+    } finally {
+      this.depth = 0;
     }
   }
+
+  private depth = 0;
 
   private timestamp(): string {
     return this.now().toISOString();
@@ -313,8 +396,8 @@ export class Store {
     const result = this.db
       .prepare(
         `INSERT OR IGNORE INTO inbox
-           (session_id, sender, slack_user, body, slack_channel_id, slack_ts, created_at)
-         VALUES (?, 'human', ?, ?, ?, ?, ?)`,
+           (session_id, sender, slack_user, body, slack_channel_id, slack_ts, created_at, question_id)
+         VALUES (?, 'human', ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         message.sessionId,
@@ -323,6 +406,7 @@ export class Store {
         message.slackChannelId,
         message.slackTs,
         this.timestamp(),
+        message.questionId ?? null,
       );
     const row = this.db
       .prepare('SELECT * FROM inbox WHERE slack_channel_id = ? AND slack_ts = ?')
@@ -330,11 +414,22 @@ export class Store {
     return { record: toInbox(row), inserted: Number(result.changes) === 1 };
   }
 
-  /** Undelivered messages for a session, oldest first. */
+  findInbox(channelId: string, ts: string): InboxRecord | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM inbox WHERE slack_channel_id = ? AND slack_ts = ?')
+      .get(channelId, ts) as Row | undefined;
+    return row && toInbox(row);
+  }
+
+  /**
+   * Undelivered plain messages for a session, oldest first. Replies that
+   * answered a question are delivered with that question's outcome instead.
+   */
   undelivered(sessionId: string, limit: number): InboxRecord[] {
     const rows = this.db
       .prepare(
-        'SELECT * FROM inbox WHERE session_id = ? AND delivered_at IS NULL ORDER BY id LIMIT ?',
+        `SELECT * FROM inbox WHERE session_id = ? AND delivered_at IS NULL AND question_id IS NULL
+         ORDER BY id LIMIT ?`,
       )
       .all(sessionId, limit) as Row[];
     return rows.map(toInbox);
@@ -342,9 +437,149 @@ export class Store {
 
   countUndelivered(sessionId: string): number {
     const row = this.db
-      .prepare('SELECT COUNT(*) AS n FROM inbox WHERE session_id = ? AND delivered_at IS NULL')
+      .prepare(
+        `SELECT COUNT(*) AS n FROM inbox
+         WHERE session_id = ? AND delivered_at IS NULL AND question_id IS NULL`,
+      )
       .get(sessionId) as Row;
     return Number(row.n);
+  }
+
+  /** Inbox rows (replies) that answered a question. */
+  questionReplies(questionId: string): InboxRecord[] {
+    const rows = this.db
+      .prepare('SELECT * FROM inbox WHERE question_id = ? ORDER BY id')
+      .all(questionId) as Row[];
+    return rows.map(toInbox);
+  }
+
+  // Questions
+
+  insertQuestion(question: NewQuestion): QuestionRecord {
+    this.db
+      .prepare(
+        `INSERT INTO questions
+           (id, session_id, text, options, default_answer, created_at, remind_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        question.id,
+        question.sessionId,
+        question.text,
+        JSON.stringify(question.options),
+        question.defaultAnswer,
+        this.timestamp(),
+        question.remindAt?.toISOString() ?? null,
+        question.expiresAt.toISOString(),
+      );
+    return found(this.getQuestion(question.id), `question ${question.id}`);
+  }
+
+  getQuestion(id: string): QuestionRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM questions WHERE id = ?').get(id) as Row | undefined;
+    return row && toQuestion(row);
+  }
+
+  setQuestionPost(id: string, field: 'post' | 'reminder', postId: number): void {
+    const column = field === 'post' ? 'post_id' : 'reminder_post_id';
+    const extra = field === 'reminder' ? ', reminded_at = ?' : '';
+    const params: SQLInputValue[] =
+      field === 'reminder' ? [postId, this.timestamp(), id] : [postId, id];
+    this.db.prepare(`UPDATE questions SET ${column} = ?${extra} WHERE id = ?`).run(...params);
+  }
+
+  openQuestions(sessionId: string): QuestionRecord[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM questions WHERE session_id = ? AND state = 'open' ORDER BY created_at",
+      )
+      .all(sessionId) as Row[];
+    return rows.map(toQuestion);
+  }
+
+  /** The question whose DM (or reminder DM) was sent as this Slack message. */
+  questionByPost(channelId: string, ts: string): QuestionRecord | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT questions.* FROM questions JOIN outbox
+           ON outbox.id = questions.post_id OR outbox.id = questions.reminder_post_id
+         WHERE outbox.slack_channel_id = ? AND outbox.slack_ts = ?`,
+      )
+      .get(channelId, ts) as Row | undefined;
+    return row && toQuestion(row);
+  }
+
+  /**
+   * Closes an open question (compare-and-swap on `state = 'open'`). Returns
+   * false when it was already answered or expired: the first answer wins.
+   */
+  closeQuestion(
+    id: string,
+    outcome:
+      | { state: 'answered'; answer: string; answeredBy: string; source: AnswerSource }
+      | { state: 'expired' },
+  ): boolean {
+    const answered = outcome.state === 'answered' ? outcome : undefined;
+    const result = this.db
+      .prepare(
+        `UPDATE questions SET state = ?, answer = ?, answered_by = ?, answer_source = ?, closed_at = ?
+         WHERE id = ? AND state = 'open'`,
+      )
+      .run(
+        outcome.state,
+        answered?.answer ?? null,
+        answered?.answeredBy ?? null,
+        answered?.source ?? null,
+        this.timestamp(),
+        id,
+      );
+    return Number(result.changes) === 1;
+  }
+
+  /** Open questions whose reminder is due and hasn't been sent. */
+  dueReminders(now: Date): QuestionRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM questions WHERE state = 'open' AND reminded_at IS NULL
+         AND remind_at IS NOT NULL AND remind_at <= ? AND expires_at > ? ORDER BY remind_at`,
+      )
+      .all(now.toISOString(), now.toISOString()) as Row[];
+    return rows.map(toQuestion);
+  }
+
+  dueExpiries(now: Date): QuestionRecord[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM questions WHERE state = 'open' AND expires_at <= ? ORDER BY expires_at",
+      )
+      .all(now.toISOString()) as Row[];
+    return rows.map(toQuestion);
+  }
+
+  /** Answered or expired questions whose outcome the agent hasn't been given. */
+  undeliveredOutcomes(sessionId: string): QuestionRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM questions WHERE session_id = ? AND state != 'open' AND delivered_at IS NULL
+         ORDER BY closed_at`,
+      )
+      .all(sessionId) as Row[];
+    return rows.map(toQuestion);
+  }
+
+  /** Marks an outcome delivered, with the replies that answered it. */
+  markQuestionDelivered(id: string, via: DeliveryVia): void {
+    const at = this.timestamp();
+    this.db
+      .prepare(
+        'UPDATE questions SET delivered_at = ?, delivered_via = ? WHERE id = ? AND delivered_at IS NULL',
+      )
+      .run(at, via, id);
+    this.db
+      .prepare(
+        'UPDATE inbox SET delivered_at = ?, delivered_via = ? WHERE question_id = ? AND delivered_at IS NULL',
+      )
+      .run(at, via, id);
   }
 
   markDelivered(ids: readonly number[], via: DeliveryVia): void {
@@ -409,8 +644,9 @@ export class Store {
     }
     const result = this.db
       .prepare(
-        `INSERT INTO outbox (idem_key, target, session_id, in_thread, text, username, icon, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO outbox
+           (idem_key, target, session_id, in_thread, text, username, icon, created_at, blocks)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         post.idemKey ?? null,
@@ -421,8 +657,17 @@ export class Store {
         post.username ?? null,
         post.icon ?? null,
         this.timestamp(),
+        post.blocks ? JSON.stringify(post.blocks) : null,
       );
     return found(this.getPost(Number(result.lastInsertRowid)), 'new outbox post');
+  }
+
+  /** Rewrites a post that hasn't been sent yet; false once it's sent (edit it in Slack instead). */
+  updateQueuedPost(id: number, text: string, blocks: unknown[] | null): boolean {
+    const result = this.db
+      .prepare("UPDATE outbox SET text = ?, blocks = ? WHERE id = ? AND state = 'queued'")
+      .run(text, blocks ? JSON.stringify(blocks) : null, id);
+    return Number(result.changes) === 1;
   }
 
   getPost(id: number): OutboxRecord | undefined {
@@ -496,6 +741,36 @@ function toOutbox(row: Row): OutboxRecord {
     lastError: nullableString(row.last_error),
     slackChannelId: nullableString(row.slack_channel_id),
     slackTs: nullableString(row.slack_ts),
+    blocks:
+      row.blocks === null || row.blocks === undefined
+        ? null
+        : (JSON.parse(String(row.blocks)) as unknown[]),
+  };
+}
+
+function toQuestion(row: Row): QuestionRecord {
+  return {
+    id: String(row.id),
+    sessionId: String(row.session_id),
+    text: String(row.text),
+    options: JSON.parse(String(row.options)) as string[],
+    defaultAnswer: String(row.default_answer),
+    state: row.state as QuestionState,
+    answer: nullableString(row.answer),
+    answeredBy: nullableString(row.answered_by),
+    answerSource: nullableString(row.answer_source) as AnswerSource | null,
+    postId: row.post_id === null || row.post_id === undefined ? null : Number(row.post_id),
+    reminderPostId:
+      row.reminder_post_id === null || row.reminder_post_id === undefined
+        ? null
+        : Number(row.reminder_post_id),
+    createdAt: String(row.created_at),
+    remindAt: nullableString(row.remind_at),
+    remindedAt: nullableString(row.reminded_at),
+    expiresAt: String(row.expires_at),
+    closedAt: nullableString(row.closed_at),
+    deliveredAt: nullableString(row.delivered_at),
+    deliveredVia: nullableString(row.delivered_via) as DeliveryVia | null,
   };
 }
 
@@ -511,6 +786,7 @@ function toInbox(row: Row): InboxRecord {
     createdAt: String(row.created_at),
     deliveredAt: nullableString(row.delivered_at),
     deliveredVia: nullableString(row.delivered_via) as DeliveryVia | null,
+    questionId: nullableString(row.question_id),
   };
 }
 

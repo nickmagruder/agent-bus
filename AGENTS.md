@@ -46,9 +46,10 @@ The design and phases live in clankers: `~/.claude/clankers/docs/slack-integrati
 - `docs/phase-1.md`: Phase 1 plan, decisions, checklist and build notes
 - `src/broker/main.ts`: broker entry (`npm run broker`); wires store, Slack, queue, HTTP
 - `src/broker/service.ts`: register/notify/hook rules, routing, ownership checks, caps and throttles
-- `src/broker/mcp.ts`: MCP tools (`register`, `notify_human`, `check_inbox`)
+- `src/broker/mcp.ts`: MCP tools (`register`, `notify_human`, `check_inbox`, `ask_human`, `wait_for_reply`)
 - `src/broker/inbox.ts`: my Slack replies → session inboxes (sender gating, routing, reactions, DM hint)
-- `src/broker/slack/inbound.ts`: Bolt `message` listener feeding the inbox
+- `src/broker/slack/inbound.ts`: Bolt `message` listener feeding the inbox; question button handler
+- `src/broker/questions.ts`: `ask_human` questions after they're asked (answers, reminder, expiry, outcomes, waiting)
 - `src/broker/http.ts`: `127.0.0.1` HTTP server (`/mcp`, `/hook`, `/health`) behind the guard
 - `src/cli/hook.ts`: hook command for Claude Code and Codex (always exits 0)
 - `src/cli/hook-extract.ts`: picks fields from hook payloads, finds repo/branch, renders app output

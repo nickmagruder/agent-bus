@@ -1,7 +1,8 @@
 # Phase 2: I answer from Slack
 
-Status: **in progress** (2026-11-18): PR 1 (inbound Slack and inbox) built
-on `feat/phase-2-inbound`, not yet tried against live Slack.
+Status: **in progress** (2026-11-18): PR 1 (inbound Slack and inbox) merged
+([#7](https://github.com/nickmagruder/agent-bus/pull/7)); PR 2 (questions)
+built on `feat/phase-2-questions`. Neither tried against live Slack yet.
 
 Goal: an agent on any of the three apps can ask me a question and get my
 answer from Slack (buttons or free text), and anything I write in a
@@ -146,15 +147,29 @@ and leave (a) to the app's reconnect (decided below).
 
 ### PR 2: questions
 
-- [ ] `ask_human`, `wait_for_reply` with heartbeats and the hold limit;
-      `pending` return
-- [ ] Migration 4: `questions`, `inbox.question_id`; a reply in a question's
-      thread (or the session thread with one open question) answers it
-- [ ] Block Kit question message with buttons; `block_actions` handler
-      (gating, compare-and-swap, `chat.update`)
-- [ ] Scheduler: reminder, expiry, message edits
-- [ ] Tests: answered by button / reply / expired; double click; late click;
-      restart mid-wait; caps; held call cancelled when the client disconnects
+- [x] `ask_human`, `wait_for_reply` with heartbeats and the hold limit;
+      `pending` return. `default_action` is required. A question counts as
+      an urgent notification for the caps; at most 3 open per session
+- [x] Migration 4: `questions`, `inbox.question_id`, `outbox.blocks`; a reply
+      under a question's DM or its reminder (or in the session thread with
+      one open question) answers it
+- [x] Block Kit question DM with buttons; `block_actions` handler (gating,
+      compare-and-swap, `chat.update`, ephemeral reply to late or foreign
+      clicks); a question DM still queued is rewritten instead of edited
+- [x] Scheduler (`Questions.tick`, every 30 s and at start): one reminder
+      DM, expiry to the agent's default, message edits
+- [x] Outcomes reach the agent once, through `ask_human`, `wait_for_reply`
+      or `check_inbox`; the answering reply gets ✅ when delivered
+- [x] Tests: answered by button / reply / reminder reply / expired; double
+      click; late click; foreign click; Slack retry of an answering reply;
+      caps and open limit; v2 and v3 upgrades; nested transactions; end to
+      end over `/mcp` (pending → `wait_for_reply`, answer during the hold,
+      ownership, message during `wait_for_reply`)
+- [ ] Not tested: a broker restart during a held call (the call drops; the
+      question survives and `wait_for_reply` picks it up, by design) and a
+      client disconnect mid-hold (the hold ends at its timeout)
+- [ ] Live (Nick): turn on **Interactivity** in the Slack app; answer a
+      question by button and by reply from the phone
 
 ### PR 3: hooks
 
