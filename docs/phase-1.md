@@ -1,6 +1,6 @@
 # Phase 1: outbound pings
 
-Status: **in progress**: PRs 1–3 and the clankers wiring merged; broker runs from the logon task. Claude Code, Codex and Copilot verified live; a real logon start left to check (2026-11-17)
+Status: **complete** (2026-11-17): agent-bus PRs #1–#5 and clankers #6 merged; the broker starts at sign-in; Claude Code, Codex and Copilot verified live
 
 Goal: a session on any of the three apps can post to its Slack thread, and
 DM me when it is blocked. Design and phases: clankers
@@ -92,7 +92,7 @@ scripts/    install-task.ps1 (Task Scheduler), run-broker.ps1 (launcher with res
 - [x] Claude Code: session posts to its thread and DMs me when blocked
 - [x] Codex: same, after trusting the hooks in Settings > Hooks
 - [x] Copilot: added by hand in Customize › MCP; `notify_human` works
-- [ ] Broker starts at logon from the scheduled task
+- [x] Broker starts at logon from the scheduled task
 
 ## Live results
 
@@ -130,6 +130,14 @@ scripts/    install-task.ps1 (Task Scheduler), run-broker.ps1 (launcher with res
 | `notify_human` normal and urgent             | ✅ status update in the thread, urgent DM; all 3 posts sent on the first attempt                                                                                                       |
 | Hooks                                        | n/a: Copilot desktop hooks still don't run (Phase 0), so no automatic pings, as expected                                                                                               |
 
+### Start at sign-in (2026-11-17, sign out and back in)
+
+| Check                       | Result                                                                                                                                                                                                                                                 |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Logon trigger runs the task | ✅ hidden launcher started 21:24:16; "starting broker" at 21:24:36                                                                                                                                                                                     |
+| Broker comes up             | ✅ Slack connected and listening at 21:25:15: about **38 s** after the node process started (a restart from a terminal takes under 3 s)                                                                                                                |
+| Apps that start at sign-in  | ⚠️ Claude started at 21:24:42, before the broker listened: agent-bus showed ECONNREFUSED and the session's `SessionStart` hook got no bus ID. Reconnecting agent-bus from the MCP menu fixes the session; later hooks work, and new sessions get an ID |
+
 ## Build notes
 
 - Delivery is at-least-once: a crash between Slack accepting a post and the
@@ -156,8 +164,13 @@ scripts/    install-task.ps1 (Task Scheduler), run-broker.ps1 (launcher with res
   Claude, `mcp__agent_bus__*` in Codex) send no DM; they're audited as
   `own_tool`. Choosing "Always allow" for them in Codex also avoids the
   in-app prompt.
+- At sign-in the broker can take ~40 s to listen, so an app that starts
+  with Windows may miss it: reconnect agent-bus from the app's MCP menu. If
+  this bites often, check whether Claude Code retries a failed MCP server on
+  its own before changing the broker's startup order (most of the delay is
+  likely Node loading under sign-in load, before broker code runs).
 
-## Still to check live
+## Carried into Phase 2
 
-- The logon task starting the broker at an actual sign-in.
-- Codex and Copilot honour progress notifications (needed in Phase 2).
+- Codex and Copilot honour progress notifications (needed for `ask_human`).
+- The sign-in race above, if it turns out to matter in practice.

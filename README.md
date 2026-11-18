@@ -9,9 +9,9 @@ desktop sessions to the `clankers` Slack workspace and to each other:
 
 Design, decisions and phases: [clankers `docs/slack-integration-plan.md`](https://github.com/nickmagruder/clankers/blob/main/docs/slack-integration-plan.md).
 
-**Current stage: Phase 1** (outbound pings). Broker, hook CLI, start-at-login
+**Phase 1 (outbound pings) is complete.** Broker, hook CLI, start-at-login
 and app wiring (clankers `install.ps1 -AgentBus`) are in; verified live on
-Claude Code, Codex and Copilot.
+Claude Code, Codex and Copilot. Next: Phase 2, answering agents from Slack.
 Plan, checklist and live results: [docs/phase-1.md](docs/phase-1.md). Phase 0 results:
 [docs/spikes/phase-0.md](docs/spikes/phase-0.md) (the spike code itself was
 removed in 0.3.0; it's in git history at `9062a63`).
@@ -86,6 +86,10 @@ date, kept 14 days) and `launcher.log`.
 After setting or changing any environment variable, restart the broker task
 and the apps: each reads its environment only when it starts. A Claude MCP
 `401` usually means Claude started before the tokens were set.
+
+At sign-in the broker can take ~40 s to start listening. An app that starts
+with Windows may show agent-bus as failed (`ECONNREFUSED`): reconnect it from
+the app's MCP menu.
 
 ## Setup
 
