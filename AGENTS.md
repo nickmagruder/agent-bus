@@ -37,8 +37,10 @@ into tracked files.
   `src/shared/hook-protocol.ts`, never the whole payload.
 - **Git (trunk-based):** every change has a GitHub issue (phase label and
   milestone where it fits); branch `<type>/<issue>-<slug>` from the latest
-  `main`; PR body starts `Closes #N`; Nick squash-merges. Commit, push and
-  open PRs only when Nick asks in the session. Never `--no-verify`.
+  `main`; PR body starts `Closes #N`; add new issues to the
+  [AI Orchestration board](https://github.com/users/nickmagruder/projects/5).
+  Branch, commit, push and open the PR as the natural next step (clankers
+  `standards/git.md`); only Nick merges. Never `--no-verify`.
 - **Copilot review:** reviews every PR automatically. Before handing a PR
   back, fix the valid comments and reply with a reason to the rest, then
   resolve the threads.
