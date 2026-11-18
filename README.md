@@ -1,6 +1,6 @@
 # agent-bus
 
-**Version:** 0.6.2 · [MIT license](LICENSE)
+**Version:** 0.6.3 · [MIT license](LICENSE)
 
 [![ci](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml)
 [![codeql](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml)
@@ -355,6 +355,16 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.6.3 (2026-11-18)
+
+- Work is tracked on the
+  [AI Orchestration board](https://github.com/users/nickmagruder/projects/5)
+  (with clankers); `AGENTS.md` says to add new issues to it.
+- `.github/skills/code-review` synced from the canonical clankers
+  `skills/pr-review`.
+- `docs/going-public.md`: boards and clankers standards recorded; code-notes
+  keeps its worktree flow; clankers merges after a Copilot review.
 
 ### 0.6.2 (2026-11-18)
 

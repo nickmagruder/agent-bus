@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: "Review a pull request along two separate axes: Standards (does the diff follow this repo's documented coding standards?) and Spec (does it do what the linked issue asked?). Use when reviewing a pull request or a branch against main."
+description: "Review a pull request along two separate axes: Standards (does the diff follow this repo's documented coding standards?) and Spec (does it do what the linked issue asked?). Use when reviewing a pull request or a branch against main. Repos vendor it as .github/skills/code-review/ for Copilot's PR review."
 ---
 
 <!--
@@ -8,8 +8,28 @@ Adapted from mattpocock/skills, skills/engineering/code-review/SKILL.md
 (commit 7739eaed7f8f3915437a8def198a6d0d7206dbc7), MIT License,
 Copyright (c) 2026 Matt Pocock. Changes: runs unattended in pull request
 review (fixed point is the PR base, spec is the linked issue, never asks the
-user); one pass in two sections instead of parallel sub-agents; agent-bus
-standards sources added. Canonical copy: clankers `skills/pr-review/`.
+user); one pass in two sections instead of parallel sub-agents; standards
+sources for clankers-managed repos added. This is the canonical copy; see
+UPSTREAM.md. Repos vendor it as `.github/skills/code-review/SKILL.md` with
+`name: code-review`.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 -->
 
 # Two-axis pull request review
@@ -48,7 +68,7 @@ Find the originating issue, in this order:
 2. Issue references (`#N`) in the PR title, description or commit messages.
 3. A linked issue in the PR's Development sidebar.
 4. A plan file under `docs/` the PR updates for this work (for example a
-   checklist item it ticks in `docs/phase-N.md`).
+   checklist item it ticks in a phase doc).
 
 Read the issue's body, its "Done when" checklist if it has one, and any
 comments that change the scope. If there is no spec, the Spec axis reports
@@ -58,11 +78,14 @@ comments that change the scope. If there is no spec, the Spec axis reports
 
 The standards sources, in priority order:
 
-1. `CONTRIBUTING.md` (coding standards, how changes are made)
+1. `CONTRIBUTING.md` or `CODING_STANDARDS.md` (coding standards, how changes
+   are made)
 2. `AGENTS.md` (working rules, conventions)
 3. `.github/copilot-instructions.md` and any `.github/instructions/*.instructions.md`
    whose `applyTo` matches a changed file
 4. `SECURITY.md` (what counts as a security issue here)
+5. When the review runs locally and `~/.claude/clankers/standards/` exists,
+   the files there that match the change (they lose to the repo's own files)
 
 On top of what the repo documents, the Standards axis carries this **smell
 baseline** from Fowler's _Refactoring_ (ch. 3). Two rules bind it:
