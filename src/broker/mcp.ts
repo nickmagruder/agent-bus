@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { Platform } from '../shared/platform.ts';
 import { BusError, URGENCIES, type BusService } from './service.ts';
 
-export const SERVER_INFO = { name: 'agent-bus', version: '0.4.0' } as const;
+export const SERVER_INFO = { name: 'agent-bus', version: '0.4.1' } as const;
 
 const sessionArg = z
   .string()
