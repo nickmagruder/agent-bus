@@ -14,11 +14,15 @@ below, and [`AGENTS.md`](AGENTS.md) holds the agent-facing version.
 - **Every PR** links its issue (`Closes #12`), says how it was tested, and
   updates the docs it affects (README changelog, `AGENTS.md` key files, phase
   docs).
-- **CI must pass:** typecheck, lint, Prettier, Vitest, markdownlint and a
-  gitleaks secret scan (`npm run check` runs the first four locally).
+- **CI must pass:** typecheck, ESLint, markdownlint, Prettier, Vitest and a
+  gitleaks secret scan (`npm run check` runs all but the scan locally).
+  Copilot reviews every PR; address or answer its comments before merging.
 - **Commit messages:** imperative summary of 72 characters or fewer ("Add
-  digest scheduler", not "Added…"); a body explains why when it isn't
-  obvious; one logical change per commit.
+  digest scheduler", not "Added…"), no trailing period, a blank line before
+  the body; a body explains why when it isn't obvious; one logical change per
+  commit. The commit-msg hook (`scripts/commit-msg.ts`) checks the summary.
+- **Never skip the hooks** (`--no-verify`): the pre-commit hook runs the
+  linters and the secret scan.
 - **Versioning:** semver in `package.json` and the README; every change gets
   a changelog entry (newest first). PATCH for fixes and docs, MINOR for new
   features, MAJOR for breaking changes.

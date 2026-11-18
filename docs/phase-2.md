@@ -168,67 +168,37 @@ and leave (a) to the app's reconnect (decided below).
       caps and open limit; v2 and v3 upgrades; nested transactions; end to
       end over `/mcp` (pending → `wait_for_reply`, answer during the hold,
       ownership, message during `wait_for_reply`)
-- [ ] Not tested: a broker restart during a held call (the call drops; the
-      question survives and `wait_for_reply` picks it up, by design) and a
-      client disconnect mid-hold (the hold ends at its timeout)
+- [ ] Not tested: a broker restart during a held call, and a client
+      disconnect mid-hold: [#26](https://github.com/nickmagruder/agent-bus/issues/26)
 - [x] Live: answered by button from the phone and by thread reply; left
       to remind and expire (2026-11-18, see Live results)
 
-### PR 3: hooks
+### Remaining work (GitHub issues)
 
-- [ ] `Stop` inbox check → `decision: block` with reason (Claude and Codex
-      output formats); loop guard
-- [ ] `UserPromptSubmit` bus-ID injection, once per session, only when
-      `SessionStart` didn't deliver it
-- [ ] Update `AGENTS.md` working rule ("hooks only notify") and
-      `hook-protocol.ts`; tests for every path (messages / none / broker
-      down / loop guard / `stop_hook_active`)
+From 2026-11-18, status lives in the
+[Phase 2 milestone](https://github.com/nickmagruder/agent-bus/milestone/3);
+this doc keeps the design, decisions and live results.
 
-### PR 4: daily digest
+- PR 3, hooks: [#21](https://github.com/nickmagruder/agent-bus/issues/21)
+  Stop-hook inbox check, [#22](https://github.com/nickmagruder/agent-bus/issues/22)
+  `UserPromptSubmit` bus-ID injection
+- PR 4: [#23](https://github.com/nickmagruder/agent-bus/issues/23) daily
+  digest, [#24](https://github.com/nickmagruder/agent-bus/issues/24) clankers
+  PRs in the digest
+- clankers PR: [#32](https://github.com/nickmagruder/agent-bus/issues/32)
+- Verify on each app: [#25](https://github.com/nickmagruder/agent-bus/issues/25)
+- Test gap from PR 2: [#26](https://github.com/nickmagruder/agent-bus/issues/26)
+- Follow-ups: [#27](https://github.com/nickmagruder/agent-bus/issues/27)
+  quieter approval DMs, [#28](https://github.com/nickmagruder/agent-bus/issues/28)
+  grace period before approval DMs,
+  [#29](https://github.com/nickmagruder/agent-bus/issues/29) reminder DM
+  styling, [#30](https://github.com/nickmagruder/agent-bus/issues/30)
+  live-test MCP client
 
-- [ ] Digest builder + scheduler; catch-up at start; tests with a fake clock
-
-### clankers PR
-
-- [ ] `standards/agent-comms.md` v1.1: when to use `ask_human` vs
-      `notify_human urgent`; always give a default; call `check_inbox` at
-      natural checkpoints (and always on Copilot); what `pending` /
-      `expired` mean; my replies vs other text
-- [ ] `install.ps1 -AgentBus`: new hook events (if any)
-- [ ] Plan: Phase 2 checklist and findings
-
-### Verify (on each app, answering from my phone)
-
-- [ ] Claude Code: `ask_human` answered by button, by reply, and left to
-      expire; thread reply picked up by the Stop hook
-- [ ] Codex: same; **confirm progress notifications keep a > 300 s call
-      alive**
-- [ ] Copilot: `ask_human` + `check_inbox`; **confirm progress
-      notifications keep a > 180 s call alive**
-- [ ] Someone else's reply / a bot message is ignored (second Slack account or
-      a workflow post)
-- [ ] Digest arrives once
-- [ ] Claude Code through the app's own MCP connection (2026-11-18 run used
-      a client script because this session's agent-bus never reconnected)
-- [ ] A top-level DM to the bot gets the "reply in a thread" hint, at most
-      hourly
-
-### Follow-ups
-
-- [ ] Quieter approval DMs: a testing session got a 🚨 DM for every Bash,
-      PowerShell and Claude in Chrome prompt (one per 2 min). Consider
-      skipping read-only tools or a per-session quiet mode (2026-11-18)
-- [ ] Don't DM approvals I'm already answering in the app: `PermissionRequest`
-      DMs at once (`hookPing` → `deliver`), so a prompt I approve within
-      seconds still buzzes Slack. Hold the DM for a grace period (~60 s) and
-      drop it if the prompt was resolved first (e.g. a `PostToolUse` or any
-      later hook event from the same app session); needs tests for the
-      held, cancelled and sent paths (2026-11-18)
-- [ ] Reminder DM uses the bot's name and icon: apply `style(session)` like
-      the question DM (2026-11-18)
-- [ ] Keep a live-test MCP client in the repo (e.g. `scripts/mcp-call.ts`):
-      the 2026-11-18 run used a throwaway script in the session scratchpad
-      (2026-11-18)
+Shipped: PR 1 [#7](https://github.com/nickmagruder/agent-bus/pull/7)
+([#18](https://github.com/nickmagruder/agent-bus/issues/18)), PR 2
+[#8](https://github.com/nickmagruder/agent-bus/pull/8)
+([#19](https://github.com/nickmagruder/agent-bus/issues/19)).
 
 ## Live results
 

@@ -7,31 +7,33 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read # gitleaks-action lists the PR's commits
 
 jobs:
+  # The ruleset on main requires this job by name: keep it called `check`.
   check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read # gitleaks-action lists the PR's commits
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # full history for the secret scan
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
+      - run: npm run lint:md
       - run: npm run format:check
       - run: npm test
 
-      - name: Markdown lint
-        run: npx --yes markdownlint-cli2@0.18.1 "**/*.md" "#node_modules"
-
       - name: Secret scan
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
