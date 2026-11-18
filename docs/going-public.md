@@ -1,6 +1,6 @@
 # Going public: repo standards before Phase 3
 
-Status: **in progress** (2026-11-18): steps 1–5b done; step 6 in [clankers#11](https://github.com/nickmagruder/clankers/pull/11); step 7 (CrashMap, esri-exporter) next.
+Status: **in progress** (2026-11-18): steps 1–6 done (step 6 merged as [clankers#11](https://github.com/nickmagruder/clankers/pull/11)); step 7 (CrashMap, esri-exporter) next.
 
 Five goals:
 
