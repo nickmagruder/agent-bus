@@ -11,7 +11,7 @@ Design, decisions and phases: [clankers `docs/slack-integration-plan.md`](https:
 
 **Current stage: Phase 1** (outbound pings). Broker, hook CLI, start-at-login
 and app wiring (clankers `install.ps1 -AgentBus`) are in; verified live on
-Claude Code, with Codex and Copilot still to check.
+Claude Code, Codex and Copilot.
 Plan, checklist and live results: [docs/phase-1.md](docs/phase-1.md). Phase 0 results:
 [docs/spikes/phase-0.md](docs/spikes/phase-0.md) (the spike code itself was
 removed in 0.3.0; it's in git history at `9062a63`).
@@ -49,12 +49,12 @@ bodies) and a short message snippet are sent.
 node C:/Users/nickm/source/repos/agent-bus/src/cli/hook.ts claude   # or codex
 ```
 
-| Event               | What happens                                                                                                                          |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `SessionStart`      | Maps the app session to a bus session and adds its ID (`claude/agent-bus/3f2a`) to the agent's context. Nothing is posted.            |
-| `PermissionRequest` | Urgent DM with the tool and command; at most one per session per 2 minutes. The hook prints nothing: the app's own prompt decides.    |
-| `Notification`      | Claude `permission_prompt` only: same DM, sharing the 2-minute throttle with `PermissionRequest`.                                     |
-| `Stop`              | "Turn finished; waiting for you" with a snippet in the session's thread; at most one per 10 minutes. Skipped when `stop_hook_active`. |
+| Event               | What happens                                                                                                                                                                                                         |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SessionStart`      | Maps the app session to a bus session and adds its ID (`claude/agent-bus/3f2a`) to the agent's context. Nothing is posted.                                                                                           |
+| `PermissionRequest` | Urgent DM with the tool and command; at most one per session per 2 minutes. The hook prints nothing: the app's own prompt decides. No DM for agent-bus's own tools (`mcp__agent-bus__*`, Codex `mcp__agent_bus__*`). |
+| `Notification`      | Claude `permission_prompt` only: same DM, sharing the 2-minute throttle with `PermissionRequest`.                                                                                                                    |
+| `Stop`              | "Turn finished; waiting for you" with a snippet in the session's thread; at most one per 10 minutes. Skipped when `stop_hook_active`.                                                                                |
 
 A session's thread root is posted on its first thread post, so short
 sessions that never post stay out of Slack. clankers `scripts/install.ps1
@@ -66,6 +66,7 @@ Copilot is added by hand (Customize › MCP).
 ```powershell
 .\scripts\install-task.ps1 -WhatIf     # preview
 .\scripts\install-task.ps1 -StartNow   # register and start now
+.\scripts\install-task.ps1 -Restart    # after pulling new code or changing env vars
 .\scripts\install-task.ps1 -Uninstall
 ```
 
@@ -75,6 +76,9 @@ admin rights). At logon a hidden Windows PowerShell runs
 restarts it after a crash (5 s, doubling to 5 min). It stops retrying on exit
 code 78: an invalid environment or the port already in use, which a restart
 can't fix. Stop any broker you started by hand before `-StartNow`.
+`-Restart` and `-Uninstall` stop the launcher first, then the broker it
+started (matched by its absolute `main.ts` path, so a hand-started broker is
+left alone).
 
 Logs: `%LOCALAPPDATA%\agent-bus\logs\broker-YYYY-MM-DD.log` (JSON lines, local
 date, kept 14 days) and `launcher.log`.
@@ -128,6 +132,16 @@ channel it should post to.
 | `npm test`       | Vitest                                  |
 
 ## Changelog
+
+### 0.4.1 (2026-11-17)
+
+- No approval DM for agent-bus's own tools: asking me to approve an agent's
+  message to me was noise, and Codex asks on every MCP call. Recorded in the
+  audit log as `own_tool`.
+- `install-task.ps1 -Restart` (and `-Uninstall`) stop the task's broker
+  process too, not just the launcher.
+- Codex and Copilot live results recorded in `docs/phase-1.md`: all three
+  apps verified.
 
 ### 0.4.0 (2026-11-17)
 

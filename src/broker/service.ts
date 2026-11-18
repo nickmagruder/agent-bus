@@ -71,7 +71,30 @@ export interface HookInput {
   stopHookActive?: boolean | undefined;
 }
 
-export type HookAction = 'context' | 'sent' | 'throttled' | 'rate_limited' | 'ignored';
+export type HookAction =
+  | 'context'
+  | 'sent'
+  | 'throttled'
+  | 'rate_limited'
+  | 'ignored'
+  /** An approval prompt for agent-bus's own tools: no DM (see isOwnToolPrompt). */
+  | 'own_tool';
+
+/**
+ * agent-bus's own MCP tools as the apps name them: Claude Code
+ * `mcp__agent-bus__register`, Codex `mcp__agent_bus__notify_human`.
+ */
+const OWN_TOOL = /\bmcp__agent[-_]bus__/i;
+
+/**
+ * An approval prompt for one of agent-bus's own tools. A DM asking me to
+ * approve an agent's message to me is noise: the message itself arrives once
+ * approved, and Codex asks on every MCP call. Claude's permission_prompt
+ * notification carries the tool name only in its message text.
+ */
+export function isOwnToolPrompt(input: HookInput): boolean {
+  return OWN_TOOL.test(input.toolName ?? '') || OWN_TOOL.test(input.message ?? '');
+}
 
 export interface HookResult {
   session: string;
@@ -168,11 +191,15 @@ export class BusService {
         context = sessionContext(session);
         break;
       case 'PermissionRequest':
-        action = this.hookPing(session, 'permission', 'urgent', permissionText(input));
+        action = isOwnToolPrompt(input)
+          ? 'own_tool'
+          : this.hookPing(session, 'permission', 'urgent', permissionText(input));
         break;
       case 'Notification':
         if (input.notificationType === 'permission_prompt') {
-          action = this.hookPing(session, 'permission', 'urgent', permissionText(input));
+          action = isOwnToolPrompt(input)
+            ? 'own_tool'
+            : this.hookPing(session, 'permission', 'urgent', permissionText(input));
         }
         break;
       case 'Stop':

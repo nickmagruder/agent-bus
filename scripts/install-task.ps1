@@ -18,16 +18,22 @@
 .PARAMETER StartNow
   Start the task right after registering it.
 
+.PARAMETER Restart
+  Stop the task and the broker it started, then start it again: picks up new
+  code and changed environment variables. Doesn't touch a broker you started
+  by hand with npm run broker.
+
 .PARAMETER Uninstall
-  Stop and remove the task.
+  Stop the task and its broker, and remove the task.
 
 .EXAMPLE
   .\scripts\install-task.ps1 -WhatIf
   .\scripts\install-task.ps1 -StartNow
+  .\scripts\install-task.ps1 -Restart
   .\scripts\install-task.ps1 -Uninstall
 #>
 [CmdletBinding(SupportsShouldProcess)]
-param([switch]$StartNow, [switch]$Uninstall)
+param([switch]$StartNow, [switch]$Restart, [switch]$Uninstall)
 
 $ErrorActionPreference = 'Stop'
 
@@ -39,15 +45,38 @@ $Shell    = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershel
 $User     = "$env:USERDOMAIN\$env:USERNAME"
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 
-if ($Uninstall) {
+# The broker the task started: run-broker.ps1 passes the absolute path of
+# main.ts, unlike npm run broker (relative), so hand-started brokers don't match.
+function Get-TaskBroker {
+    $main = (Join-Path $Repo 'src\broker\main.ts').ToLowerInvariant()
+    @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" |
+        Where-Object { $_.CommandLine -and $_.CommandLine.ToLowerInvariant().Contains($main) })
+}
+
+# Stops the launcher first (it would otherwise restart node), then the broker.
+function Stop-TaskBroker {
+    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    foreach ($process in Get-TaskBroker) {
+        Stop-Process -Id $process.ProcessId -Force
+        Write-Host "stopped  broker (node pid $($process.ProcessId))"
+    }
+}
+
+if ($Uninstall -or $Restart) {
     if (-not $existing) {
-        Write-Host "not installed: $TaskName"
+        Write-Host "not installed: $TaskName (run without -Uninstall/-Restart to register it)"
         return
     }
-    if ($PSCmdlet.ShouldProcess($TaskName, 'Stop and remove scheduled task')) {
-        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
-        Write-Host "removed  $TaskName (a broker it started may still be running; end node.exe or log off)"
+    if ($Uninstall) {
+        if ($PSCmdlet.ShouldProcess($TaskName, 'Stop broker and remove scheduled task')) {
+            Stop-TaskBroker
+            Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+            Write-Host "removed  $TaskName"
+        }
+    } elseif ($PSCmdlet.ShouldProcess($TaskName, 'Stop broker and start the task again')) {
+        Stop-TaskBroker
+        Start-ScheduledTask -TaskName $TaskName
+        Write-Host "started  $TaskName (check the log: $env:LOCALAPPDATA\agent-bus\logs)"
     }
     return
 }

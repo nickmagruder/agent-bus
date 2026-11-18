@@ -127,6 +127,50 @@ describe('permission pings', () => {
   });
 });
 
+describe("approval prompts for agent-bus's own tools", () => {
+  it.each([
+    ['Claude', 'mcp__agent-bus__register'],
+    ['Codex', 'mcp__agent_bus__notify_human'],
+  ])('sends no DM for %s naming (%s)', (_, toolName) => {
+    expect(hook({ event: 'PermissionRequest', toolName }).action).toBe('own_tool');
+    expect(queued(DM_TARGET)).toEqual([]);
+  });
+
+  it("recognises Claude's permission_prompt notification by its message", () => {
+    expect(
+      hook({
+        event: 'Notification',
+        notificationType: 'permission_prompt',
+        message: 'Claude needs your permission to use mcp__agent-bus__notify_human',
+      }).action,
+    ).toBe('own_tool');
+    expect(queued(DM_TARGET)).toEqual([]);
+  });
+
+  it("doesn't use up the throttle, so the next real prompt still DMs", () => {
+    hook({ event: 'PermissionRequest', toolName: 'mcp__agent-bus__register' });
+    expect(hook({ event: 'PermissionRequest', toolName: 'PowerShell' }).action).toBe('sent');
+  });
+
+  it.each(['mcp__agent-busy__x', 'mcp__other__agent-bus', 'agent-bus', 'mcp__slack__post'])(
+    'still DMs for other tools such as %s',
+    (toolName) => {
+      expect(hook({ event: 'PermissionRequest', toolName }).action).toBe('sent');
+    },
+  );
+
+  it('audits the skipped prompt', () => {
+    hook({ event: 'PermissionRequest', toolName: 'mcp__agent_bus__register' });
+    expect(
+      store.countEvents({
+        kind: 'hook',
+        since: new Date(0),
+        dataField: { name: 'action', value: 'own_tool' },
+      }),
+    ).toBe(1);
+  });
+});
+
 describe('Stop', () => {
   it('announces the session, then posts the turn-finished snippet in its thread', () => {
     const { session } = hook({ event: 'Stop', lastMessage: 'Done.\nTests pass <3' });

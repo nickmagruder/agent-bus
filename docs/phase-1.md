@@ -1,6 +1,6 @@
 # Phase 1: outbound pings
 
-Status: **in progress**: PRs 1–2 and the clankers wiring merged; PR 3 (start at login, polish) on `phase-1/login-and-polish`. Claude Code verified live; Codex and Copilot to check (2026-11-17)
+Status: **in progress**: PRs 1–3 and the clankers wiring merged; broker runs from the logon task. Claude Code, Codex and Copilot verified live; a real logon start left to check (2026-11-17)
 
 Goal: a session on any of the three apps can post to its Slack thread, and
 DM me when it is blocked. Design and phases: clankers
@@ -90,8 +90,8 @@ scripts/    install-task.ps1 (Task Scheduler), run-broker.ps1 (launcher with res
 ### Verify
 
 - [x] Claude Code: session posts to its thread and DMs me when blocked
-- [ ] Codex: same, after trusting the hooks in Settings > Hooks
-- [ ] Copilot: added by hand in Customize › MCP; `notify_human` works
+- [x] Codex: same, after trusting the hooks in Settings > Hooks
+- [x] Copilot: added by hand in Customize › MCP; `notify_human` works
 - [ ] Broker starts at logon from the scheduled task
 
 ## Live results
@@ -107,6 +107,28 @@ scripts/    install-task.ps1 (Task Scheduler), run-broker.ps1 (launcher with res
 | `PermissionRequest` hook → DM                                | ✅ DM names the tool; later prompts in the burst recorded as `throttled`                                                                        |
 | `register` (hook-minted ID) and `notify_human` normal/urgent | ✅ purpose line and status update in the thread, urgent DM; all 6 posts sent on the first attempt                                               |
 | Findings                                                     | Raw `**bold**` in snippets; MCP approval DMs had no detail; `register` reported `#proj-agent-bus` while posting to `#agents`; all fixed in PR 3 |
+
+### Codex (desktop, 2026-11-17, broker 0.4.0 from the logon task)
+
+| Check                                                 | Result                                                                                                                                                                               |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Hooks trusted from user config                        | ✅ `PermissionRequest`, `SessionStart`, `Stop` listed under Settings > Hooks › User config and enabled                                                                               |
+| `SessionStart` `hookSpecificOutput.additionalContext` | ✅ the agent quoted `codex/agent-bus/ce85` (settles the open docs question)                                                                                                          |
+| User env vars reach hook commands                     | ✅ hooks authenticated with `AGENT_BUS_TOKEN_CODEX`; no rejected requests in the broker log                                                                                          |
+| Channel chosen up front                               | ✅ session created with channel `agents`                                                                                                                                             |
+| `Stop` hook → thread root + "Turn finished"           | ✅ name "Codex · agent-bus" and icon shown; two later stops `throttled`                                                                                                              |
+| `PermissionRequest` with empty output                 | ✅ DM sent and the in-app "Allow …" prompt still appeared (empty output falls through)                                                                                               |
+| MCP via `bearer_token_env_var`, `notify_human` normal | ✅ status update in the thread; all 4 posts sent on the first attempt                                                                                                                |
+| Findings                                              | `git status` needed no approval (sandbox), so the only DM was the approval for `notify_human` itself: Codex asks on every MCP call. Fixed in 0.4.1: no DMs for agent-bus's own tools |
+
+### Copilot (desktop, 2026-11-17, MCP added by hand)
+
+| Check                                        | Result                                                                                                                                                                                 |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MCP with `Bearer ${AGENT_BUS_TOKEN_COPILOT}` | ✅ connected once Copilot had the token; two earlier attempts (05:05, 05:07 UTC) got 401s, each 16 requests including OAuth discovery probes (`/.well-known/oauth-protected-resource`) |
+| `register` without a hook-minted ID          | ✅ minted `copilot/agent-bus/9d12`; branch passed by the agent (Copilot's worktree branch `nickmagruder-reimagined-disco`); channel `agents` chosen up front                           |
+| `notify_human` normal and urgent             | ✅ status update in the thread, urgent DM; all 3 posts sent on the first attempt                                                                                                       |
+| Hooks                                        | n/a: Copilot desktop hooks still don't run (Phase 0), so no automatic pings, as expected                                                                                               |
 
 ## Build notes
 
@@ -130,12 +152,12 @@ scripts/    install-task.ps1 (Task Scheduler), run-broker.ps1 (launcher with res
 - The Phase 0 stdio bridge went with the spike; it's in git history
   (`9062a63`) if a client ever needs stdio.
 
+- Approval prompts for agent-bus's own tools (`mcp__agent-bus__*` in
+  Claude, `mcp__agent_bus__*` in Codex) send no DM; they're audited as
+  `own_tool`. Choosing "Always allow" for them in Codex also avoids the
+  in-app prompt.
+
 ## Still to check live
 
-- Codex `SessionStart` honours `hookSpecificOutput.additionalContext` (docs
-  say yes; the docs fetch was partly a summary, so confirm).
-- Codex `PermissionRequest` with empty output falls through to the normal
-  prompt (Phase 0 log-only mode suggests yes).
-- Codex passes the user's env vars to hook commands (its MCP
-  `bearer_token_env_var` reads them, so likely).
+- The logon task starting the broker at an actual sign-in.
 - Codex and Copilot honour progress notifications (needed in Phase 2).
