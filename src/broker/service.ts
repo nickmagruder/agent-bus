@@ -24,6 +24,13 @@ export const LIMITS = {
   stopBlocksPerSession: 6,
   /** Replies handed over in one Stop-hook block; the rest wait for the next. */
   stopTakePerBlock: 5,
+  /**
+   * A hook response carrying the bus ID counts as delivered when written
+   * within this long of the request arriving: well inside the hook's 2 s wait.
+   */
+  contextConfirmMs: 1000,
+  /** Slow responses carrying the bus ID after which prompts stop re-sending it. */
+  contextSlowDeliveries: 3,
 } as const;
 
 /** Minimum gap between hook pings of one kind for one session. */
@@ -123,7 +130,7 @@ export function isOwnToolPrompt(input: HookInput): boolean {
 export interface HookResult {
   session: string;
   action: HookAction;
-  /** Text for the app to add to the model's context (SessionStart). */
+  /** Text for the app to add to the model's context (SessionStart, UserPromptSubmit). */
   context?: string;
   /** Why the agent must keep going (Stop, action `blocked`): my replies, labelled as mine. */
   reason?: string;
@@ -141,6 +148,9 @@ const TURN_EVENTS = ['Stop', 'UserPromptSubmit', 'SessionStart'] as const;
 
 /** Platforms whose Stop hooks run and honour `decision: block` (Phase 0). */
 const STOP_BLOCK_PLATFORMS: ReadonlySet<Platform> = new Set(['claude', 'codex']);
+
+/** Platforms whose hooks run and print added context (Copilot's desktop hooks don't run). */
+const CONTEXT_PLATFORMS: ReadonlySet<Platform> = STOP_BLOCK_PLATFORMS;
 
 export type Route = 'dm' | 'thread' | 'digest';
 
@@ -298,6 +308,14 @@ export class BusService {
         action = 'context';
         context = sessionContext(session);
         break;
+      case 'UserPromptSubmit':
+        // The sign-in race: SessionStart ran before the broker was up, so the
+        // agent never got its bus ID. Hand it over on the first prompt instead.
+        if (!this.contextDelivered(session)) {
+          action = 'context';
+          context = sessionContext(session);
+        }
+        break;
       case 'PermissionRequest':
         action = isOwnToolPrompt(input)
           ? 'own_tool'
@@ -376,6 +394,74 @@ export class BusService {
       platform,
       sessionId: session.id,
       data: { event: input.event, action, source: input.source ?? null },
+    });
+  }
+
+  /**
+   * Records that a hook response carrying the bus ID was written to the hook
+   * (Claude Code and Codex print it as added context). Called by the HTTP
+   * layer on the response's 'finish', with how long the request took.
+   * Written isn't read: the hook may already have timed out. So only a fast
+   * response counts as delivered; a slow one counts towards the re-send cap.
+   */
+  markContextDelivered(
+    platform: Platform,
+    sessionId: string,
+    event: string,
+    elapsedMs: number,
+  ): void {
+    if (!CONTEXT_PLATFORMS.has(platform)) return;
+    const fast = elapsedMs <= LIMITS.contextConfirmMs;
+    this.store.appendEvent({
+      kind: 'hook.context_delivered',
+      platform,
+      sessionId,
+      data: { event, elapsedMs: Math.round(elapsedMs), fast: fast ? 'yes' : 'no' },
+    });
+  }
+
+  /**
+   * Whether the agent has its bus ID, as far as the broker can tell, since
+   * the last SessionStart it saw (after /clear or compaction the agent starts
+   * over): it used the ID in an MCP call, a response carrying it was written
+   * quickly, or enough slow ones were written that one surely got through.
+   */
+  private contextDelivered(session: SessionRecord): boolean {
+    const start = this.store.latestEvent({
+      kind: 'hook',
+      sessionId: session.id,
+      dataField: { name: 'event', value: 'SessionStart' },
+    });
+    const after = { sessionId: session.id, afterId: Number(start?.eventId ?? 0) };
+    if (this.store.countEventsAfter({ kind: 'session.used', ...after }) > 0) return true;
+    const delivered = (fast?: 'yes') =>
+      this.store.countEventsAfter({
+        kind: 'hook.context_delivered',
+        ...after,
+        ...(fast ? { dataField: { name: 'fast', value: fast } } : {}),
+      });
+    return delivered('yes') > 0 || delivered() >= LIMITS.contextSlowDeliveries;
+  }
+
+  /**
+   * Notes that the agent used this session's ID in an MCP call, which proves
+   * it has the ID. Once per SessionStart (see contextDelivered).
+   */
+  private markUsed(session: SessionRecord, action: string): void {
+    const start = this.store.latestEvent({
+      kind: 'hook',
+      sessionId: session.id,
+      dataField: { name: 'event', value: 'SessionStart' },
+    });
+    const afterId = Number(start?.eventId ?? 0);
+    if (this.store.countEventsAfter({ kind: 'session.used', sessionId: session.id, afterId }) > 0) {
+      return;
+    }
+    this.store.appendEvent({
+      kind: 'session.used',
+      platform: session.platform,
+      sessionId: session.id,
+      data: { action },
     });
   }
 
@@ -608,6 +694,7 @@ export class BusService {
       this.deny(platform, null, 'wrong_platform', action, id);
       throw new BusError('wrong_platform', `Session "${id}" belongs to another platform.`);
     }
+    this.markUsed(session, action);
     return session;
   }
 

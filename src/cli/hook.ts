@@ -15,14 +15,16 @@ import { PLATFORMS, type Platform } from '../shared/platform.ts';
 import { extractHookRequest, findRepo, renderHookOutput } from './hook-extract.ts';
 
 /**
- * SessionStart delays the session's first turn, so it gets the shortest wait.
+ * SessionStart delays the session's first turn and UserPromptSubmit every
+ * prompt, so they get the shortest wait.
  * Stop isn't latency-sensitive and may carry my Slack replies: give a busy
  * broker longer before the agent stops without them.
  */
 const TIMEOUT_MS = { SessionStart: 2000, Stop: 15_000, default: 3000 } as const;
 
 export function timeoutFor(event: string): number {
-  if (event === 'SessionStart') return TIMEOUT_MS.SessionStart;
+  // Both delay the agent: SessionStart its first turn, UserPromptSubmit every prompt.
+  if (event === 'SessionStart' || event === 'UserPromptSubmit') return TIMEOUT_MS.SessionStart;
   if (event === 'Stop') return TIMEOUT_MS.Stop;
   return TIMEOUT_MS.default;
 }
