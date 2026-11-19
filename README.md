@@ -399,6 +399,12 @@ are made.
   the environment and prints the result, for live tests when a session's own
   MCP connection is down ([#30](https://github.com/nickmagruder/agent-bus/issues/30)).
 
+### 0.10.1 (2026-11-18)
+
+- The 15-minute question reminder DM now shows the session's name and
+  platform icon, like the question itself
+  ([#29](https://github.com/nickmagruder/agent-bus/issues/29)).
+
 ### 0.10.0 (2026-11-18)
 
 - **Merged PRs in the digest** ([#24](https://github.com/nickmagruder/agent-bus/issues/24)):
