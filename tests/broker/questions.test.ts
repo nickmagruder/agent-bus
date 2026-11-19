@@ -338,8 +338,10 @@ describe('reminders and expiry', () => {
     const questionDm = store.db
       .prepare('SELECT username, icon FROM outbox WHERE id = ?')
       .get(reload(question).postId) as { username: string | null; icon: string | null };
-    expect(questionDm.username).toMatch(/^Claude Code · /);
-    expect(reminders[0]).toMatchObject({ username: questionDm.username, icon: questionDm.icon });
+    // Exactly the session's style, and the same as its question DM.
+    const sessionStyle = { username: 'Claude Code · clankers', icon: ':large_orange_circle:' };
+    expect(questionDm).toEqual(sessionStyle);
+    expect(reminders[0]).toMatchObject(sessionStyle);
     expect(reminders[0]?.text).toContain(question.id);
     expect(reload(question).reminderPostId).not.toBeNull();
 
