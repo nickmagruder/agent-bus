@@ -280,6 +280,10 @@ describe('POST /hook', () => {
     ['unknown field', { event: 'Stop', appSessionId: 'a', decision: 'allow' }],
     ['oversized text', { event: 'Stop', appSessionId: 'a', lastMessage: 'x'.repeat(2001) }],
     ['wrong type', { event: 'Stop', appSessionId: 'a', stopHookActive: 'yes' }],
+    [
+      'a malformed toolAction',
+      { event: 'PermissionRequest', appSessionId: 'a', toolAction: 'Shot!' },
+    ],
   ])('rejects %s with 400', async (_, body) => {
     expect(await post(JSON.stringify(body))).toBe(400);
   });

@@ -60,6 +60,9 @@ export const APPROVAL = {
   staleMs: 15 * 60_000,
 } as const;
 
+/** How soon Claude's Notification follows the PermissionRequest for one prompt. */
+const READ_ONLY_PAIR_MS = 10_000;
+
 /** Hook events that are the permission prompt itself, not a sign it was answered. */
 const PROMPT_EVENTS: ReadonlySet<string> = new Set(['PermissionRequest', 'Notification']);
 
@@ -118,6 +121,8 @@ export interface HookInput {
   message?: string | undefined;
   toolName?: string | undefined;
   toolSummary?: string | undefined;
+  /** A browser `computer` call's `action` argument (screenshot, left_click, …). */
+  toolAction?: string | undefined;
   lastMessage?: string | undefined;
   stopHookActive?: boolean | undefined;
 }
@@ -167,17 +172,98 @@ const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   'ReadMcpResourceTool',
 ]);
 
-/**
- * An MCP tool named like a read, by the usual verbs (`mcp__server__get_x`,
- * `__list_x`, `__read_x`, `__search_x`, `__find`), plus the browser tools'
- * tab listing. Matched on the tool part only, never the server name.
- */
-const READ_ONLY_MCP_TOOL =
-  /^mcp__[^_]+(?:_[^_]+)*__(?:get|list|read|search|find|fetch|describe|view)(?:_[a-z0-9_]*)?$|^mcp__[^_]+(?:_[^_]+)*__tabs_context(?:_mcp)?$/i;
+/** Verbs an MCP tool's name starts with when it only reads. */
+const READ_VERBS: ReadonlySet<string> = new Set([
+  'get',
+  'list',
+  'read',
+  'search',
+  'find',
+  'fetch',
+  'describe',
+  'view',
+]);
 
-/** A browser `computer` call that only looks: a screenshot or a zoom. */
-const LOOK_ONLY_COMPUTER = /^mcp__[^_]+(?:_[^_]+)*__computer$/i;
-const LOOK_ONLY_ACTION = /^action: (?:screenshot|zoom)(?:;|$)/;
+/**
+ * Words that make a name starting with a read verb a write after all
+ * (`find_and_replace`, `get_or_create_user`, `list_and_delete_old`). Any of
+ * them, as a whole `_`-separated word anywhere in the name, means a DM.
+ */
+const WRITE_WORDS: ReadonlySet<string> = new Set([
+  'and',
+  'or',
+  'then',
+  'create',
+  'update',
+  'upsert',
+  'insert',
+  'delete',
+  'remove',
+  'drop',
+  'purge',
+  'clear',
+  'reset',
+  'replace',
+  'write',
+  'set',
+  'put',
+  'post',
+  'patch',
+  'send',
+  'add',
+  'edit',
+  'modify',
+  'move',
+  'rename',
+  'copy',
+  'archive',
+  'mark',
+  'assign',
+  'merge',
+  'close',
+  'submit',
+  'publish',
+  'upload',
+  'save',
+  'apply',
+  'approve',
+  'reject',
+  'cancel',
+  'run',
+  'exec',
+  'execute',
+  'invoke',
+  'trigger',
+  'start',
+  'stop',
+  'kill',
+  'enable',
+  'disable',
+  'toggle',
+  'pay',
+  'buy',
+  'transfer',
+]);
+
+/** `mcp__server__tool`: the tool part is words joined by single underscores. */
+const MCP_TOOL = /^mcp__[^_]+(?:_[^_]+)*__([A-Za-z0-9]+(?:_[A-Za-z0-9]+)*)$/;
+
+/**
+ * An MCP tool named like a read: its first word is a read verb and no word
+ * is a write word. The browser tools' tab listing counts too. Only the tool
+ * part is matched, never the server name.
+ */
+export function isReadOnlyMcpTool(tool: string): boolean {
+  const name = MCP_TOOL.exec(tool)?.[1]?.toLowerCase();
+  if (!name) return false;
+  if (name === 'tabs_context' || name === 'tabs_context_mcp') return true;
+  const [verb = '', ...rest] = name.split('_');
+  return READ_VERBS.has(verb) && !rest.some((word) => WRITE_WORDS.has(word));
+}
+
+/** A browser `computer` tool; only its screenshot and zoom actions just look. */
+const COMPUTER_TOOL = /^mcp__[^_]+(?:_[^_]+)*__computer$/i;
+const LOOK_ONLY_ACTIONS: ReadonlySet<string> = new Set(['screenshot', 'zoom']);
 
 /** Claude's permission_prompt notification names the tool only in its message. */
 const PROMPT_TOOL = /permission to use ([A-Za-z0-9_-]+)/i;
@@ -185,14 +271,15 @@ const PROMPT_TOOL = /permission to use ([A-Za-z0-9_-]+)/i;
 /**
  * An approval prompt for a tool that only reads, so a DM isn't worth a
  * buzz (#27): Claude Code's read tools, MCP tools named like reads, and a
- * browser screenshot or zoom. Shell commands always DM: there's no safe way
- * to tell a read-only command from the outside.
+ * browser screenshot or zoom (from the call's own `action` argument, not
+ * its display summary). Shell commands always DM: there's no safe way to
+ * tell a read-only command from the outside.
  */
 export function isReadOnlyToolPrompt(input: HookInput): boolean {
   const tool = input.toolName ?? PROMPT_TOOL.exec(input.message ?? '')?.[1];
   if (!tool) return false;
-  if (READ_ONLY_TOOLS.has(tool) || READ_ONLY_MCP_TOOL.test(tool)) return true;
-  return LOOK_ONLY_COMPUTER.test(tool) && LOOK_ONLY_ACTION.test(input.toolSummary ?? '');
+  if (READ_ONLY_TOOLS.has(tool) || isReadOnlyMcpTool(tool)) return true;
+  return COMPUTER_TOOL.test(tool) && LOOK_ONLY_ACTIONS.has(input.toolAction ?? '');
 }
 
 export interface HookResult {
@@ -574,13 +661,16 @@ export class BusService {
    */
   private holdPermission(session: SessionRecord, input: HookInput): HookAction {
     if (isOwnToolPrompt(input)) return 'own_tool';
+    // A read-only prompt leaves any held DM alone: parallel subagents share a
+    // session, so it may be for a write prompt that still waits.
+    if (isReadOnlyToolPrompt(input)) return 'read_only';
     const held = this.store.heldPings(session.id).filter((ping) => ping.kind === 'permission');
-    if (isReadOnlyToolPrompt(input)) {
-      // No DM for it, but a new prompt still means the held one was answered.
-      if (input.event === 'PermissionRequest') this.cancelHeldPings(session, 'superseded');
-      return 'read_only';
+    if (input.event === 'Notification') {
+      if (held.length > 0) return 'held';
+      // Claude's notification for the read-only prompt just handled may name
+      // the tool by its display name; it's the same prompt.
+      if (this.justSkippedReadOnly(session)) return 'read_only';
     }
-    if (input.event === 'Notification' && held.length > 0) return 'held';
     this.store.transaction(() => {
       for (const ping of held) this.closeHeldPing(ping, 'cancelled', 'superseded');
       const ping = this.store.holdPing({
@@ -597,6 +687,17 @@ export class BusService {
       });
     });
     return 'held';
+  }
+
+  /**
+   * Whether the session's last hook event was a read-only PermissionRequest,
+   * within READ_ONLY_PAIR_MS: Claude's Notification for it follows at once.
+   */
+  private justSkippedReadOnly(session: SessionRecord): boolean {
+    const last = this.store.latestEvent({ kind: 'hook', sessionId: session.id });
+    if (last?.event !== 'PermissionRequest' || last.action !== 'read_only') return false;
+    const at = typeof last.eventAt === 'string' ? Date.parse(last.eventAt) : Number.NaN;
+    return this.now().getTime() - at <= READ_ONLY_PAIR_MS;
   }
 
   /** Drops a session's held DMs: it has moved on (`reason` says how). */

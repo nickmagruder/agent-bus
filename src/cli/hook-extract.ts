@@ -31,6 +31,7 @@ export function extractHookRequest(
     message: clip(str(payload.message), HOOK_LIMITS.text),
     toolName: clip(toolName, HOOK_LIMITS.name),
     toolSummary: clip(summarizeToolInput(payload.tool_input), HOOK_LIMITS.text),
+    toolAction: computerAction(toolName, payload.tool_input),
     lastMessage: clip(str(payload.last_assistant_message), HOOK_LIMITS.text),
     stopHookActive:
       typeof payload.stop_hook_active === 'boolean' ? payload.stop_hook_active : undefined,
@@ -38,6 +39,18 @@ export function extractHookRequest(
   return Object.fromEntries(
     Object.entries(request).filter(([, value]) => value !== undefined),
   ) as HookRequest;
+}
+
+/**
+ * A browser `computer` tool's `action` argument (screenshot, left_click, …),
+ * so the broker can tell a look from a click from the call itself, not from
+ * the display summary. Only for tools named `mcp__*__computer`, and only a
+ * short lowercase word; anything else is left out.
+ */
+export function computerAction(toolName: string | undefined, input: unknown): string | undefined {
+  if (!toolName || !/^mcp__.+__computer$/i.test(toolName) || !isRecord(input)) return undefined;
+  const action = input.action;
+  return typeof action === 'string' && /^[a-z_]{1,32}$/.test(action) ? action : undefined;
 }
 
 /** Arguments never shown in a summary: likely secrets, or bulky bodies. */

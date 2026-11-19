@@ -321,14 +321,23 @@ Findings:
   of a hook process per tool call.
   0.12.0 ([#27](https://github.com/nickmagruder/agent-bus/issues/27)) also
   skips the DM for tools that only read (`isReadOnlyToolPrompt`): Claude
-  Code's read tools by name, MCP tools whose tool part starts with a read
+  Code's read tools by name; MCP tools whose tool part starts with a read
   verb (`get`, `list`, `read`, `search`, `find`, `fetch`, `describe`,
-  `view`; not `query`, which can write), the browser tools' tab listing, and
-  a browser `computer` screenshot or zoom. Shell commands always DM: a
-  read-only command can't be told apart safely. A read-only
-  `PermissionRequest` still cancels a held DM (the earlier prompt was
-  answered). Decided 2026-11-19: skip read-only tools; a per-session quiet
-  mode can follow if this isn't enough.
+  `view`; not `query`, which can write) and contains no write word
+  (`WRITE_WORDS`: `and`, `or`, `create`, `replace`, `delete`, `send`, …, so
+  `find_and_replace` and `get_or_create_user` still DM); the browser tools'
+  tab listing; and a browser `computer` screenshot or zoom, judged by the
+  call's `action` argument, which the hook sends as `toolAction` for
+  `mcp__*__computer` tools only (validated `^[a-z_]{1,32}$`), never by the
+  display summary. Claude's `permission_prompt` notification right after a
+  read-only `PermissionRequest` (within 10 s, nothing in between) is
+  skipped too, whatever name it uses. Shell commands always DM: a read-only
+  command can't be told apart safely. A read-only prompt never cancels a
+  held DM: parallel subagents share a session, so the held one may be for a
+  write prompt that still waits. Decided 2026-11-19: skip read-only tools;
+  a per-session quiet mode can follow if this isn't enough. Review findings
+  on #53 settled the write words, the action field, the notification pair
+  and keeping held DMs.
 - The reminder DM is posted under the bot's own name and icon, not the
   agent's (`style()` isn't applied to it); cosmetic.
 - Not yet covered live: Codex and Copilot (heartbeats past 300 s / 180 s),

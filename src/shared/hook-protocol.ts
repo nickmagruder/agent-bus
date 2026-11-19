@@ -25,6 +25,11 @@ export const hookRequestSchema = z.strictObject({
   message: text(HOOK_LIMITS.text),
   toolName: text(HOOK_LIMITS.name),
   toolSummary: text(HOOK_LIMITS.text),
+  /** A browser `computer` call's `action` argument, as given (only for those tools). */
+  toolAction: z
+    .string()
+    .regex(/^[a-z_]{1,32}$/)
+    .optional(),
   lastMessage: text(HOOK_LIMITS.text),
   stopHookActive: z.boolean().optional(),
 });
