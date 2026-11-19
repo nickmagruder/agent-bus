@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { HeldCalls } from '../../src/broker/held-calls.ts';
+import { describe, expect, it, vi } from 'vitest';
+import { HeldCalls, UNDO_WINDOW_MS } from '../../src/broker/held-calls.ts';
 
 describe('HeldCalls', () => {
   it('cancels only the call with that platform and request ID', () => {
@@ -41,5 +41,56 @@ describe('HeldCalls', () => {
     old.release();
     expect(calls.cancel('claude', 4)).toBe(1);
     expect(fresh.signal.aborted).toBe(true);
+  });
+});
+
+describe('HeldCalls: undoing a hand-over the client never read (#50)', () => {
+  it('a cancel for a call that just answered runs its undo, once', () => {
+    const calls = new HeldCalls();
+    let undone = 0;
+    calls.answeredWith('claude', 9, () => undone++);
+    expect(calls.undoable).toBe(1);
+    expect(calls.cancel('claude', 9)).toBe(1);
+    expect(undone).toBe(1);
+    expect(calls.cancel('claude', 9)).toBe(0);
+    expect(undone).toBe(1);
+    expect(calls.undoable).toBe(0);
+  });
+
+  it('only for the same platform and request ID', () => {
+    const calls = new HeldCalls();
+    let undone = 0;
+    calls.answeredWith('claude', 9, () => undone++);
+    expect(calls.cancel('codex', 9)).toBe(0);
+    expect(calls.cancel('claude', 10)).toBe(0);
+    expect(calls.cancel('claude', '9')).toBe(0);
+    expect(undone).toBe(0);
+  });
+
+  it('expires after the undo window', () => {
+    vi.useFakeTimers();
+    try {
+      const calls = new HeldCalls();
+      let undone = 0;
+      calls.answeredWith('claude', 9, () => undone++);
+      vi.advanceTimersByTime(UNDO_WINDOW_MS - 1);
+      expect(calls.undoable).toBe(1);
+      vi.advanceTimersByTime(1);
+      expect(calls.undoable).toBe(0);
+      expect(calls.cancel('claude', 9)).toBe(0);
+      expect(undone).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a live hold with that ID is cancelled instead of undoing an older answer', () => {
+    const calls = new HeldCalls();
+    let undone = 0;
+    calls.answeredWith('claude', 9, () => undone++);
+    const live = calls.hold('claude', 9);
+    expect(calls.cancel('claude', 9)).toBe(1);
+    expect(live.signal.aborted).toBe(true);
+    expect(undone).toBe(0);
   });
 });

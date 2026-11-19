@@ -12,7 +12,7 @@ import { outcomeText, QUESTION_LIMITS, type Notifier, type Questions } from './q
 import { BusError, URGENCIES, type BusService } from './service.ts';
 import type { InboxRecord, QuestionRecord } from './store.ts';
 
-export const SERVER_INFO = { name: 'agent-bus', version: '0.12.0' } as const;
+export const SERVER_INFO = { name: 'agent-bus', version: '0.12.1' } as const;
 
 export interface McpDeps {
   service: BusService;
@@ -177,8 +177,12 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
           defaultAnswer: default_action,
           timeoutMinutes: timeout_minutes,
         });
-        const outcome = await hold(asked.sessionId, extra, holdMs, () =>
-          questions.takeOutcome(asked.id, 'ask_human'),
+        const outcome = await hold(
+          asked.sessionId,
+          extra,
+          holdMs,
+          () => questions.takeOutcome(asked.id, 'ask_human'),
+          (taken) => questions.untakeOutcome(taken, 'ask_human'),
         );
         return outcome ? questionResult(outcome) : pendingResult(asked);
       }),
@@ -210,16 +214,26 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
           timeout_seconds === undefined ? holdMs : Math.min(timeout_seconds * 1000, holdMs);
         if (question_id) {
           const asked = service.requireQuestion(platform, session, question_id);
-          const outcome = await hold(asked.sessionId, extra, ms, () =>
-            questions.takeOutcome(asked.id, 'wait_for_reply'),
+          const outcome = await hold(
+            asked.sessionId,
+            extra,
+            ms,
+            () => questions.takeOutcome(asked.id, 'wait_for_reply'),
+            (taken) => questions.untakeOutcome(taken, 'wait_for_reply'),
           );
           return outcome ? questionResult(outcome) : pendingResult(asked);
         }
         const owned = service.requireSession(platform, session, 'wait_for_reply');
-        const taken = await hold(owned.id, extra, ms, () => {
-          const result = inbox.take(owned, 'wait_for_reply');
-          return result.messages.length > 0 || result.outcomes.length > 0 ? result : undefined;
-        });
+        const taken = await hold(
+          owned.id,
+          extra,
+          ms,
+          () => {
+            const result = inbox.take(owned, 'wait_for_reply');
+            return result.messages.length > 0 || result.outcomes.length > 0 ? result : undefined;
+          },
+          (result) => inbox.untake(owned, result, 'wait_for_reply'),
+        );
         if (taken) return inboxResult(taken);
         return {
           content: [
@@ -242,6 +256,7 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
     extra: HeartbeatTarget & { signal: AbortSignal; requestId: string | number },
     ms: number,
     check: () => T | undefined,
+    undo: (taken: T) => void,
   ): Promise<T | undefined> {
     const deadline = Date.now() + ms;
     // Ends on the client closing the connection or cancelling the call.
@@ -253,7 +268,12 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
         // A cancelled call takes nothing: the agent won't read the answer.
         if (signal.aborted) return undefined;
         const result = check();
-        if (result !== undefined) return result;
+        if (result !== undefined) {
+          // If the client cancels anyway, it cancelled before reading this
+          // answer: put what was taken back for its next call (#50).
+          heldCalls.answeredWith(platform, extra.requestId, () => undo(result));
+          return result;
+        }
         const left = deadline - Date.now();
         if (left <= 0) return undefined;
         if ((await notifier.wait(sessionId, left, signal)) === 'aborted') return undefined;

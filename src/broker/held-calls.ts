@@ -11,8 +11,17 @@ type RequestId = string | number;
  * can share one: a cancel then also ends the other's hold early, which only
  * makes that call return "pending" sooner (it calls wait_for_reply again).
  */
+/**
+ * How long a held call that handed something over can still be undone by a
+ * cancel. A client cancels locally first and sends `notifications/cancelled`
+ * at once, so a cancel that arrives after the answer means the client
+ * dropped it unread (MCP clients only cancel requests they haven't finished).
+ */
+export const UNDO_WINDOW_MS = 5000;
+
 export class HeldCalls {
   private readonly calls = new Map<string, Set<AbortController>>();
+  private readonly answered = new Map<string, Set<() => void>>();
 
   /** Registers a held call; its signal aborts on a matching cancel. Call `release` when the hold ends. */
   hold(platform: Platform, requestId: RequestId): { signal: AbortSignal; release: () => void } {
@@ -30,12 +39,53 @@ export class HeldCalls {
     };
   }
 
-  /** Ends the matching held calls; returns how many. */
+  /**
+   * Records that a held call answered with something it took (replies, an
+   * outcome): a cancel for it within UNDO_WINDOW_MS runs `undo`, putting
+   * them back for the next call.
+   */
+  answeredWith(platform: Platform, requestId: RequestId, undo: () => void): void {
+    const key = HeldCalls.key(platform, requestId);
+    const set = this.answered.get(key) ?? new Set();
+    const entry = () => {
+      forget();
+      undo();
+    };
+    const forget = () => {
+      clearTimeout(timer);
+      set.delete(entry);
+      if (set.size === 0 && this.answered.get(key) === set) this.answered.delete(key);
+    };
+    const timer = setTimeout(forget, UNDO_WINDOW_MS);
+    timer.unref();
+    set.add(entry);
+    this.answered.set(key, set);
+  }
+
+  /**
+   * Ends the matching held calls, or undoes the hand-over of one that just
+   * answered (its client cancelled before reading the answer). Returns how
+   * many calls it affected.
+   */
   cancel(platform: Platform, requestId: RequestId, reason = 'cancelled by the client'): number {
-    const set = this.calls.get(HeldCalls.key(platform, requestId));
-    if (!set) return 0;
-    for (const controller of set) controller.abort(reason);
-    return set.size;
+    const key = HeldCalls.key(platform, requestId);
+    const set = this.calls.get(key);
+    if (set && set.size > 0) {
+      for (const controller of set) controller.abort(reason);
+      return set.size;
+    }
+    const answered = this.answered.get(key);
+    if (!answered) return 0;
+    const undos = [...answered];
+    for (const undo of undos) undo();
+    return undos.length;
+  }
+
+  /** Answered calls that can still be undone (tests). */
+  get undoable(): number {
+    let n = 0;
+    for (const set of this.answered.values()) n += set.size;
+    return n;
   }
 
   /** Ends every held call (the broker is stopping). */
