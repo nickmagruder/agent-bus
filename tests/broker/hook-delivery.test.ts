@@ -76,6 +76,10 @@ function sessionWithReply(): string {
 
 /** POSTs a Stop hook; resolves with the body, or undefined if the connection dropped. */
 function postStop(): Promise<string | undefined> {
+  return postHook('Stop', 'app-1');
+}
+
+function postHook(event: string, appSessionId: string): Promise<string | undefined> {
   return new Promise((resolve) => {
     const req = request(
       {
@@ -98,9 +102,39 @@ function postStop(): Promise<string | undefined> {
       },
     );
     req.on('error', () => resolve(undefined));
-    req.end(JSON.stringify({ event: 'Stop', appSessionId: 'app-1' }));
+    req.end(JSON.stringify({ event, appSessionId }));
   });
 }
+
+describe('/hook bus-ID delivery', () => {
+  const contextOf = (body: string | undefined) =>
+    (JSON.parse(body ?? '{}') as { context?: string }).context;
+  const recorded = () =>
+    store.db
+      .prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'hook.context_delivered'")
+      .get();
+
+  it('records the bus ID as delivered once the SessionStart response is written', async () => {
+    expect(contextOf(await postHook('SessionStart', 'app-9'))).toMatch(/^agent-bus: /);
+    await expect.poll(recorded).toEqual({ n: 1 });
+    expect(contextOf(await postHook('UserPromptSubmit', 'app-9'))).toBeUndefined();
+  });
+
+  it('re-sends it on the first prompt when the SessionStart response was cut', async () => {
+    const hook = service.hook.bind(service);
+    service.hook = (platform, input, check) => {
+      const result = hook(platform, input, check);
+      lastResponse?.destroy();
+      return result;
+    };
+    expect(await postHook('SessionStart', 'app-9')).toBeUndefined();
+    service.hook = hook;
+    expect(recorded()).toEqual({ n: 0 });
+    expect(contextOf(await postHook('UserPromptSubmit', 'app-9'))).toMatch(/^agent-bus: /);
+    await expect.poll(recorded).toEqual({ n: 1 });
+    expect(contextOf(await postHook('UserPromptSubmit', 'app-9'))).toBeUndefined();
+  });
+});
 
 const delivered = { channel: CHANNEL, ts: REPLY_TS, name: REACTION.delivered };
 

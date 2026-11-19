@@ -142,6 +142,9 @@ const TURN_EVENTS = ['Stop', 'UserPromptSubmit', 'SessionStart'] as const;
 /** Platforms whose Stop hooks run and honour `decision: block` (Phase 0). */
 const STOP_BLOCK_PLATFORMS: ReadonlySet<Platform> = new Set(['claude', 'codex']);
 
+/** Platforms whose hooks run and print added context (Copilot's desktop hooks don't run). */
+const CONTEXT_PLATFORMS: ReadonlySet<Platform> = STOP_BLOCK_PLATFORMS;
+
 export type Route = 'dm' | 'thread' | 'digest';
 
 type HookKind = keyof typeof HOOK_THROTTLE_MS;
@@ -298,6 +301,14 @@ export class BusService {
         action = 'context';
         context = sessionContext(session);
         break;
+      case 'UserPromptSubmit':
+        // The sign-in race: SessionStart ran before the broker was up, so the
+        // agent never got its bus ID. Hand it over on the first prompt instead.
+        if (!this.contextDelivered(session)) {
+          action = 'context';
+          context = sessionContext(session);
+        }
+        break;
       case 'PermissionRequest':
         action = isOwnToolPrompt(input)
           ? 'own_tool'
@@ -377,6 +388,31 @@ export class BusService {
       sessionId: session.id,
       data: { event: input.event, action, source: input.source ?? null },
     });
+  }
+
+  /**
+   * Records that a hook response carrying the bus ID was fully written to
+   * the hook (Claude Code and Codex print it as added context). Called by the
+   * HTTP layer on the response's 'finish'.
+   */
+  markContextDelivered(platform: Platform, sessionId: string, event: string): void {
+    if (!CONTEXT_PLATFORMS.has(platform)) return;
+    this.store.appendEvent({
+      kind: 'hook.context_delivered',
+      platform,
+      sessionId,
+      data: { event },
+    });
+  }
+
+  private contextDelivered(session: SessionRecord): boolean {
+    return (
+      this.store.countEvents({
+        kind: 'hook.context_delivered',
+        sessionId: session.id,
+        since: new Date(0),
+      }) > 0
+    );
   }
 
   /**

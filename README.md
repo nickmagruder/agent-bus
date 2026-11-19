@@ -100,12 +100,13 @@ input stay local; only a one-line tool summary (command, file or question,
 else up to three short arguments, never ones named like secrets or bodies)
 and a short message snippet are sent.
 
-| Event               | What happens                                                                                                                                                                                                         |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SessionStart`      | Maps the app session to a bus session and adds its ID (`claude/agent-bus/3f2a`) to the agent's context. Nothing is posted.                                                                                           |
-| `PermissionRequest` | Urgent DM with the tool and command; at most one per session per 2 minutes. The hook prints nothing: the app's own prompt decides. No DM for agent-bus's own tools (`mcp__agent-bus__*`, Codex `mcp__agent_bus__*`). |
-| `Notification`      | Claude `permission_prompt` only: same DM, sharing the 2-minute throttle with `PermissionRequest`.                                                                                                                    |
-| `Stop`              | "Turn finished; waiting for you" with a snippet in the session's thread; at most one per 10 minutes. Skipped when `stop_hook_active`.                                                                                |
+| Event               | What happens                                                                                                                                                                                                                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SessionStart`      | Maps the app session to a bus session and adds its ID (`claude/agent-bus/3f2a`) to the agent's context. Nothing is posted.                                                                                                                  |
+| `UserPromptSubmit`  | Adds the bus ID on a prompt only while no hook response carrying it has reached the app (the sign-in race: `SessionStart` ran before the broker was up). The prompt itself is never sent.                                                   |
+| `PermissionRequest` | Urgent DM with the tool and command; at most one per session per 2 minutes. The hook prints nothing: the app's own prompt decides. No DM for agent-bus's own tools (`mcp__agent-bus__*`, Codex `mcp__agent_bus__*`).                        |
+| `Notification`      | Claude `permission_prompt` only: same DM, sharing the 2-minute throttle with `PermissionRequest`.                                                                                                                                           |
+| `Stop`              | When I've replied in Slack: blocks the stop and hands the agent my replies (up to 5, at most 6 blocks per session per hour). Otherwise "Turn finished; waiting for you" with a snippet in the session's thread; at most one per 10 minutes. |
 
 A session's thread root is posted on its first thread post, so short sessions
 that never post stay out of Slack. Copilot's desktop app has no hooks, so it
@@ -244,6 +245,13 @@ headers) and hooks in `~/.claude/settings.json`:
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"<repo>/src/cli/hook.ts\" claude", "timeout": 10 }
+        ]
+      }
+    ],
     "PermissionRequest": [
       {
         "hooks": [
@@ -262,7 +270,7 @@ headers) and hooks in `~/.claude/settings.json`:
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "node \"<repo>/src/cli/hook.ts\" claude", "timeout": 10 }
+          { "type": "command", "command": "node \"<repo>/src/cli/hook.ts\" claude", "timeout": 30 }
         ]
       }
     ]
@@ -272,9 +280,11 @@ headers) and hooks in `~/.claude/settings.json`:
 
 `Notification` is optional: it shares the 2-minute throttle with
 `PermissionRequest`, so wiring both never sends two DMs for one prompt.
+Give `Stop` a timeout above 15 s: the hook waits up to 15 s for a busy
+broker before letting the agent stop.
 
 **Codex:** MCP server in `~/.codex/config.toml`, and the `SessionStart`,
-`PermissionRequest` and `Stop` hooks in `~/.codex/hooks.json` with `codex` in
+`UserPromptSubmit`, `PermissionRequest` and `Stop` hooks in `~/.codex/hooks.json` with `codex` in
 place of `claude` (the broker handles `Notification` for Claude only). Codex
 asks you to
 review and trust the hooks once (Settings › Hooks).
@@ -357,6 +367,18 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.8.0 (2026-11-18)
+
+- **Bus ID on the first prompt** ([#22](https://github.com/nickmagruder/agent-bus/issues/22)):
+  a `UserPromptSubmit` hook adds the session's bus ID as context when no hook
+  response carrying it has reached the app yet (the sign-in race, where
+  `SessionStart` ran before the broker was up). The broker records the ID as
+  delivered once a response carrying it is written (`hook.context_delivered`);
+  later prompts add nothing. `SessionStart` still always adds it. The prompt
+  text is never sent. Wire the new hook for Claude Code and Codex.
+- README: the `Stop` row describes the Slack-reply block; the example `Stop`
+  hook timeout is 30 s (the hook now waits up to 15 s).
 
 ### 0.7.0 (2026-11-18)
 

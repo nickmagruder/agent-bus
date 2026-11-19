@@ -225,6 +225,71 @@ describe('Stop', () => {
   });
 });
 
+describe('UserPromptSubmit', () => {
+  const prompt = (platform: Platform = 'claude') => hook({ event: 'UserPromptSubmit' }, platform);
+
+  it('hands over the bus ID when SessionStart never reached the broker', () => {
+    const result = prompt();
+    expect(result.action).toBe('context');
+    expect(result.session).toMatch(/^claude\/clankers\/[0-9a-f]{4}$/);
+    expect(result.context).toContain(result.session);
+    // It creates the session like SessionStart would, without posting.
+    expect(store.getSession(result.session)).toMatchObject({ appSessionId: 'app-123' });
+    expect(queued('proj-clankers')).toEqual([]);
+    expect(queued(DM_TARGET)).toEqual([]);
+  });
+
+  it("hands it over when SessionStart's response never reached the hook", () => {
+    const start = hook({ event: 'SessionStart' });
+    expect(start.action).toBe('context');
+    // No markContextDelivered: the hook timed out before reading it.
+    expect(prompt()).toMatchObject({ action: 'context', session: start.session });
+  });
+
+  it('stays quiet once SessionStart delivered it', () => {
+    const start = hook({ event: 'SessionStart' });
+    service.markContextDelivered('claude', start.session, 'SessionStart');
+    const result = prompt();
+    expect(result.action).toBe('ignored');
+    expect(result.context).toBeUndefined();
+  });
+
+  it('hands it over once: later prompts stay quiet', () => {
+    const first = prompt();
+    service.markContextDelivered('claude', first.session, 'UserPromptSubmit');
+    expect(prompt().action).toBe('ignored');
+    expect(prompt().action).toBe('ignored');
+  });
+
+  it('keeps offering it on each prompt until one gets through', () => {
+    expect(prompt().action).toBe('context');
+    expect(prompt().action).toBe('context');
+  });
+
+  it('works the same on Codex, per app session', () => {
+    const codex = prompt('codex');
+    expect(codex.session).toMatch(/^codex\//);
+    service.markContextDelivered('codex', codex.session, 'UserPromptSubmit');
+    expect(prompt('codex').action).toBe('ignored');
+    // Another app session still needs its own ID.
+    const other = hook({ event: 'UserPromptSubmit', appSessionId: 'app-456' }, 'codex');
+    expect(other.action).toBe('context');
+    expect(other.session).not.toBe(codex.session);
+  });
+
+  it("doesn't record a delivery for Copilot, whose hooks can't print context", () => {
+    const { session } = hook({ event: 'SessionStart' }, 'copilot');
+    service.markContextDelivered('copilot', session, 'SessionStart');
+    expect(store.countEvents({ kind: 'hook.context_delivered', since: new Date(0) })).toBe(0);
+  });
+
+  it('SessionStart always hands it over (after /clear or compaction the agent lost it)', () => {
+    const start = hook({ event: 'SessionStart' });
+    service.markContextDelivered('claude', start.session, 'SessionStart');
+    expect(hook({ event: 'SessionStart', source: 'compact' }).action).toBe('context');
+  });
+});
+
 describe('Stop with Slack replies waiting', () => {
   it('blocks with the replies as the reason and posts nothing', () => {
     const inbox = fakeInbox(['From Nick: use plan B']);
@@ -378,7 +443,7 @@ describe('hook sessions and MCP tools', () => {
 
   it('audits every hook call', () => {
     hook({});
-    hook({ event: 'UserPromptSubmit' });
+    hook({ event: 'PreToolUse' });
     expect(store.countEvents({ kind: 'hook', since: new Date(0) })).toBe(2);
     expect(
       store.countEvents({

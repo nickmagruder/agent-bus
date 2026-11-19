@@ -107,10 +107,33 @@ async function handle(
     // Replies handed to a Stop hook count as delivered only once the response
     // is fully written ('finish'); a connection that closes first puts them
     // back. (writableFinished can't tell: Node sets it on a destroyed response.)
+    // These run after the response, outside the request's error handling.
+    const afterResponse = (what: string, work: () => void) => () => {
+      try {
+        work();
+      } catch (error) {
+        options.log('error', `hook ${what} failed`, { error: errorMessage(error) });
+      }
+    };
     if (delivery) {
       let written = false;
       res.once('finish', () => (written = true));
-      res.once('close', () => delivery.settle(written));
+      res.once(
+        'close',
+        afterResponse('delivery', () => delivery.settle(written)),
+      );
+    }
+    // Likewise the bus ID: UserPromptSubmit re-sends it until a response
+    // carrying it has been written.
+    if (result.context) {
+      const { session } = result;
+      const { event } = parsed.data;
+      res.once(
+        'finish',
+        afterResponse('context record', () =>
+          options.service.markContextDelivered(verdict.platform, session, event),
+        ),
+      );
     }
     return json(res, 200, result);
   }

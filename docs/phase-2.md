@@ -127,6 +127,12 @@ only, with a `UserPromptSubmit` hook that injects the bus ID when the
 session hasn't received one yet (both apps support context from that event),
 and leave (a) to the app's reconnect (decided below).
 
+Built in 0.8.0 ([#22](https://github.com/nickmagruder/agent-bus/issues/22)):
+the broker records `hook.context_delivered` when a response carrying the bus
+ID has been written to the hook (`SessionStart` or `UserPromptSubmit`). Until
+then each prompt adds the ID; afterwards prompts add nothing. `SessionStart`
+always adds it, since after `/clear` or compaction the agent has lost it.
+
 ## Decisions
 
 | Topic                                         | Decision                                                                                                                                                              |
@@ -193,7 +199,7 @@ this doc keeps the design, decisions and live results.
 
 - PR 3, hooks: [#21](https://github.com/nickmagruder/agent-bus/issues/21)
   Stop-hook inbox check (0.7.0), [#22](https://github.com/nickmagruder/agent-bus/issues/22)
-  `UserPromptSubmit` bus-ID injection
+  `UserPromptSubmit` bus-ID injection (0.8.0)
 - PR 4: [#23](https://github.com/nickmagruder/agent-bus/issues/23) daily
   digest, [#24](https://github.com/nickmagruder/agent-bus/issues/24) clankers
   PRs in the digest

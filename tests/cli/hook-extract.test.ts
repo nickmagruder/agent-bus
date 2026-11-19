@@ -96,10 +96,21 @@ describe('summarizeToolInput', () => {
 describe('renderHookOutput', () => {
   const response = { session: 'claude/x/abcd', action: 'context', context: 'bus ID is X' };
 
-  it.each(['claude', 'codex'] as const)('adds context on SessionStart for %s', (platform) => {
-    expect(JSON.parse(renderHookOutput(platform, 'SessionStart', response))).toEqual({
-      hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'bus ID is X' },
+  it.each([
+    ['claude', 'SessionStart'],
+    ['codex', 'SessionStart'],
+    ['claude', 'UserPromptSubmit'],
+    ['codex', 'UserPromptSubmit'],
+  ] as const)('adds context for %s %s', (platform, event) => {
+    expect(JSON.parse(renderHookOutput(platform, event, response))).toEqual({
+      hookSpecificOutput: { hookEventName: event, additionalContext: 'bus ID is X' },
     });
+  });
+
+  it('prints nothing for UserPromptSubmit without context, or on Copilot', () => {
+    const quiet = { session: 'claude/x/abcd', action: 'ignored' };
+    expect(renderHookOutput('claude', 'UserPromptSubmit', quiet)).toBe('');
+    expect(renderHookOutput('copilot', 'UserPromptSubmit', response)).toBe('');
   });
 
   it.each([
