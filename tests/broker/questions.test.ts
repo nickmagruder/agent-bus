@@ -329,9 +329,17 @@ describe('reminders and expiry', () => {
     questions.tick();
     questions.tick();
     const reminders = store.db
-      .prepare("SELECT text FROM outbox WHERE target = ? AND text LIKE '%Reminder%'")
-      .all(DM_TARGET) as { text: string }[];
+      .prepare(
+        "SELECT text, username, icon FROM outbox WHERE target = ? AND text LIKE '%Reminder%'",
+      )
+      .all(DM_TARGET) as { text: string; username: string | null; icon: string | null }[];
     expect(reminders).toHaveLength(1);
+    // The session's name and icon, the same as its question DM.
+    const questionDm = store.db
+      .prepare('SELECT username, icon FROM outbox WHERE id = ?')
+      .get(reload(question).postId) as { username: string | null; icon: string | null };
+    expect(questionDm.username).toMatch(/^Claude Code · /);
+    expect(reminders[0]).toMatchObject({ username: questionDm.username, icon: questionDm.icon });
     expect(reminders[0]?.text).toContain(question.id);
     expect(reload(question).reminderPostId).not.toBeNull();
 
