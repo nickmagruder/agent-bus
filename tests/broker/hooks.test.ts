@@ -8,6 +8,7 @@ import {
   stopText,
   type HookInput,
   type StopInboxCheck,
+  type StopOffers,
 } from '../../src/broker/service.ts';
 import type { Platform } from '../../src/shared/platform.ts';
 import { DM_TARGET, Store } from '../../src/broker/store.ts';
@@ -46,8 +47,9 @@ function hook(
   input: Partial<HookInput>,
   platform: Platform = 'claude',
   stopInbox?: StopInboxCheck,
+  offers?: StopOffers,
 ) {
-  return service.hook(platform, { ...base, ...input }, stopInbox);
+  return service.hook(platform, { ...base, ...input }, stopInbox, offers);
 }
 
 /** A fake inbox check: hands out the queued replies once each, counting calls. */
@@ -599,6 +601,50 @@ describe('UserPromptSubmit', () => {
     const start = hook({ event: 'SessionStart' });
     service.markContextDelivered('claude', start.session, 'SessionStart', FAST);
     expect(hook({ event: 'SessionStart', source: 'compact' }).action).toBe('context');
+  });
+});
+
+describe('Stop offers: confirmed or put back by the next turn event (#41)', () => {
+  function fakeOffers() {
+    const calls: string[] = [];
+    const offers: StopOffers = {
+      confirm: () => calls.push('confirm'),
+      putBack: (_session, reason) => calls.push(`putBack:${reason}`),
+    };
+    return { offers, calls };
+  }
+
+  it.each([
+    [{ event: 'Stop', stopHookActive: true }, ['confirm']],
+    [{ event: 'Stop' }, ['putBack:Stop']],
+    [{ event: 'UserPromptSubmit' }, ['putBack:UserPromptSubmit']],
+    [{ event: 'SessionStart' }, ['putBack:SessionStart']],
+    [{ event: 'PermissionRequest', toolName: 'Bash' }, []],
+    [{ event: 'Notification', notificationType: 'permission_prompt' }, []],
+  ] as const)('%j → %j', (input, expected) => {
+    const { offers, calls } = fakeOffers();
+    hook(input, 'claude', undefined, offers);
+    expect(calls).toEqual(expected);
+  });
+
+  it('settles the old offer before a Stop offers again', () => {
+    const order: string[] = [];
+    const offers: StopOffers = {
+      confirm: () => order.push('confirm'),
+      putBack: () => order.push('putBack'),
+    };
+    const check: StopInboxCheck = () => {
+      order.push('check');
+      return 'reply';
+    };
+    hook({ event: 'Stop' }, 'claude', check, offers);
+    expect(order).toEqual(['putBack', 'check']);
+  });
+
+  it("leaves Copilot's offers alone (its Stop hook can't block)", () => {
+    const { offers, calls } = fakeOffers();
+    hook({ event: 'Stop' }, 'copilot', undefined, offers);
+    expect(calls).toEqual([]);
   });
 });
 

@@ -464,6 +464,14 @@ export class Store {
     return { record: toInbox(row), inserted: Number(result.changes) === 1 };
   }
 
+  inboxByIds(ids: readonly number[]): InboxRecord[] {
+    const statement = this.db.prepare('SELECT * FROM inbox WHERE id = ?');
+    return ids
+      .map((id) => statement.get(id) as Row | undefined)
+      .filter((row): row is Row => row !== undefined)
+      .map(toInbox);
+  }
+
   findInbox(channelId: string, ts: string): InboxRecord | undefined {
     const row = this.db
       .prepare('SELECT * FROM inbox WHERE slack_channel_id = ? AND slack_ts = ?')
@@ -824,6 +832,25 @@ export class Store {
       .prepare('SELECT * FROM sessions WHERE last_seen_at >= ? ORDER BY last_seen_at DESC')
       .all(since.toISOString()) as Row[];
     return rows.map(toSession);
+  }
+
+  /** A session's newest event among `kinds`, with its kind. */
+  latestSessionEvent(
+    sessionId: string,
+    kinds: readonly string[],
+  ): { kind: string; data: Record<string, unknown> } | undefined {
+    if (kinds.length === 0) return undefined;
+    const row = this.db
+      .prepare(
+        `SELECT kind, data FROM events WHERE session_id = ? AND kind IN (${kinds.map(() => '?').join(', ')})
+         ORDER BY id DESC LIMIT 1`,
+      )
+      .get(sessionId, ...kinds) as Row | undefined;
+    if (!row) return undefined;
+    return {
+      kind: String(row.kind),
+      data: JSON.parse(String(row.data)) as Record<string, unknown>,
+    };
   }
 
   /** Counts events since a time, optionally matching a top-level `data` field. */

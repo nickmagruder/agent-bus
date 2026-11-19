@@ -8,6 +8,7 @@ import { errorMessage, type Logger } from './log.ts';
 import { createBusMcpServer, type McpDeps } from './mcp.ts';
 import { StopDelivery } from './stop-hook.ts';
 import type { BusService } from './service.ts';
+import type { Store } from './store.ts';
 
 const MAX_BODY_BYTES = 1_000_000;
 
@@ -15,6 +16,7 @@ export interface HttpOptions extends McpDeps {
   port: number;
   tokens: Record<Platform, string>;
   service: BusService;
+  store: Store;
   log: Logger;
   /** Extra fields for GET /health (e.g. the Slack connection state). */
   health?: () => Record<string, unknown>;
@@ -98,12 +100,14 @@ async function handle(
   if (url.pathname === '/hook') {
     const parsed = hookRequestSchema.safeParse(body);
     if (!parsed.success) return reply(res, 400, 'Invalid hook request');
-    // A hook that already gave up (timed out, closed) can't deliver anything.
-    const delivery = req.socket.destroyed ? undefined : new StopDelivery(options.inbox);
+    const delivery = new StopDelivery(options.inbox, options.store);
+    // A hook that already gave up (timed out, closed) can't be handed replies,
+    // but its event still settles the last offer.
     const result: HookResponse = options.service.hook(
       verdict.platform,
       parsed.data,
-      delivery?.check,
+      req.socket.destroyed ? undefined : delivery.check,
+      delivery,
     );
     // Replies handed to a Stop hook count as delivered only once the response
     // is fully written ('finish'); a connection that closes first puts them
@@ -116,14 +120,12 @@ async function handle(
         options.log('error', `hook ${what} failed`, { error: errorMessage(error) });
       }
     };
-    if (delivery) {
-      let written = false;
-      res.once('finish', () => (written = true));
-      res.once(
-        'close',
-        afterResponse('delivery', () => delivery.settle(written)),
-      );
-    }
+    let written = false;
+    res.once('finish', () => (written = true));
+    res.once(
+      'close',
+      afterResponse('delivery', () => delivery.settle(written)),
+    );
     // The bus ID: UserPromptSubmit re-sends it until the broker can tell the
     // agent has it (see BusService.markContextDelivered).
     if (result.context) {

@@ -22,9 +22,11 @@ change here as a possible security regression.
   every path. Only `Stop` may block, and only with the session's undelivered
   inbox as the reason (my Slack replies, plus outcomes of its own questions,
   including expired ones with the agent's own default), within
-  `LIMITS.stopBlocksPerSession` per hour. Replies count as delivered only
-  once the response is written (`src/broker/stop-hook.ts`); a change to that
-  path needs tests for every branch. Only the fields defined in
+  `LIMITS.stopBlocksPerSession` per hour. Replies handed to a Stop hook are
+  confirmed (✅) only by the next `stop_hook_active` Stop, and go back to the
+  inbox if the response isn't written or another turn event comes first
+  (`src/broker/stop-hook.ts`); a change to that path needs tests for every
+  branch. Only the fields defined in
   `src/shared/hook-protocol.ts` are sent, within its size limits; nothing
   named like a secret or a body.
 - **Output to Slack:** agent text goes through the escaping in
