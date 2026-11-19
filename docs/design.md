@@ -1,8 +1,9 @@
 # agent-bus design
 
-Status (2026-11-18): Phases 0 and 1 complete; Phase 2 in progress. Each
-phase's plan, decisions and live results live in its own doc:
-[Phase 0](spikes/phase-0.md), [Phase 1](phase-1.md), [Phase 2](phase-2.md).
+Status (2026-11-19): Phases 0 and 1 complete; Phase 2 built, awaiting its
+live check; Phase 3 being planned. Each phase's plan, decisions and live
+results live in its own doc: [Phase 0](spikes/phase-0.md),
+[Phase 1](phase-1.md), [Phase 2](phase-2.md), [Phase 3](phase-3.md).
 
 This document is the overall design: goals, what the platforms allow, the
 architecture, safety rules and the phase roadmap. It started as a plan in my

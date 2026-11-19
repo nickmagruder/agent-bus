@@ -63,7 +63,7 @@ and decisions) is in [docs/design.md](docs/design.md).
 | 0     | Spikes: MCP, hooks and timeouts on each app                                            | [Done](docs/spikes/phase-0.md) |
 | 1     | Outbound pings, hook pings, start at login; verified on Claude Code, Codex and Copilot | [Done](docs/phase-1.md)        |
 | 2     | Answering from Slack: inbox, `ask_human` with buttons, reminders and expiry            | [In progress](docs/phase-2.md) |
-| 3     | Cross-platform task handoffs between agents                                            | Planned                        |
+| 3     | Cross-platform task handoffs between agents                                            | [Planning](docs/phase-3.md)    |
 | 4     | Approving lower-risk actions from Slack                                                | Planned                        |
 | 5     | CLI agents, true push, optional A2A endpoint                                           | Later                          |
 
@@ -406,6 +406,12 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.12.2 (2026-11-19)
+
+- `docs/phase-3.md`: the Phase 3 plan (cross-platform tasks and handoffs):
+  agent cards, tasks in A2A shapes, delivery through the inbox, Slack task
+  threads, safety rules, seven open decisions and the work breakdown.
 
 ### 0.12.1 (2026-11-19)
 
