@@ -104,7 +104,7 @@ and a short message snippet are sent.
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `SessionStart`      | Maps the app session to a bus session and adds its ID (`claude/agent-bus/3f2a`) to the agent's context. Nothing is posted.                                                                                                                                                                                                                                                                          |
 | `UserPromptSubmit`  | Re-adds the bus ID on each prompt until the broker can tell the agent has it: the agent used it in an MCP call, or a response carrying it went out within 1 s, or 3 slower ones did. This covers the sign-in race (`SessionStart` ran before the broker was up). The prompt itself is never sent. Not yet verified live on either app ([#25](https://github.com/nickmagruder/agent-bus/issues/25)). |
-| `PermissionRequest` | Urgent DM with the tool and command; at most one per session per 2 minutes. The hook prints nothing: the app's own prompt decides. No DM for agent-bus's own tools (`mcp__agent-bus__*`, Codex `mcp__agent_bus__*`).                                                                                                                                                                                |
+| `PermissionRequest` | Urgent DM with the tool and command, held for 60 s first: if I answer the prompt in the app in that time (any later hook event from the session, or an agent-bus call from it), no DM is sent. At most one per session per 2 minutes. The hook prints nothing: the app's own prompt decides. No DM for agent-bus's own tools (`mcp__agent-bus__*`, Codex `mcp__agent_bus__*`).                      |
 | `Notification`      | Claude `permission_prompt` only: same DM, sharing the 2-minute throttle with `PermissionRequest`.                                                                                                                                                                                                                                                                                                   |
 | `Stop`              | When I've replied in Slack: blocks the stop and hands the agent my replies (up to 5, at most 6 blocks per session per hour). Otherwise "Turn finished; waiting for you" with a snippet in the session's thread; at most one per 10 minutes.                                                                                                                                                         |
 
@@ -290,6 +290,12 @@ headers) and hooks in `~/.claude/settings.json`:
 Give `Stop` a timeout above 15 s: the hook waits up to 15 s for a busy
 broker before letting the agent stop.
 
+Optional: wire `PostToolUse` too (Codex: `PreToolUse`), with the same command
+and a 5 s timeout. A prompt I approve in the app then cancels its held DM at
+once. Without it, the DM is cancelled by the session's next `Stop`, prompt,
+permission request or agent-bus call, and is sent if none comes within 60 s.
+The cost is one short hook process per tool call.
+
 **Codex:** MCP server in `~/.codex/config.toml`, and the `SessionStart`,
 `UserPromptSubmit`, `PermissionRequest` and `Stop` hooks in `~/.codex/hooks.json` with `codex` in
 place of `claude` (the broker handles `Notification` for Claude only). Codex
@@ -392,6 +398,18 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.11.0 (2026-11-18)
+
+- **Approval DMs wait 60 s** ([#28](https://github.com/nickmagruder/agent-bus/issues/28)):
+  a permission prompt's DM is held for a grace period and dropped if the
+  session moves on first (a later hook event, or an agent-bus call from it),
+  so prompts I answer in the app don't buzz Slack. Claude's
+  `permission_prompt` notification for the same prompt joins the held DM; a
+  new prompt replaces it. Held DMs are stored (schema v6, `held_pings`), so
+  one whose time ran out while the broker was off goes out at start, unless
+  it's over 15 minutes old. The 2-minute throttle still applies. Wiring
+  `PostToolUse` (Codex `PreToolUse`) cancels faster.
 
 ### 0.10.5 (2026-11-19)
 

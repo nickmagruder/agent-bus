@@ -84,6 +84,11 @@ describe('runHook against the broker', () => {
       cwd: repoRoot,
     });
     expect(result).toEqual({ stdout: '' });
+    // The DM is held for the grace period; end it now instead of waiting a minute.
+    broker.store.db
+      .prepare("UPDATE held_pings SET due_at = ? WHERE state = 'held'")
+      .run(new Date(0).toISOString());
+    expect(broker.service.flushHeldPings()).toBe(1);
     await broker.queue.idle();
     const dm = slack.posts.find((p) => p.channel === `D_${USER_ID}`);
     expect(dm?.text).toContain('rm -rf build');

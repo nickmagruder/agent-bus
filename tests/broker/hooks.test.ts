@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   BusError,
+  APPROVAL,
   BusService,
   HOOK_THROTTLE_MS,
   LIMITS,
@@ -91,20 +92,40 @@ describe('SessionStart', () => {
   });
 });
 
+/** Lets the grace period run out and runs the broker's flush, like its timer would. */
+function elapse(ms: number = APPROVAL.graceMs): number {
+  advance(ms);
+  return service.flushHeldPings();
+}
+
+function pingStates(): string[] {
+  const rows = store.db.prepare('SELECT state FROM held_pings ORDER BY id').all() as {
+    state: string;
+  }[];
+  return rows.map((row) => row.state);
+}
+
 describe('permission pings', () => {
-  it('DMs me with the tool and its command, escaped', () => {
+  it('holds the DM for the grace period, then DMs me the tool and command, escaped', () => {
     const result = hook({
       event: 'PermissionRequest',
       toolName: 'PowerShell',
       toolSummary: 'git push <origin> ```x```',
     });
-    expect(result.action).toBe('sent');
+    expect(result.action).toBe('held');
+    expect(queued(DM_TARGET)).toEqual([]);
+    expect(elapse(APPROVAL.graceMs - 1000)).toBe(0);
+    expect(queued(DM_TARGET)).toEqual([]);
+    expect(elapse(1000)).toBe(1);
     const [dm] = queued(DM_TARGET);
     expect(dm).toContain(result.session);
     expect(dm).toContain('*PowerShell*');
     expect(dm).toContain('git push &lt;origin&gt;');
     expect(dm).toContain("'''x'''");
     expect(dm).toContain('Answer in the app');
+    expect(pingStates()).toEqual(['sent']);
+    // Sent once.
+    expect(elapse()).toBe(0);
   });
 
   it('never returns a decision: there is no allow/deny in the result', () => {
@@ -112,39 +133,114 @@ describe('permission pings', () => {
     expect(Object.keys(result).sort()).toEqual(['action', 'session']);
   });
 
-  it('throttles a burst, including a Notification for the same prompt', () => {
+  it.each(['PostToolUse', 'PreToolUse', 'Stop', 'UserPromptSubmit', 'SessionStart'])(
+    'drops the DM when %s shows I answered in the app',
+    (event) => {
+      hook({ event: 'PermissionRequest', toolName: 'Bash' });
+      advance(5000);
+      hook({ event });
+      expect(elapse()).toBe(0);
+      expect(queued(DM_TARGET)).toEqual([]);
+      expect(pingStates()).toEqual(['cancelled']);
+      const [cancelled] = store.db
+        .prepare("SELECT data FROM events WHERE kind = 'ping.cancelled'")
+        .all() as { data: string }[];
+      expect(JSON.parse(cancelled?.data ?? '{}')).toMatchObject({ reason: event });
+    },
+  );
+
+  it('drops the DM when the session calls an agent-bus tool (it was answered)', () => {
+    const { session } = hook({ event: 'PermissionRequest', toolName: 'Bash' });
+    service.notify({ platform: 'claude', session, text: 'carrying on', urgency: 'fyi' });
+    expect(elapse()).toBe(0);
+    expect(pingStates()).toEqual(['cancelled']);
+  });
+
+  it("keeps the DM for Claude's Notification about the same prompt", () => {
     hook({ event: 'PermissionRequest', toolName: 'Write' });
-    expect(hook({ event: 'PermissionRequest', toolName: 'Write' }).action).toBe('throttled');
-    expect(
-      hook({ event: 'Notification', notificationType: 'permission_prompt', message: 'needs you' })
-        .action,
-    ).toBe('throttled');
-    advance(HOOK_THROTTLE_MS.permission + 1000);
-    expect(hook({ event: 'PermissionRequest', toolName: 'Write' }).action).toBe('sent');
+    const again = hook({
+      event: 'Notification',
+      notificationType: 'permission_prompt',
+      message: 'needs you',
+    });
+    expect(again.action).toBe('held');
+    hook({ event: 'Notification', notificationType: 'idle_prompt' });
+    expect(elapse()).toBe(1);
+    expect(queued(DM_TARGET)).toHaveLength(1);
+    expect(queued(DM_TARGET)[0]).toContain('*Write*');
+  });
+
+  it('a new prompt replaces the held one: the earlier was answered', () => {
+    hook({ event: 'PermissionRequest', toolName: 'Write' });
+    advance(30_000);
+    hook({ event: 'PermissionRequest', toolName: 'Edit' });
+    expect(elapse(30_000)).toBe(0); // the first one's time is up, but it was replaced
+    expect(elapse(30_000)).toBe(1);
+    expect(queued(DM_TARGET)).toEqual([expect.stringContaining('*Edit*')]);
+    expect(pingStates()).toEqual(['cancelled', 'sent']);
+  });
+
+  it('keeps the 2-minute throttle between DMs that do go out', () => {
+    hook({ event: 'PermissionRequest', toolName: 'Write' });
+    expect(elapse()).toBe(1);
+    hook({ event: 'PermissionRequest', toolName: 'Write' });
+    expect(elapse()).toBe(0);
+    expect(pingStates()).toEqual(['sent', 'throttled']);
+    advance(HOOK_THROTTLE_MS.permission);
+    hook({ event: 'PermissionRequest', toolName: 'Write' });
+    expect(elapse()).toBe(1);
     expect(queued(DM_TARGET)).toHaveLength(2);
   });
 
-  it('pings for a Claude permission_prompt notification on its own', () => {
+  it('DMs for a Claude permission_prompt notification on its own', () => {
     const result = hook({
       event: 'Notification',
       notificationType: 'permission_prompt',
       message: 'Claude needs your permission to use Bash',
     });
-    expect(result.action).toBe('sent');
+    expect(result.action).toBe('held');
+    elapse();
     expect(queued(DM_TARGET)[0]).toContain('Claude needs your permission to use Bash');
   });
 
   it('ignores other notification types', () => {
     expect(hook({ event: 'Notification', notificationType: 'idle_prompt' }).action).toBe('ignored');
+    expect(elapse()).toBe(0);
     expect(queued(DM_TARGET)).toEqual([]);
   });
 
-  it('stops pinging at the hourly urgent cap without failing the hook', () => {
+  it('stops DMing at the hourly urgent cap without failing anything', () => {
     const { session } = hook({});
     for (let i = 0; i < LIMITS.urgentPerSession; i++) {
       service.notify({ platform: 'claude', session, text: `u${i}`, urgency: 'urgent' });
     }
-    expect(hook({ event: 'PermissionRequest', toolName: 'Bash' }).action).toBe('rate_limited');
+    // notify_human above was an agent-bus call, so the hold below starts clean.
+    expect(hook({ event: 'PermissionRequest', toolName: 'Bash' }).action).toBe('held');
+    expect(elapse()).toBe(0);
+    expect(pingStates()).toEqual(['throttled']);
+  });
+
+  it("drops a held DM that's long stale (the broker was down), instead of sending it late", () => {
+    hook({ event: 'PermissionRequest', toolName: 'Bash' });
+    expect(elapse(APPROVAL.staleMs + 1000)).toBe(0);
+    expect(queued(DM_TARGET)).toEqual([]);
+    expect(pingStates()).toEqual(['stale']);
+  });
+
+  it("one session moving on doesn't drop another session's DM", () => {
+    hook({ event: 'PermissionRequest', toolName: 'Bash' });
+    hook({ event: 'PostToolUse', appSessionId: 'app-other' });
+    expect(elapse()).toBe(1);
+  });
+
+  it("audits holds without the command's text", () => {
+    hook({ event: 'PermissionRequest', toolName: 'Bash', toolSummary: 'rm -rf secret-dir' });
+    elapse();
+    const audit = JSON.stringify(
+      store.db.prepare("SELECT data FROM events WHERE kind LIKE 'ping.%'").all(),
+    );
+    expect(audit).toContain('pingId');
+    expect(audit).not.toContain('secret-dir');
   });
 });
 
@@ -170,13 +266,15 @@ describe("approval prompts for agent-bus's own tools", () => {
 
   it("doesn't use up the throttle, so the next real prompt still DMs", () => {
     hook({ event: 'PermissionRequest', toolName: 'mcp__agent-bus__register' });
-    expect(hook({ event: 'PermissionRequest', toolName: 'PowerShell' }).action).toBe('sent');
+    expect(hook({ event: 'PermissionRequest', toolName: 'PowerShell' }).action).toBe('held');
+    expect(elapse()).toBe(1);
   });
 
   it.each(['mcp__agent-busy__x', 'mcp__other__agent-bus', 'agent-bus', 'mcp__slack__post'])(
     'still DMs for other tools such as %s',
     (toolName) => {
-      expect(hook({ event: 'PermissionRequest', toolName }).action).toBe('sent');
+      expect(hook({ event: 'PermissionRequest', toolName }).action).toBe('held');
+      expect(elapse()).toBe(1);
     },
   );
 

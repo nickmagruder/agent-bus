@@ -9,7 +9,14 @@ import {
   questionPointer,
   questionTimes,
 } from './questions.ts';
-import { DM_TARGET, found, type QuestionRecord, type SessionRecord, type Store } from './store.ts';
+import {
+  DM_TARGET,
+  found,
+  type HeldPingRecord,
+  type QuestionRecord,
+  type SessionRecord,
+  type Store,
+} from './store.ts';
 
 export const URGENCIES = ['urgent', 'normal', 'fyi'] as const;
 export type Urgency = (typeof URGENCIES)[number];
@@ -40,6 +47,21 @@ export const HOOK_THROTTLE_MS = {
   /** Stop fires after every turn; one "waiting for you" per stretch is enough. */
   stop: 10 * 60_000,
 } as const;
+
+/**
+ * Approval DMs wait out a grace period: a prompt I answer in the app within
+ * it never buzzes Slack. Any later sign the session moved on cancels the DM.
+ */
+export const APPROVAL = {
+  graceMs: 60_000,
+  /** How often held DMs are checked. */
+  tickMs: 10_000,
+  /** A held DM older than this (e.g. the broker was down) is dropped, not sent late. */
+  staleMs: 15 * 60_000,
+} as const;
+
+/** Hook events that are the permission prompt itself, not a sign it was answered. */
+const PROMPT_EVENTS: ReadonlySet<string> = new Set(['PermissionRequest', 'Notification']);
 
 const HOUR_MS = 60 * 60_000;
 const SNIPPET_CHARS = 300;
@@ -102,6 +124,8 @@ export interface HookInput {
 
 export type HookAction =
   | 'context'
+  /** A permission prompt: its DM waits out the grace period (APPROVAL). */
+  | 'held'
   /** Stop only: the agent was kept going with my Slack replies as the reason. */
   | 'blocked'
   | 'sent'
@@ -330,6 +354,10 @@ export class BusService {
     let context: string | undefined;
     let reason: string | undefined;
 
+    // Anything but the prompt itself means the session moved on: a prompt it
+    // was waiting on has been answered in the app, so its held DM is dropped.
+    if (!PROMPT_EVENTS.has(input.event)) this.cancelHeldPings(session, input.event);
+
     switch (input.event) {
       case 'SessionStart':
         action = 'context';
@@ -344,15 +372,11 @@ export class BusService {
         }
         break;
       case 'PermissionRequest':
-        action = isOwnToolPrompt(input)
-          ? 'own_tool'
-          : this.hookPing(session, 'permission', 'urgent', permissionText(input));
+        action = this.holdPermission(session, input);
         break;
       case 'Notification':
         if (input.notificationType === 'permission_prompt') {
-          action = isOwnToolPrompt(input)
-            ? 'own_tool'
-            : this.hookPing(session, 'permission', 'urgent', permissionText(input));
+          action = this.holdPermission(session, input);
         }
         break;
       case 'Stop':
@@ -523,6 +547,86 @@ export class BusService {
         cwd: input.cwd,
       }),
     );
+  }
+
+  /**
+   * Holds the approval DM for a permission prompt (see APPROVAL). Claude
+   * sends both a PermissionRequest and a permission_prompt Notification for
+   * one prompt, so a Notification joins a DM already held; a new
+   * PermissionRequest means the earlier prompt was answered and replaces it.
+   */
+  private holdPermission(session: SessionRecord, input: HookInput): HookAction {
+    if (isOwnToolPrompt(input)) return 'own_tool';
+    const held = this.store.heldPings(session.id).filter((ping) => ping.kind === 'permission');
+    if (input.event === 'Notification' && held.length > 0) return 'held';
+    this.store.transaction(() => {
+      for (const ping of held) this.closeHeldPing(ping, 'cancelled', 'superseded');
+      const ping = this.store.holdPing({
+        sessionId: session.id,
+        kind: 'permission',
+        text: permissionText(input),
+        dueAt: new Date(this.now().getTime() + APPROVAL.graceMs),
+      });
+      this.store.appendEvent({
+        kind: 'ping.held',
+        platform: session.platform,
+        sessionId: session.id,
+        data: { pingId: ping.id, kind: ping.kind, event: input.event },
+      });
+    });
+    return 'held';
+  }
+
+  /** Drops a session's held DMs: it has moved on (`reason` says how). */
+  private cancelHeldPings(session: SessionRecord, reason: string): void {
+    const held = this.store.heldPings(session.id);
+    if (held.length === 0) return;
+    this.store.transaction(() => {
+      for (const ping of held) this.closeHeldPing(ping, 'cancelled', reason);
+    });
+  }
+
+  /**
+   * Sends the held DMs whose grace period is over, keeping the per-session
+   * throttle. A held DM older than APPROVAL.staleMs is dropped instead.
+   * Returns how many were sent. Run by the broker every APPROVAL.tickMs.
+   */
+  flushHeldPings(): number {
+    const now = this.now();
+    let sent = 0;
+    for (const ping of this.store.duePings(now)) {
+      const session = this.store.getSession(ping.sessionId);
+      if (!session) {
+        this.closeHeldPing(ping, 'stale', 'no_session');
+        continue;
+      }
+      if (now.getTime() - Date.parse(ping.createdAt) > APPROVAL.staleMs) {
+        this.closeHeldPing(ping, 'stale', 'too_old');
+        continue;
+      }
+      const action = this.store.transaction(() => {
+        const result = this.hookPing(session, 'permission', 'urgent', ping.text);
+        this.store.closeHeldPing(ping.id, result === 'sent' ? 'sent' : 'throttled');
+        this.store.appendEvent({
+          kind: 'ping.flushed',
+          platform: session.platform,
+          sessionId: session.id,
+          data: { pingId: ping.id, action: result },
+        });
+        return result;
+      });
+      if (action === 'sent') sent++;
+    }
+    return sent;
+  }
+
+  private closeHeldPing(ping: HeldPingRecord, state: 'cancelled' | 'stale', reason: string): void {
+    if (!this.store.closeHeldPing(ping.id, state)) return;
+    this.store.appendEvent({
+      kind: `ping.${state}`,
+      sessionId: ping.sessionId,
+      data: { pingId: ping.id, kind: ping.kind, reason },
+    });
   }
 
   private hookPing(
@@ -724,6 +828,9 @@ export class BusService {
       throw new BusError('wrong_platform', `Session "${id}" belongs to another platform.`);
     }
     this.markUsed(session, action);
+    // An agent can't call tools while a permission prompt waits on me, so a
+    // call means any prompt was answered in the app.
+    this.cancelHeldPings(session, 'mcp');
     return session;
   }
 

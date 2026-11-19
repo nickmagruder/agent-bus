@@ -10,7 +10,7 @@ import { createGitHubApi, type GitHubApi } from './github.ts';
 import { HeldCalls } from './held-calls.ts';
 import { Inbox } from './inbox.ts';
 import { createFileWriter, createLogger, errorMessage, type Logger } from './log.ts';
-import { BusService } from './service.ts';
+import { APPROVAL, BusService } from './service.ts';
 import { createWebSlackApi, type SlackApi } from './slack/api.ts';
 import { createSlackConnection, type SlackConnection } from './slack/connection.ts';
 import { ChannelDirectory } from './slack/directory.ts';
@@ -58,6 +58,8 @@ export interface BrokerDeps {
   /** `null` skips the Socket Mode connection (tests). */
   connection?: SlackConnection | null;
   queueOptions?: Partial<ConstructorParameters<typeof PostQueue>[3]>;
+  /** How often held approval DMs are checked (tests shorten it). */
+  heldPingTickMs?: number;
   /** Daily digest settings (tests); `null` turns the scheduler off. */
   digest?: {
     timeZone?: string;
@@ -154,6 +156,17 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
   // Posts queued before a restart go out now; reminders and expiries missed while off run now.
   queue.kick();
   questions.start(deps.tickMs);
+  // Approval DMs whose grace period ran out (including while the broker was off).
+  const flushHeldPings = () => {
+    try {
+      service.flushHeldPings();
+    } catch (error) {
+      log('error', 'held ping flush failed', { error: errorMessage(error) });
+    }
+  };
+  flushHeldPings();
+  const heldPingTimer = setInterval(flushHeldPings, deps.heldPingTickMs ?? APPROVAL.tickMs);
+  heldPingTimer.unref();
   // A digest slot missed while the broker was off is caught up now.
   const digest =
     deps.digest === null
@@ -185,6 +198,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
     heldCalls,
     async stop() {
       questions.stop();
+      clearInterval(heldPingTimer);
       digest?.stop();
       // Held calls answer "pending" before their connections close, so an
       // agent isn't left waiting out its tool timeout (it calls
