@@ -250,6 +250,12 @@ describe('agentOf', () => {
       'Claude Code',
     ],
     ['Body\n\nhttps://chatgpt.com/codex/tasks/task_e_123', 'nick', 'Codex'],
+    ['Codex task: (https://chatgpt.com/codex/tasks/task_e_123).', 'nick', 'Codex'],
+    // The link must be the host itself, not part of another URL or a lookalike host.
+    ['See https://evil.example/?u=https://chatgpt.com/codex/tasks/x', 'nick', undefined],
+    ['See https://chatgpt.com.evil.example/codex/tasks/x', 'nick', undefined],
+    ['See http://chatgpt.com/codex/tasks/x', 'nick', undefined],
+    ['See https://chatgpt.com/c/123', 'nick', undefined],
     ['Body', 'Copilot', 'Copilot'],
     ['Body', 'copilot-swe-agent[bot]', 'Copilot'],
     ['A plain human PR', 'nick', undefined],

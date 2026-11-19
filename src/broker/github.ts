@@ -64,8 +64,30 @@ export function agentOf(
   if (author && /^copilot(-swe-agent\[bot\])?$/i.test(author)) return 'Copilot';
   if (!body) return undefined;
   if (/generated with \[claude code\]/i.test(body)) return 'Claude Code';
-  if (/https:\/\/chatgpt\.com\/codex\/tasks\//i.test(body)) return 'Codex';
+  if (linksIn(body).some(isCodexTaskLink)) return 'Codex';
   return undefined;
+}
+
+/** The http(s) links in a text, parsed; anything that isn't a valid URL is skipped. */
+function linksIn(text: string): URL[] {
+  const links: URL[] = [];
+  for (const [candidate] of text.matchAll(/https?:\/\/[^\s)<>\]"']+/gi)) {
+    try {
+      links.push(new URL(candidate));
+    } catch {
+      // not a URL after all
+    }
+  }
+  return links;
+}
+
+/** A Codex cloud task link: exactly chatgpt.com, under /codex/tasks/. */
+function isCodexTaskLink(link: URL): boolean {
+  return (
+    link.protocol === 'https:' &&
+    link.host === 'chatgpt.com' &&
+    link.pathname.startsWith('/codex/tasks/')
+  );
 }
 
 /**
