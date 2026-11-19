@@ -393,6 +393,15 @@ are made.
 
 ## Changelog
 
+### 0.10.3 (2026-11-19)
+
+- Tests for held calls across a broker restart and a client disconnect
+  ([#26](https://github.com/nickmagruder/agent-bus/issues/26)): the question
+  and any reply survive a restart and reach `wait_for_reply`; a closed
+  connection ends the hold at once. They found that a cancelled held call
+  keeps holding and can take a reply the agent never sees
+  ([#48](https://github.com/nickmagruder/agent-bus/issues/48)).
+
 ### 0.10.2 (2026-11-18)
 
 - `scripts/mcp-call.ts` calls any agent-bus tool with a platform token from
