@@ -278,11 +278,17 @@ Context from `UserPromptSubmit` is not verified live on either app yet
       The last race, replies taken in the milliseconds before the broker
       hears of a cancel, is closed in 0.12.1
       ([#50](https://github.com/nickmagruder/agent-bus/issues/50)): a held
-      call that hands something over stays undoable for 5 s
+      call that hands something over stays undoable for 500 ms
       (`UNDO_WINDOW_MS`), and a cancel for it in that time puts the replies
-      or outcome back. MCP clients cancel only requests they haven't
-      finished, so a cancel after the answer means it went unread. The ✅
-      already added stays; the reply is delivered again on the next call.
+      or outcome back for the next call. The window is short on purpose
+      (review of #54): the MCP SDK also sends a cancel when a signal aborts
+      _after_ the call finished, e.g. Esc a few seconds after the agent read
+      the answer, and undoing that would deliver a read answer twice (worst
+      for a "go ahead"). The real race is milliseconds on localhost. Trade-off
+      accepted: a cancel arriving later than 500 ms after the answer leaves it
+      delivered; one within it may, rarely (a late Esc or a request-ID clash
+      between clients), deliver an answer twice, never lose it. The ✅ already
+      added stays.
 - [x] Live: answered by button from the phone and by thread reply; left
       to remind and expire (2026-11-18, see Live results)
 

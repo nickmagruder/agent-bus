@@ -3,22 +3,28 @@ import type { Platform } from '../shared/platform.ts';
 type RequestId = string | number;
 
 /**
+ * How long after a held call answers a cancel for it can still undo the
+ * hand-over (#50). The race it covers is short: the client aborts locally
+ * and sends `notifications/cancelled` to 127.0.0.1 at once, so a cancel that
+ * raced the answer arrives within milliseconds. The window is kept that
+ * short on purpose: the MCP SDK also sends a cancel when a signal aborts
+ * *after* the call finished (its abort listener stays), e.g. Esc a few
+ * seconds after the agent read the answer. Undoing then would deliver a
+ * read answer twice; past this window it stays delivered.
+ */
+export const UNDO_WINDOW_MS = 500;
+
+/**
  * The held tool calls (ask_human, wait_for_reply) running anywhere in the
  * broker, so a cancel can find them. `/mcp` is stateless: a client's
  * `notifications/cancelled` arrives on its own POST, which a fresh MCP server
  * handles, never the server holding the call. Calls are keyed by platform
  * and JSON-RPC request ID. IDs are per client, so two clients of one platform
- * can share one: a cancel then also ends the other's hold early, which only
- * makes that call return "pending" sooner (it calls wait_for_reply again).
+ * can share one: a cancel then also ends the other's live hold early (that
+ * call returns "pending" and is called again), or, within UNDO_WINDOW_MS of
+ * the other's answer, puts that answer back so it's delivered twice. Never
+ * lost; rare with the short window.
  */
-/**
- * How long a held call that handed something over can still be undone by a
- * cancel. A client cancels locally first and sends `notifications/cancelled`
- * at once, so a cancel that arrives after the answer means the client
- * dropped it unread (MCP clients only cancel requests they haven't finished).
- */
-export const UNDO_WINDOW_MS = 5000;
-
 export class HeldCalls {
   private readonly calls = new Map<string, Set<AbortController>>();
   private readonly answered = new Map<string, Set<() => void>>();

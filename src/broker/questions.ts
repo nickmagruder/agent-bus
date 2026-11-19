@@ -222,15 +222,19 @@ export class Questions {
    * Only a delivery made via `via` is undone.
    */
   untakeOutcome(question: QuestionRecord, via: DeliveryVia): void {
-    this.store.transaction(() => {
-      this.store.markQuestionUndelivered(question.id, via);
-      this.store.appendEvent({
-        kind: 'question.undelivered',
-        sessionId: question.sessionId,
-        data: { questionId: question.id, via },
-      });
+    const changed = this.store.transaction(() => {
+      const n = this.store.markQuestionUndelivered(question.id, via);
+      if (n > 0) {
+        this.store.appendEvent({
+          kind: 'question.undelivered',
+          platform: this.store.getSession(question.sessionId)?.platform ?? null,
+          sessionId: question.sessionId,
+          data: { questionId: question.id, via },
+        });
+      }
+      return n;
     });
-    this.notifier.notify(question.sessionId);
+    if (changed > 0) this.notifier.notify(question.sessionId);
   }
 
   /** All closed, undelivered outcomes for a session, marked delivered. */
