@@ -644,25 +644,29 @@ export class Store {
    * Undoes a delivery the agent never received (a Stop hook whose response
    * didn't reach the app). Only rows delivered via `via` are touched.
    */
-  markUndelivered(ids: readonly number[], via: DeliveryVia): void {
+  /** Returns how many rows changed. */
+  markUndelivered(ids: readonly number[], via: DeliveryVia): number {
     const statement = this.db.prepare(
       'UPDATE inbox SET delivered_at = NULL, delivered_via = NULL WHERE id = ? AND delivered_via = ?',
     );
-    for (const id of ids) statement.run(id, via);
+    let changed = 0;
+    for (const id of ids) changed += Number(statement.run(id, via).changes);
+    return changed;
   }
 
   /** The question counterpart of markUndelivered, with the replies that answered it. */
-  markQuestionUndelivered(id: string, via: DeliveryVia): void {
-    this.db
+  markQuestionUndelivered(id: string, via: DeliveryVia): number {
+    const question = this.db
       .prepare(
         'UPDATE questions SET delivered_at = NULL, delivered_via = NULL WHERE id = ? AND delivered_via = ?',
       )
       .run(id, via);
-    this.db
+    const replies = this.db
       .prepare(
         'UPDATE inbox SET delivered_at = NULL, delivered_via = NULL WHERE question_id = ? AND delivered_via = ?',
       )
       .run(id, via);
+    return Number(question.changes) + Number(replies.changes);
   }
 
   markDelivered(ids: readonly number[], via: DeliveryVia): void {

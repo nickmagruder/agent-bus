@@ -220,17 +220,21 @@ export class Inbox {
     via: DeliveryVia,
   ): void {
     if (messageIds.length === 0 && questionIds.length === 0) return;
-    this.store.transaction(() => {
-      this.store.markUndelivered(messageIds, via);
-      for (const id of questionIds) this.store.markQuestionUndelivered(id, via);
-      this.store.appendEvent({
-        kind: 'inbox.undelivered',
-        platform: session.platform,
-        sessionId: session.id,
-        data: { via, ids: messageIds, questionIds },
-      });
+    const changed = this.store.transaction(() => {
+      let n = this.store.markUndelivered(messageIds, via);
+      for (const id of questionIds) n += this.store.markQuestionUndelivered(id, via);
+      // Only record (and wake waiters for) an undelivery that happened.
+      if (n > 0) {
+        this.store.appendEvent({
+          kind: 'inbox.undelivered',
+          platform: session.platform,
+          sessionId: session.id,
+          data: { via, ids: messageIds, questionIds },
+        });
+      }
+      return n;
     });
-    this.notifier.notify(session.id);
+    if (changed > 0) this.notifier.notify(session.id);
   }
 
   /** ✅ on the replies with these IDs, and on those that answered these questions. */

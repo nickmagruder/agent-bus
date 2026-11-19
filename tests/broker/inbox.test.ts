@@ -389,6 +389,15 @@ describe('StopDelivery', () => {
     expect(store.undelivered(session.id, 10).map((r) => r.body)).toEqual(['one']);
   });
 
+  it('records no undelivery when nothing was actually put back', () => {
+    inbox.receive(message({ text: 'one' }));
+    const taken = inbox.take(session, 'check_inbox');
+    // Undoing a "wait_for_reply" delivery of a row check_inbox delivered: no change.
+    inbox.untake(session, taken, 'wait_for_reply');
+    expect(store.countUndelivered(session.id)).toBe(0);
+    expect(events('inbox.undelivered')).toEqual([]);
+  });
+
   it('hands over at most stopTakePerBlock replies and says how many wait', () => {
     const limit = LIMITS.stopTakePerBlock;
     for (let i = 0; i < limit + 2; i++) inbox.receive(message({ text: `note ${i}` }));

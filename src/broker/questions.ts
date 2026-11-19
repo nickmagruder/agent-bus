@@ -216,6 +216,27 @@ export class Questions {
     return question;
   }
 
+  /**
+   * Puts an outcome back as undelivered (with the replies that answered it):
+   * the call that took it was cancelled before its client read the answer.
+   * Only a delivery made via `via` is undone.
+   */
+  untakeOutcome(question: QuestionRecord, via: DeliveryVia): void {
+    const changed = this.store.transaction(() => {
+      const n = this.store.markQuestionUndelivered(question.id, via);
+      if (n > 0) {
+        this.store.appendEvent({
+          kind: 'question.undelivered',
+          platform: this.store.getSession(question.sessionId)?.platform ?? null,
+          sessionId: question.sessionId,
+          data: { questionId: question.id, via },
+        });
+      }
+      return n;
+    });
+    if (changed > 0) this.notifier.notify(question.sessionId);
+  }
+
   /** All closed, undelivered outcomes for a session, marked delivered. */
   takeOutcomes(sessionId: string, via: DeliveryVia): QuestionRecord[] {
     const outcomes = this.store.undeliveredOutcomes(sessionId);

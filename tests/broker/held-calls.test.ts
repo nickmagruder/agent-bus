@@ -4,6 +4,7 @@ import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { UNDO_WINDOW_MS } from '../../src/broker/held-calls.ts';
 import { silentLogger } from '../../src/broker/log.ts';
 import { startBroker, type Broker } from '../../src/broker/main.ts';
 import { FakeSlack, TOKENS, USER_ID } from './fakes.ts';
@@ -282,5 +283,149 @@ describe('a client cancelling a held call (Esc), #48', () => {
     await expect.poll(() => broker.notifier.waiting(session), { timeout: 3000 }).toBe(1);
     // The other call runs to its own 2 s limit and answers normally.
     expect(JSON.stringify(await kept)).toContain('Nothing new from Nick yet');
+  }, 15_000);
+});
+
+describe('a cancel that races the answer (#50)', () => {
+  /** One raw JSON-RPC POST to /mcp, so the test picks the request ID. */
+  async function rpc(broker: Broker, body: Record<string, unknown>): Promise<string> {
+    const response = await fetch(`http://127.0.0.1:${broker.port}/mcp`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${TOKENS.claude}`,
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', ...body }),
+    });
+    return response.text();
+  }
+
+  const callTool = (broker: Broker, id: number, name: string, args: Record<string, unknown>) =>
+    rpc(broker, { id, method: 'tools/call', params: { name, arguments: args } });
+
+  const cancel = (broker: Broker, requestId: number) =>
+    rpc(broker, {
+      method: 'notifications/cancelled',
+      params: { requestId, reason: 'Esc' },
+    });
+
+  let nextTs = 100;
+  function reply(broker: Broker, session: string, text: string): void {
+    broker.store.setThread(session, 'C_RACE', '1700000600.000001');
+    broker.inbox.receive({
+      channel: 'C_RACE',
+      channelType: 'channel',
+      ts: `1700000600.${String(nextTs++).padStart(6, '0')}`,
+      threadTs: '1700000600.000001',
+      user: USER_ID,
+      text,
+      hasFiles: false,
+    });
+  }
+
+  it('puts back a reply wait_for_reply handed to a client that then cancelled', async () => {
+    const broker = await start();
+    const session = await register(await connect(broker));
+    reply(broker, session, 'Use plan B');
+
+    // The answer is written; the client had already given up on the call.
+    expect(await callTool(broker, 77, 'wait_for_reply', { session })).toContain('Use plan B');
+    expect(broker.store.countUndelivered(session)).toBe(0);
+    expect(broker.heldCalls.undoable).toBe(1);
+
+    await cancel(broker, 77);
+    expect(broker.store.countUndelivered(session)).toBe(1);
+    expect(broker.heldCalls.undoable).toBe(0);
+
+    // The next call gets it, and a late duplicate cancel changes nothing.
+    const next = await (
+      await connect(broker)
+    ).callTool({
+      name: 'check_inbox',
+      arguments: { session },
+    });
+    expect(next.structuredContent).toMatchObject({
+      messages: [expect.objectContaining({ text: 'Use plan B' })],
+    });
+    await cancel(broker, 77);
+    expect(broker.store.countUndelivered(session)).toBe(0);
+  }, 15_000);
+
+  it('puts back a question outcome a cancelled ask_human handed over', async () => {
+    const broker = await start();
+    const session = await register(await connect(broker));
+    const asking = callTool(broker, 80, 'ask_human', askArgs(session));
+    await expect.poll(() => broker.notifier.waiting(session)).toBe(1);
+    const questionId = broker.store.openQuestions(session)[0]?.id ?? '';
+    expect(broker.questions.answerByButton(questionId, 0, USER_ID)).toBe('answered');
+    expect(await asking).toContain('answered');
+    expect(broker.store.getQuestion(questionId)?.deliveredAt).not.toBeNull();
+
+    await cancel(broker, 80);
+    expect(broker.store.getQuestion(questionId)?.deliveredAt).toBeNull();
+    const again = await (
+      await connect(broker)
+    ).callTool({
+      name: 'wait_for_reply',
+      arguments: { session, question_id: questionId },
+    });
+    expect(again.structuredContent).toMatchObject({ state: 'answered', answer: 'Yes' });
+  }, 15_000);
+
+  it('puts back an outcome wait_for_reply(question_id) handed over', async () => {
+    const broker = await start();
+    const session = await register(await connect(broker));
+    const asked = await (
+      await connect(broker)
+    )
+      .callTool({ name: 'ask_human', arguments: askArgs(session) }, undefined, {
+        timeout: HOLD_MS * 2,
+        // Don't wait out the hold: answer below, then call wait_for_reply.
+        signal: AbortSignal.timeout(300),
+      })
+      .catch(() => undefined);
+    void asked;
+    await expect.poll(() => broker.store.openQuestions(session)).toHaveLength(1);
+    const questionId = broker.store.openQuestions(session)[0]?.id ?? '';
+    expect(broker.questions.answerByButton(questionId, 1, USER_ID)).toBe('answered');
+    expect(
+      await callTool(broker, 81, 'wait_for_reply', { session, question_id: questionId }),
+    ).toContain('answered');
+    await cancel(broker, 81);
+    expect(broker.store.getQuestion(questionId)?.deliveredAt).toBeNull();
+  }, 15_000);
+
+  it('a cancel for another request leaves an answer delivered', async () => {
+    const broker = await start();
+    const session = await register(await connect(broker));
+    reply(broker, session, 'Read it');
+    expect(await callTool(broker, 78, 'wait_for_reply', { session })).toContain('Read it');
+    await cancel(broker, 79);
+    expect(broker.store.countUndelivered(session)).toBe(0);
+  }, 15_000);
+
+  it('a late abort after the agent read the answer leaves it delivered (SDK keeps its listener)', async () => {
+    // Review of #54: the SDK client sends notifications/cancelled when a
+    // signal aborts even after the call finished. Past the short undo window
+    // that must not put a read answer back.
+    const broker = await start();
+    const session = await register(await connect(broker));
+    reply(broker, session, 'Use plan B');
+    const controller = new AbortController();
+    const answer = await (
+      await connect(broker)
+    ).callTool({ name: 'wait_for_reply', arguments: { session } }, undefined, {
+      signal: controller.signal,
+    });
+    expect(JSON.stringify(answer)).toContain('Use plan B');
+    await new Promise((resolve) => setTimeout(resolve, UNDO_WINDOW_MS + 200));
+    controller.abort('Esc a moment later');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(broker.store.countUndelivered(session)).toBe(0);
+    const undone = broker.store.db
+      .prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'inbox.undelivered'")
+      .get();
+    expect(undone).toEqual({ n: 0 });
   }, 15_000);
 });

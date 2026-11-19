@@ -407,6 +407,15 @@ are made.
 
 ## Changelog
 
+### 0.12.1 (2026-11-19)
+
+- **No reply lost to a cancel racing the answer** ([#50](https://github.com/nickmagruder/agent-bus/issues/50)):
+  if an agent cancels `ask_human` or `wait_for_reply` (Esc) in the instant
+  the broker answers it, the cancel now puts the replies or question outcome
+  that call took back in the inbox, for the agent's next call. Only a cancel
+  within 500 ms of the answer counts: later ones (the SDK also cancels calls
+  it already finished when Esc is pressed) leave a read answer delivered.
+
 ### 0.12.0 (2026-11-19)
 
 - **No approval DMs for read-only tools** ([#27](https://github.com/nickmagruder/agent-bus/issues/27)):
