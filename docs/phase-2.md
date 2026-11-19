@@ -309,6 +309,17 @@ Findings:
 - **Approval DMs flood a testing session.** Every permission prompt
   (Bash, PowerShell, each Claude in Chrome action) sends a 🚨 DM, throttled
   to one per 2 minutes. Fine for real blocks, noisy for read-only tools.
+  0.11.0 ([#28](https://github.com/nickmagruder/agent-bus/issues/28)) holds
+  each DM for 60 s and drops it if the session moves on first, so prompts I
+  answer at the keyboard stay out of Slack. Cancel signals: any later hook
+  event from the session except the prompt itself (`PermissionRequest`, or
+  Claude's `Notification`), and any agent-bus call from it (an agent can't
+  call tools while a prompt waits). A new `PermissionRequest` replaces the
+  held DM. A 10 s tick sends due DMs, keeping the 2-minute throttle; one
+  older than 15 minutes (the broker was down) is dropped as stale. Wiring
+  `PostToolUse` (Codex: `PreToolUse`) gives the fastest cancel, at the cost
+  of a hook process per tool call. Skipping read-only tools or a quiet mode
+  ([#27](https://github.com/nickmagruder/agent-bus/issues/27)) is still open.
 - The reminder DM is posted under the bot's own name and icon, not the
   agent's (`style()` isn't applied to it); cosmetic.
 - Not yet covered live: Codex and Copilot (heartbeats past 300 s / 180 s),

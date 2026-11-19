@@ -125,6 +125,22 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX digest_items_pending ON digest_items (digested_at, id);
   `,
+  // v6: approval DMs held for a grace period, dropped if I answer in the app first.
+  `
+  CREATE TABLE held_pings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions (id),
+    kind TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    due_at TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'held'
+      CHECK (state IN ('held', 'sent', 'cancelled', 'throttled', 'stale')),
+    closed_at TEXT
+  );
+  CREATE INDEX held_pings_due ON held_pings (state, due_at);
+  CREATE INDEX held_pings_by_session ON held_pings (session_id, state);
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -148,6 +164,20 @@ export interface SessionRecord {
   announcedAt: string | null;
   createdAt: string;
   lastSeenAt: string;
+}
+
+export type HeldPingState = 'held' | 'sent' | 'cancelled' | 'throttled' | 'stale';
+
+/** A hook ping (an approval DM) waiting out its grace period. */
+export interface HeldPingRecord {
+  id: number;
+  sessionId: string;
+  kind: string;
+  /** Slack mrkdwn, already escaped. */
+  text: string;
+  createdAt: string;
+  dueAt: string;
+  state: HeldPingState;
 }
 
 /** An fyi notification waiting for the daily digest. */
@@ -701,6 +731,46 @@ export class Store {
     return { at: String(row.at), data: JSON.parse(String(row.data)) as Record<string, unknown> };
   }
 
+  // Held pings (approval DMs in their grace period)
+
+  holdPing(ping: { sessionId: string; kind: string; text: string; dueAt: Date }): HeldPingRecord {
+    const result = this.db
+      .prepare(
+        'INSERT INTO held_pings (session_id, kind, text, created_at, due_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run(ping.sessionId, ping.kind, ping.text, this.timestamp(), ping.dueAt.toISOString());
+    return found(this.heldPing(Number(result.lastInsertRowid)), 'new held ping');
+  }
+
+  heldPing(id: number): HeldPingRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM held_pings WHERE id = ?').get(id) as Row | undefined;
+    return row ? toHeldPing(row) : undefined;
+  }
+
+  /** A session's pings still in their grace period. */
+  heldPings(sessionId: string): HeldPingRecord[] {
+    const rows = this.db
+      .prepare("SELECT * FROM held_pings WHERE session_id = ? AND state = 'held' ORDER BY id")
+      .all(sessionId) as Row[];
+    return rows.map(toHeldPing);
+  }
+
+  /** Held pings whose grace period is over, oldest first. */
+  duePings(now: Date): HeldPingRecord[] {
+    const rows = this.db
+      .prepare("SELECT * FROM held_pings WHERE state = 'held' AND due_at <= ? ORDER BY id")
+      .all(now.toISOString()) as Row[];
+    return rows.map(toHeldPing);
+  }
+
+  /** Closes a held ping once (compare-and-swap on `held`); false if already closed. */
+  closeHeldPing(id: number, state: Exclude<HeldPingState, 'held'>): boolean {
+    const result = this.db
+      .prepare("UPDATE held_pings SET state = ?, closed_at = ? WHERE id = ? AND state = 'held'")
+      .run(state, this.timestamp(), id);
+    return Number(result.changes) === 1;
+  }
+
   // Daily digest
 
   addDigestItem(sessionId: string, text: string): void {
@@ -890,6 +960,18 @@ function toOutbox(row: Row): OutboxRecord {
       row.blocks === null || row.blocks === undefined
         ? null
         : (JSON.parse(String(row.blocks)) as unknown[]),
+  };
+}
+
+function toHeldPing(row: Row): HeldPingRecord {
+  return {
+    id: Number(row.id),
+    sessionId: String(row.session_id),
+    kind: String(row.kind),
+    text: String(row.text),
+    createdAt: String(row.created_at),
+    dueAt: String(row.due_at),
+    state: String(row.state) as HeldPingState,
   };
 }
 
