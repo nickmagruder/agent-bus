@@ -78,7 +78,14 @@ export function createGitHubApi(
           headers,
           signal: AbortSignal.timeout(options.timeoutMs ?? GITHUB.timeoutMs),
         });
-        if (!response.ok) throw new Error(`GitHub answered ${response.status} for ${repo}`);
+        if (!response.ok) {
+          // GitHub hides private repos from anonymous callers behind a 404.
+          const hint =
+            response.status === 404 && !options.token
+              ? ' (private repo? set AGENT_BUS_GITHUB_TOKEN)'
+              : '';
+          throw new Error(`GitHub answered ${response.status} for ${repo}${hint}`);
+        }
         const pulls = z.array(pullSchema).parse(await response.json());
         for (const pull of pulls) {
           if (!pull.merged_at || new Date(pull.merged_at) < since) continue;

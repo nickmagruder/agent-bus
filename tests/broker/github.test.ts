@@ -126,6 +126,18 @@ describe('createGitHubApi', () => {
     expect(await createGitHubApi({ fetch: doFetch }).mergedPullRequests(REPO, SINCE)).toEqual([]);
   });
 
+  it('hints at the token when a repo is hidden from anonymous calls', async () => {
+    const hidden = fakeFetch([[]], 404);
+    await expect(
+      createGitHubApi({ fetch: hidden.doFetch }).mergedPullRequests(REPO, SINCE),
+    ).rejects.toThrow(
+      'GitHub answered 404 for octo/clankers (private repo? set AGENT_BUS_GITHUB_TOKEN)',
+    );
+    await expect(
+      createGitHubApi({ fetch: hidden.doFetch, token: 't' }).mergedPullRequests(REPO, SINCE),
+    ).rejects.toThrow(/^GitHub answered 404 for octo\/clankers$/);
+  });
+
   it('throws on an error status, a bad repo name or a malformed answer', async () => {
     const failing = fakeFetch([[]], 403);
     await expect(
