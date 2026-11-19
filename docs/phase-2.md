@@ -294,6 +294,9 @@ since the session started), so the tools were called by a small MCP client
 using `AGENT_BUS_TOKEN_CLAUDE` and the session's real bus ID
 (`claude/agent-bus/43b2`, created by its `Stop` hook). This exercises the
 broker, Slack and my phone, but **not the Claude app's own MCP client**.
+That client is now `scripts/mcp-call.ts`
+([#30](https://github.com/nickmagruder/agent-bus/issues/30)); see the
+README's "Calling a tool by hand".
 
 | Test                                   | Result                                                                                                                                                                                      |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
