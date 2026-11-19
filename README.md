@@ -124,7 +124,9 @@ broker enforces its rules itself rather than trusting agent instructions:
   inbox and questions.
 - **Sender gating.** Only my Slack user ID can answer or press buttons;
   everything else is dropped and audited.
-- **Hooks only notify.** They never return allow/deny or block a stop.
+- **Hooks don't decide.** They never return allow/deny. The one block is
+  `Stop`: when I've replied in Slack, it hands the agent my replies (labelled
+  as mine) so it keeps going, at most 6 times per session per hour.
 - **Minimal data leaves the machine.** Hooks send only the fields in
   [`src/shared/hook-protocol.ts`](src/shared/hook-protocol.ts), with size
   limits.
@@ -355,6 +357,22 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.7.0 (2026-11-18)
+
+- **Stop-hook inbox check** ([#21](https://github.com/nickmagruder/agent-bus/issues/21)):
+  when a Claude Code or Codex session is about to stop and I've replied in
+  Slack, its `Stop` hook prints `{"decision":"block"}` with my replies (up to
+  5, labelled as mine) as the reason, marks them delivered (`stop_hook`) and
+  reacts ✅. With `stop_hook_active`, it blocks again only for newer replies;
+  once the agent stops after our block, I get the usual "waiting for you"
+  post. Loop guard: 6 blocks per session per hour, then replies wait for
+  `check_inbox`. Copilot replies are never taken by a Stop hook.
+- Replies count as delivered (✅) only once the hook response is written; if
+  the hook gave up first, they go back to the inbox. The Stop hook waits up
+  to 15 s (was 3 s). Taking the replies and auditing the block commit
+  together.
+- "Waiting for you" posts say how many of my replies the agent hasn't read.
 
 ### 0.6.5 (2026-11-18)
 

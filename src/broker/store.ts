@@ -177,7 +177,7 @@ export interface NewPost {
 }
 
 /** How an inbox message or question outcome reached the agent. */
-export type DeliveryVia = 'check_inbox' | 'wait_for_reply' | 'ask_human';
+export type DeliveryVia = 'check_inbox' | 'wait_for_reply' | 'ask_human' | 'stop_hook';
 
 export type QuestionState = 'open' | 'answered' | 'expired';
 export type AnswerSource = 'button' | 'reply';
@@ -582,6 +582,31 @@ export class Store {
       .run(at, via, id);
   }
 
+  /**
+   * Undoes a delivery the agent never received (a Stop hook whose response
+   * didn't reach the app). Only rows delivered via `via` are touched.
+   */
+  markUndelivered(ids: readonly number[], via: DeliveryVia): void {
+    const statement = this.db.prepare(
+      'UPDATE inbox SET delivered_at = NULL, delivered_via = NULL WHERE id = ? AND delivered_via = ?',
+    );
+    for (const id of ids) statement.run(id, via);
+  }
+
+  /** The question counterpart of markUndelivered, with the replies that answered it. */
+  markQuestionUndelivered(id: string, via: DeliveryVia): void {
+    this.db
+      .prepare(
+        'UPDATE questions SET delivered_at = NULL, delivered_via = NULL WHERE id = ? AND delivered_via = ?',
+      )
+      .run(id, via);
+    this.db
+      .prepare(
+        'UPDATE inbox SET delivered_at = NULL, delivered_via = NULL WHERE question_id = ? AND delivered_via = ?',
+      )
+      .run(id, via);
+  }
+
   markDelivered(ids: readonly number[], via: DeliveryVia): void {
     const statement = this.db.prepare(
       'UPDATE inbox SET delivered_at = ?, delivered_via = ? WHERE id = ? AND delivered_at IS NULL',
@@ -603,6 +628,27 @@ export class Store {
         JSON.stringify(event.data ?? {}),
       );
     return Number(result.lastInsertRowid);
+  }
+
+  /** The newest event of a kind for a session, optionally matching a top-level `data` field. */
+  latestEvent(filter: {
+    kind: string;
+    sessionId: string;
+    /** One value, or any of several. */
+    dataField?: { name: string; value: string | readonly string[] };
+  }): Record<string, unknown> | undefined {
+    const where = ['kind = ?', 'session_id = ?'];
+    const params: SQLInputValue[] = [filter.kind, filter.sessionId];
+    if (filter.dataField) {
+      const { name, value } = filter.dataField;
+      const values = typeof value === 'string' ? [value] : value;
+      where.push(`json_extract(data, ?) IN (${values.map(() => '?').join(', ')})`);
+      params.push(`$.${name}`, ...values);
+    }
+    const row = this.db
+      .prepare(`SELECT data FROM events WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT 1`)
+      .get(...params) as Row | undefined;
+    return row ? (JSON.parse(String(row.data)) as Record<string, unknown>) : undefined;
   }
 
   /** Counts events since a time, optionally matching a top-level `data` field. */

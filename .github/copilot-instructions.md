@@ -37,8 +37,9 @@ markdownlint already catch. If nothing significant turns up, say so.
 - A session may only read and answer its own inbox and questions.
 - Only `SLACK_USER_ID` can answer or press buttons; other Slack senders are
   dropped and audited without their text.
-- Hooks only notify: `src/cli/hook.ts` never returns allow/deny, never blocks a
-  stop, and always exits 0.
+- Hooks never decide permissions: `src/cli/hook.ts` never returns allow/deny
+  and always exits 0. Only `Stop` may print `decision: block`, when the
+  broker hands over my Slack replies (loop guard: a per-session hourly cap).
 - Hook payloads hold prompts and tool input: only the fields in
   `src/shared/hook-protocol.ts` leave the machine.
 - Tokens and Slack IDs come from `process.env` (validated with zod in

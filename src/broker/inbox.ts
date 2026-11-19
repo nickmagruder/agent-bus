@@ -58,6 +58,13 @@ export const HINT_TEXT =
  * `humanUserId` count; everything else is dropped and audited. Only text I
  * typed ever enters an inbox, so agents can treat inbox messages as mine.
  */
+/** What one take handed over, and how many messages still wait. */
+export interface InboxTake {
+  messages: InboxRecord[];
+  outcomes: QuestionRecord[];
+  remaining: number;
+}
+
 export class Inbox {
   private readonly store: Store;
   private readonly queue: { kick(): void };
@@ -153,13 +160,15 @@ export class Inbox {
   /**
    * Hands a session its undelivered messages (oldest first, at most `limit`)
    * and question outcomes, and marks them delivered. The caller has already
-   * checked ownership.
+   * checked ownership. With `react: false` the ✅ reactions wait for
+   * `confirm` (the Stop hook adds them once its response is written).
    */
   take(
     session: SessionRecord,
     via: DeliveryVia = 'check_inbox',
     limit = TAKE_LIMIT,
-  ): { messages: InboxRecord[]; outcomes: QuestionRecord[]; remaining: number } {
+    options: { react?: boolean } = {},
+  ): InboxTake {
     const result = this.store.transaction(() => {
       const outcomes = this.questions.takeOutcomes(session.id, via);
       const messages = this.store.undelivered(session.id, limit);
@@ -177,10 +186,43 @@ export class Inbox {
       }
       return { messages, outcomes, remaining: this.store.countUndelivered(session.id) };
     });
-    this.reactDelivered(result.messages);
-    for (const outcome of result.outcomes)
-      this.reactDelivered(this.store.questionReplies(outcome.id));
+    if (options.react ?? true) this.confirm(result);
     return result;
+  }
+
+  /** ✅ on everything a take handed over: the agent has it now. */
+  confirm(taken: InboxTake): void {
+    this.reactDelivered(taken.messages);
+    for (const outcome of taken.outcomes)
+      this.reactDelivered(this.store.questionReplies(outcome.id));
+  }
+
+  /**
+   * Puts a take back: the agent never received it (a Stop hook's response
+   * didn't reach the app), so the next stop or check_inbox hands it over
+   * again. The delivery events stay in the append-only audit log; this adds
+   * an `inbox.undelivered` event after them.
+   */
+  untake(session: SessionRecord, taken: InboxTake, via: DeliveryVia): void {
+    if (taken.messages.length === 0 && taken.outcomes.length === 0) return;
+    this.store.transaction(() => {
+      this.store.markUndelivered(
+        taken.messages.map((m) => m.id),
+        via,
+      );
+      for (const outcome of taken.outcomes) this.store.markQuestionUndelivered(outcome.id, via);
+      this.store.appendEvent({
+        kind: 'inbox.undelivered',
+        platform: session.platform,
+        sessionId: session.id,
+        data: {
+          via,
+          ids: taken.messages.map((m) => m.id),
+          questionIds: taken.outcomes.map((q) => q.id),
+        },
+      });
+    });
+    this.notifier.notify(session.id);
   }
 
   /** ✅ on my messages the agent has now read. */

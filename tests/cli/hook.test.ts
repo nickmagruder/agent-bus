@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { silentLogger } from '../../src/broker/log.ts';
 import { startBroker, type Broker } from '../../src/broker/main.ts';
-import { runHook } from '../../src/cli/hook.ts';
+import { runHook, timeoutFor } from '../../src/cli/hook.ts';
 import { FakeSlack, TOKENS, USER_ID } from '../broker/fakes.ts';
 
 const repoRoot = path.resolve(import.meta.dirname, '..', '..');
@@ -115,6 +115,67 @@ describe('runHook against the broker', () => {
   it('rejects an unknown platform', async () => {
     const result = await runHook({ argv: ['gemini'], stdin: '{}', env: env(), cwd: repoRoot });
     expect(result.note).toContain('must be one of');
+  });
+
+  it('Stop hands my Slack reply to the agent once, then pings when it stops again', async () => {
+    const start = await runHook({
+      argv: ['claude'],
+      stdin: payload({ session_id: 'app-stop', hook_event_name: 'SessionStart' }),
+      env: env(),
+      cwd: repoRoot,
+    });
+    const busId = /claude\/agent-bus\/[0-9a-f]{4}/.exec(start.stdout)?.[0] ?? '';
+    broker.store.setThread(busId, 'C_STOP', '1700000100.000001');
+    broker.inbox.receive({
+      channel: 'C_STOP',
+      channelType: 'channel',
+      ts: '1700000100.000002',
+      threadTs: '1700000100.000001',
+      user: USER_ID,
+      text: 'Use plan B',
+      hasFiles: false,
+    });
+
+    const stop = (active: boolean) =>
+      runHook({
+        argv: ['claude'],
+        stdin: payload({
+          session_id: 'app-stop',
+          hook_event_name: 'Stop',
+          stop_hook_active: active,
+          last_assistant_message: 'Done.',
+        }),
+        env: env(),
+        cwd: repoRoot,
+      });
+    const blocked = JSON.parse((await stop(false)).stdout) as { decision: string; reason: string };
+    expect(blocked.decision).toBe('block');
+    expect(blocked.reason).toContain('Use plan B');
+    expect(broker.store.countUndelivered(busId)).toBe(0);
+    // ✅ once the response was written to the hook.
+    await expect
+      .poll(() => slack.reactions)
+      .toContainEqual({ channel: 'C_STOP', ts: '1700000100.000002', name: 'white_check_mark' });
+    // The agent dealt with it and stops again: no block, so the app stops normally.
+    expect(await stop(true)).toEqual({ stdout: '' });
+  });
+
+  it('Stop prints nothing when the broker fails', async () => {
+    const result = await runHook({
+      argv: ['claude'],
+      stdin: payload({ hook_event_name: 'Stop' }),
+      env: env(),
+      cwd: repoRoot,
+      fetch: (async () => new Response('boom', { status: 500 })) as typeof fetch,
+    });
+    expect(result).toEqual({ stdout: '', note: 'broker answered 500' });
+  });
+
+  it('gives Stop the longest wait, SessionStart the shortest', () => {
+    expect(timeoutFor('Stop')).toBe(15_000);
+    expect(timeoutFor('SessionStart')).toBe(2000);
+    expect(timeoutFor('PermissionRequest')).toBe(3000);
+    expect(timeoutFor('UserPromptSubmit')).toBe(3000);
   });
 
   it('prints nothing when the broker refuses', async () => {
