@@ -41,6 +41,7 @@ export interface Broker {
   service: BusService;
   inbox: Inbox;
   questions: Questions;
+  notifier: Notifier;
   stop: () => Promise<void>;
 }
 
@@ -175,6 +176,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
     service,
     inbox,
     questions,
+    notifier,
     async stop() {
       questions.stop();
       digest?.stop();

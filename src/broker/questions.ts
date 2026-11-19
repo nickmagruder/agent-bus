@@ -64,6 +64,11 @@ export class Notifier {
     this.emitter.emit(sessionId);
   }
 
+  /** Held calls waiting on a session right now (tests check nothing is left behind). */
+  waiting(sessionId: string): number {
+    return this.emitter.listenerCount(sessionId);
+  }
+
   /** Resolves on the next notify for the session, after `ms`, or when `signal` aborts. */
   wait(
     sessionId: string,
