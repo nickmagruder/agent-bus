@@ -18,7 +18,7 @@ into tracked files.
 ## Stack
 
 - **Runtime:** Node 24, TypeScript run directly by Node (type stripping; no build step)
-- **Libraries:** `@modelcontextprotocol/sdk` (≥ 1.24), `zod`, `@slack/bolt`, `@slack/web-api`; SQLite via built-in `node:sqlite`
+- **Libraries:** `@modelcontextprotocol/sdk` (≥ 1.24), `zod`, `@slack/bolt`, `@slack/web-api`; SQLite via built-in `node:sqlite`; GitHub REST over `fetch` (digest only)
 - **Tests/tooling:** Vitest, ESLint (typescript-eslint, strict), Prettier, markdownlint; husky + lint-staged hooks
 - **Hosting/CI:** runs locally on Windows; GitHub Actions (checks + gitleaks, CodeQL, Scorecard), Dependabot, Copilot PR review
 
@@ -72,7 +72,8 @@ into tracked files.
 - `src/broker/mcp.ts`: MCP tools (`register`, `notify_human`, `check_inbox`, `ask_human`, `wait_for_reply`)
 - `src/broker/inbox.ts`: my Slack replies → session inboxes (sender gating, routing, reactions, DM hint)
 - `src/broker/slack/inbound.ts`: Bolt `message` listener feeding the inbox; question button handler
-- `src/broker/digest.ts`: daily digest in `#agents` (`fyi` items, questions, sessions seen; catch-up at start)
+- `src/broker/digest.ts`: daily digest in `#agents` (questions, merged PRs, `fyi` items, sessions seen; catch-up at start)
+- `src/broker/github.ts`: read-only GitHub client for the digest's merged PRs
 - `src/broker/questions.ts`: `ask_human` questions after they're asked (answers, reminder, expiry, outcomes, waiting)
 - `src/broker/http.ts`: `127.0.0.1` HTTP server (`/mcp`, `/hook`, `/health`) behind the guard
 - `src/cli/hook.ts`: hook command for Claude Code and Codex (always exits 0)

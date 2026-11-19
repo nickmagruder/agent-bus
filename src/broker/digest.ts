@@ -1,4 +1,5 @@
 import { escapeSlackText } from '../shared/slack-text.ts';
+import type { GitHubApi, MergedPr } from './github.ts';
 import { errorMessage, type Logger } from './log.ts';
 import { FALLBACK_CHANNEL } from './slack/directory.ts';
 import type { DigestItemRecord, QuestionRecord, SessionRecord, Store } from './store.ts';
@@ -63,9 +64,10 @@ export function previousDay(day: string): string {
 }
 
 /**
- * Posts the daily digest to #agents: fyi notifications grouped by session,
- * open and expired questions, and the sessions seen since the last digest.
- * Nothing to report → no post (the slot is still marked done).
+ * Posts the daily digest to #agents: open and expired questions, PRs merged
+ * in the configured repos, fyi notifications grouped by session, and the
+ * sessions seen since the last digest. Nothing to report → no post (the slot
+ * is still marked done).
  */
 export class Digest {
   private readonly store: Store;
@@ -74,7 +76,11 @@ export class Digest {
   private readonly now: () => Date;
   private readonly timeZone: string;
   private readonly hour: number;
+  private readonly github: GitHubApi | undefined;
+  private readonly repos: readonly string[];
   private timer: NodeJS.Timeout | undefined;
+  private running = false;
+  private stopped = false;
 
   constructor(options: {
     store: Store;
@@ -84,6 +90,9 @@ export class Digest {
     /** IANA zone for the digest hour; defaults to this machine's. */
     timeZone?: string;
     hour?: number;
+    /** Repos (`owner/name`) whose merged PRs the digest lists. */
+    repos?: readonly string[];
+    github?: GitHubApi;
   }) {
     this.store = options.store;
     this.queue = options.queue;
@@ -91,21 +100,35 @@ export class Digest {
     this.now = options.now ?? (() => new Date());
     this.timeZone = options.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
     this.hour = options.hour ?? DIGEST.hour;
+    this.repos = options.repos ?? [];
+    this.github = options.github;
   }
 
   /** Checks now (the catch-up after a missed slot) and then every `tickMs`. */
   start(tickMs: number = DIGEST.tickMs): void {
-    this.safeTick();
-    this.timer = setInterval(() => this.safeTick(), tickMs);
+    void this.safeTick();
+    this.timer = setInterval(() => void this.safeTick(), tickMs);
     this.timer.unref();
   }
 
   stop(): void {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
   }
 
-  tick(): DigestOutcome {
+  async tick(): Promise<DigestOutcome> {
+    // A slow GitHub call must not let the next timer tick post the same slot.
+    if (this.running) return 'not_due';
+    this.running = true;
+    try {
+      return await this.runTick();
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private async runTick(): Promise<DigestOutcome> {
     const now = this.now();
     const slot = digestSlot(now, this.timeZone, this.hour);
     const last = this.store.latestEventOfKind(DONE_EVENT);
@@ -113,7 +136,16 @@ export class Digest {
     // back, or a move to a zone further east, never re-posts an older slot.
     const lastSlot = typeof last?.data.slot === 'string' ? last.data.slot : undefined;
     if (lastSlot !== undefined && slot <= lastSlot) return 'not_due';
-    const since = last ? new Date(last.at) : new Date(now.getTime() - DIGEST.firstWindowMs);
+    // The window runs from where the last one ended (`until`, taken before
+    // its GitHub call, so nothing merged during the call falls between two
+    // digests; older events only have their own time) to now.
+    const lastUntil = typeof last?.data.until === 'string' ? last.data.until : last?.at;
+    const since = lastUntil ? new Date(lastUntil) : new Date(now.getTime() - DIGEST.firstWindowMs);
+    // Outside the transaction: a network call must not hold the database.
+    const github = await this.mergedPrs(since);
+    // Stopped during the call: the store may be closed; the slot reruns at next start.
+    if (this.stopped) return 'not_due';
+    const prs = github.prs;
 
     const outcome = this.store.transaction(() => {
       const items = this.store.pendingDigestItems();
@@ -125,6 +157,8 @@ export class Digest {
         items,
         questions,
         sessions,
+        prs,
+        prsTruncated: github.truncated,
         sessionById: (id) => this.store.getSession(id),
       });
       if (text) this.store.enqueue({ target: FALLBACK_CHANNEL, text });
@@ -133,10 +167,12 @@ export class Digest {
         kind: DONE_EVENT,
         data: {
           slot,
+          until: now.toISOString(),
           posted: Boolean(text),
           items: items.length,
           questions: questions.length,
           sessions: sessions.length,
+          prs: prs.length,
         },
       });
       return text ? 'sent' : 'empty';
@@ -145,9 +181,47 @@ export class Digest {
     return outcome;
   }
 
-  private safeTick(): void {
+  /**
+   * Merged PRs in the configured repos, oldest first across all of them. A
+   * repo GitHub can't serve is skipped and logged; so are PRs dropped for an
+   * unexpected link and a list cut at the page limit.
+   */
+  private async mergedPrs(since: Date): Promise<{ prs: MergedPr[]; truncated: boolean }> {
+    const github = this.github;
+    if (!github || this.repos.length === 0) return { prs: [], truncated: false };
+    const results = await Promise.allSettled(
+      this.repos.map((repo) => github.mergedPullRequests(repo, since)),
+    );
+    const prs: MergedPr[] = [];
+    let truncated = false;
+    for (const [index, result] of results.entries()) {
+      const repo = this.repos[index];
+      if (result.status === 'rejected') {
+        this.log('warn', 'digest skipped merged PRs for a repo', {
+          repo,
+          error: errorMessage(result.reason),
+        });
+        continue;
+      }
+      prs.push(...result.value.prs);
+      if (result.value.dropped > 0) {
+        this.log('warn', "digest left out merged PRs whose link isn't the repo's own", {
+          repo,
+          dropped: result.value.dropped,
+        });
+      }
+      if (result.value.truncated) {
+        truncated = true;
+        this.log('warn', 'digest listed only the most recent merged PRs for a repo', { repo });
+      }
+    }
+    prs.sort((a, b) => a.mergedAt.localeCompare(b.mergedAt));
+    return { prs, truncated };
+  }
+
+  private async safeTick(): Promise<void> {
     try {
-      this.tick();
+      await this.tick();
     } catch (error) {
       this.log('error', 'digest tick failed', { error: errorMessage(error) });
     }
@@ -160,10 +234,13 @@ export interface DigestInput {
   items: readonly DigestItemRecord[];
   questions: readonly QuestionRecord[];
   sessions: readonly SessionRecord[];
+  prs?: readonly MergedPr[];
+  /** GitHub had more than the page limit: older merged PRs aren't listed. */
+  prsTruncated?: boolean;
   sessionById: (id: string) => SessionRecord | undefined;
 }
 
-type LineKind = 'question' | 'fyi' | 'session' | 'other';
+type LineKind = 'question' | 'pr' | 'fyi' | 'session' | 'other';
 
 /**
  * The digest post (Slack mrkdwn), or undefined when there's nothing to report.
@@ -174,7 +251,11 @@ type LineKind = 'question' | 'fyi' | 'session' | 'other';
  */
 export function digestText(input: DigestInput): string | undefined {
   const { items, questions, sessions } = input;
-  if (items.length === 0 && questions.length === 0 && sessions.length === 0) return undefined;
+  const prs = input.prs ?? [];
+  const prsTruncated = input.prsTruncated ?? false;
+  if (items.length + questions.length + sessions.length + prs.length === 0 && !prsTruncated) {
+    return undefined;
+  }
 
   const planned: { kind: LineKind; text: string }[] = [];
   const plan = (kind: LineKind, text: string): void => {
@@ -185,6 +266,14 @@ export function digestText(input: DigestInput): string | undefined {
     plan('other', '');
     plan('other', `*Questions* (${questions.length})`);
     for (const question of questions) plan('question', questionLine(question));
+  }
+  // Agents merge these without my review, so they come right after questions.
+  if (prs.length > 0 || prsTruncated) {
+    plan('other', '');
+    plan('other', `*Merged PRs* (${prs.length})`);
+    if (prsTruncated)
+      plan('pr', '• _Older merged PRs not listed: more than GitHub returned in one pass_');
+    for (const pr of prs) plan('pr', prLine(pr));
   }
   if (items.length > 0) {
     plan('other', '');
@@ -230,6 +319,7 @@ function leftOutFooter(rest: readonly { kind: LineKind }[]): string {
   const count = (kind: LineKind) => rest.filter((line) => line.kind === kind).length;
   const parts = [
     plural(count('question'), 'question'),
+    plural(count('pr'), 'merged PR'),
     plural(count('fyi'), 'fyi item'),
     plural(count('session'), 'session'),
   ].filter((part) => part !== undefined);
@@ -239,6 +329,17 @@ function leftOutFooter(rest: readonly { kind: LineKind }[]): string {
 function plural(n: number, noun: string): string | undefined {
   if (n === 0) return undefined;
   return `${n} ${noun}${n === 1 ? '' : 's'}`;
+}
+
+/**
+ * `• <link|owner/name#12 Title> by author (Claude Code)`. Titles and logins
+ * come from GitHub, so they're escaped like agent text; the link was checked
+ * to be the repo's own PR URL.
+ */
+export function prLine(pr: MergedPr): string {
+  const title = escapeSlackText(clip(pr.title, 160)).replaceAll('|', '¦');
+  const agent = pr.agent ? ` (${pr.agent})` : '';
+  return `• <${pr.url}|${pr.repo}#${pr.number} ${title}> by ${escapeSlackText(pr.author)}${agent}`;
 }
 
 function sessionLine(id: string, session: SessionRecord | undefined): string {
