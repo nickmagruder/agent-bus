@@ -131,7 +131,12 @@ broker enforces its rules itself rather than trusting agent instructions:
 - **Minimal data leaves the machine.** Hooks send only the fields in
   [`src/shared/hook-protocol.ts`](src/shared/hook-protocol.ts), with size
   limits.
-- **Escaped output.** Agent text can't trigger `@channel` or disguise links.
+- **Escaped output.** Agent text, and PR titles from GitHub, can't trigger
+  `@channel` or disguise links.
+- **One optional outbound call besides Slack.** With `AGENT_BUS_DIGEST_REPOS`
+  set, the daily digest reads merged PRs from `api.github.com` (read-only;
+  anonymous unless `AGENT_BUS_GITHUB_TOKEN` is set). Links in the digest
+  only ever point at those repos' own PRs.
 - **Caps and throttles** stop runaway agents from flooding Slack.
 - **Secrets** are user environment variables, never files; gitleaks runs
   before every commit and in CI.
@@ -173,16 +178,18 @@ npm install   # also installs the git hooks (husky)
 
 User environment variables, never files:
 
-| Variable                  | Purpose                                                        |
-| ------------------------- | -------------------------------------------------------------- |
-| `AGENT_BUS_TOKEN_CLAUDE`  | Bearer token for Claude Code (≥ 32 chars, unique per platform) |
-| `AGENT_BUS_TOKEN_CODEX`   | Bearer token for Codex                                         |
-| `AGENT_BUS_TOKEN_COPILOT` | Bearer token for Copilot                                       |
-| `SLACK_BOT_TOKEN`         | `xoxb-` bot token                                              |
-| `SLACK_APP_TOKEN`         | `xapp-` Socket Mode token                                      |
-| `SLACK_USER_ID`           | Your Slack member ID (urgent DMs go here; only you can answer) |
-| `AGENT_BUS_PORT`          | Optional; default `47823`                                      |
-| `AGENT_BUS_DATA_DIR`      | Optional; default `%LOCALAPPDATA%\agent-bus`                   |
+| Variable                  | Purpose                                                                                                        |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `AGENT_BUS_TOKEN_CLAUDE`  | Bearer token for Claude Code (≥ 32 chars, unique per platform)                                                 |
+| `AGENT_BUS_TOKEN_CODEX`   | Bearer token for Codex                                                                                         |
+| `AGENT_BUS_TOKEN_COPILOT` | Bearer token for Copilot                                                                                       |
+| `SLACK_BOT_TOKEN`         | `xoxb-` bot token                                                                                              |
+| `SLACK_APP_TOKEN`         | `xapp-` Socket Mode token                                                                                      |
+| `SLACK_USER_ID`           | Your Slack member ID (urgent DMs go here; only you can answer)                                                 |
+| `AGENT_BUS_PORT`          | Optional; default `47823`                                                                                      |
+| `AGENT_BUS_DATA_DIR`      | Optional; default `%LOCALAPPDATA%\agent-bus`                                                                   |
+| `AGENT_BUS_DIGEST_REPOS`  | Optional; comma-separated `owner/name` repos whose merged PRs the daily digest lists                           |
+| `AGENT_BUS_GITHUB_TOKEN`  | Optional; read-only token (fine-grained: Pull requests: read) for private digest repos. Public repos need none |
 
 The hook CLI reads `AGENT_BUS_TOKEN_<PLATFORM>` and `AGENT_BUS_PORT` too.
 
@@ -368,6 +375,17 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.10.0 (2026-11-18)
+
+- **Merged PRs in the digest** ([#24](https://github.com/nickmagruder/agent-bus/issues/24)):
+  with `AGENT_BUS_DIGEST_REPOS` set (for example to the clankers repo), the
+  daily digest lists PRs merged there since the last digest, right after
+  questions: title, link, author, and the agent from the PR's
+  "Generated with …" footer. Public repos need no token; set a read-only
+  `AGENT_BUS_GITHUB_TOKEN` for private ones. If GitHub can't be reached, the
+  section is skipped and logged. The digest tick is now async, and a slow
+  GitHub call can't post a slot twice.
 
 ### 0.9.0 (2026-11-18)
 

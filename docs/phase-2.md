@@ -139,6 +139,18 @@ Built in 0.9.0 ([#23](https://github.com/nickmagruder/agent-bus/issues/23)):
   code fences dropped and a lone backtick removed.
 - An empty slot is still recorded, so an `fyi` at 09:00 waits for tomorrow.
 
+Merged PRs, built in 0.10.0 ([#24](https://github.com/nickmagruder/agent-bus/issues/24)):
+agents merge clankers PRs without my review, so the digest lists them right
+after questions. `AGENT_BUS_DIGEST_REPOS` names the repos (nothing private
+is hardcoded in this public repo); `src/broker/github.ts` reads
+`GET /repos/{repo}/pulls?state=closed&sort=updated` (up to 3 pages of 50)
+and keeps PRs merged since the last digest. No token is needed for public
+repos (one call a day fits the anonymous limit); `AGENT_BUS_GITHUB_TOKEN`, a
+read-only fine-grained token, covers private ones. `gh` isn't used: it would
+lend the broker a full-scope token. A repo that fails is skipped and logged.
+The agent comes from the last lines of the PR body ("Generated with
+[Claude Code]", Codex, Copilot).
+
 ### Sign-in race
 
 Most of the ~40 s is Node starting under sign-in load, so making the broker
@@ -238,7 +250,7 @@ this doc keeps the design, decisions and live results.
   `UserPromptSubmit` bus-ID injection (0.8.0)
 - PR 4: [#23](https://github.com/nickmagruder/agent-bus/issues/23) daily
   digest (0.9.0), [#24](https://github.com/nickmagruder/agent-bus/issues/24) clankers
-  PRs in the digest
+  PRs in the digest (0.10.0)
 - clankers PR: [#32](https://github.com/nickmagruder/agent-bus/issues/32)
 - Verify on each app: [#25](https://github.com/nickmagruder/agent-bus/issues/25)
 - Test gap from PR 2: [#26](https://github.com/nickmagruder/agent-bus/issues/26)

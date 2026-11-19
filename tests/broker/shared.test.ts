@@ -14,6 +14,46 @@ const validEnv = {
   LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local',
 };
 
+describe('loadBrokerConfig: digest repos', () => {
+  it('has no repos and no GitHub token by default', () => {
+    expect(loadBrokerConfig(validEnv).github).toEqual({ repos: [], token: undefined });
+  });
+
+  it('reads a comma-separated repo list and an optional token', () => {
+    const config = loadBrokerConfig({
+      ...validEnv,
+      AGENT_BUS_DIGEST_REPOS: ' octo/clankers , octo/agent-bus.js ,',
+      AGENT_BUS_GITHUB_TOKEN: 'github_pat_test',
+    });
+    expect(config.github).toEqual({
+      repos: ['octo/clankers', 'octo/agent-bus.js'],
+      token: 'github_pat_test',
+    });
+  });
+
+  it.each(['clankers', 'octo/clankers/extra', 'https://github.com/octo/clankers', 'octo/a b'])(
+    'rejects %j without echoing the token',
+    (repos) => {
+      expect(() =>
+        loadBrokerConfig({
+          ...validEnv,
+          AGENT_BUS_DIGEST_REPOS: repos,
+          AGENT_BUS_GITHUB_TOKEN: 'github_pat_secret',
+        }),
+      ).toThrow(/AGENT_BUS_DIGEST_REPOS must be comma-separated owner\/name repos/);
+      try {
+        loadBrokerConfig({
+          ...validEnv,
+          AGENT_BUS_DIGEST_REPOS: repos,
+          AGENT_BUS_GITHUB_TOKEN: 'github_pat_secret',
+        });
+      } catch (error) {
+        expect(String(error)).not.toContain('github_pat_secret');
+      }
+    },
+  );
+});
+
 describe('loadBrokerConfig', () => {
   it('loads a valid environment with defaults', () => {
     const config = loadBrokerConfig(validEnv);
