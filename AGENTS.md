@@ -90,6 +90,7 @@ into tracked files.
 - `src/broker/log.ts`: JSON-lines logger and daily log files (`--log-to-file`)
 - `scripts/install-task.ps1`: registers the "agent-bus broker" logon task
 - `scripts/run-broker.ps1`: launcher the task runs; restarts after crashes, stops on exit 78
+- `scripts/mcp-call.ts`: calls one agent-bus tool with a platform token (live tests, manual checks)
 - `.husky/`: pre-commit (lint-staged, then `scripts/gitleaks-staged.sh`) and commit-msg (`scripts/commit-msg.ts`, rules in `scripts/commit-msg-rules.ts`) hooks
 - `.github/workflows/`: `ci.yml` (the required `check` job), `codeql.yml`, `scorecard.yml`; actions pinned by SHA
 - `.github/copilot-instructions.md`, `.github/instructions/security.instructions.md`, `.github/skills/code-review/`: Copilot PR review
