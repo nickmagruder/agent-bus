@@ -244,6 +244,170 @@ describe('permission pings', () => {
   });
 });
 
+describe('approval prompts for read-only tools (#27)', () => {
+  it.each([
+    'Read',
+    'Glob',
+    'Grep',
+    'LS',
+    'NotebookRead',
+    'WebFetch',
+    'WebSearch',
+    'BashOutput',
+    'ListMcpResourcesTool',
+    'ReadMcpResourceTool',
+    'mcp__claude-in-chrome__get_page_text',
+    'mcp__claude-in-chrome__read_page',
+    'mcp__claude-in-chrome__find',
+    'mcp__claude-in-chrome__tabs_context_mcp',
+    'mcp__Claude_Browser__tabs_context',
+    'mcp__Claude_Browser__read_console_messages',
+    'mcp__github__list_issues',
+    'mcp__github__search_code',
+    'mcp__github__GET_ISSUE',
+    'mcp__fetch__fetch',
+    'mcp__docs__view_page',
+    'mcp__agent_bus_two__describe_thing',
+  ])('sends no DM for %s', (toolName) => {
+    expect(hook({ event: 'PermissionRequest', toolName }).action).toBe('read_only');
+    expect(elapse()).toBe(0);
+    expect(queued(DM_TARGET)).toEqual([]);
+  });
+
+  it.each([
+    ['Bash', undefined],
+    ['PowerShell', undefined],
+    ['Write', undefined],
+    ['Edit', undefined],
+    ['NotebookEdit', undefined],
+    ['KillShell', undefined],
+    ['mcp__postgres__query', undefined],
+    ['mcp__slack__post_message', undefined],
+    ['mcp__github__create_issue', undefined],
+    ['mcp__x__getaway', undefined], // "get" must be a whole word
+    ['mcp__x__getJiraIssue', undefined],
+    ['mcp__claude-in-chrome__navigate', undefined],
+    ['mcp__claude-in-chrome__computer', 'left_click'],
+    ['mcp__claude-in-chrome__computer', undefined], // no action: can't tell
+    ['get_page_text', undefined], // not an MCP tool name
+    ['mcp__get_x', undefined], // no server part
+    ['mcp__s__x__get_y', undefined], // the tool part can't hide behind `__`
+    // A read verb first, but a write word in the name (review of #53).
+    ['mcp__gdocs__find_and_replace', undefined],
+    ['mcp__zapier__find_or_create_contact', undefined],
+    ['mcp__db__get_or_create_user', undefined],
+    ['mcp__editor__search_and_replace', undefined],
+    ['mcp__gmail__read_and_archive', undefined],
+    ['mcp__x__list_and_delete_old', undefined],
+    ['mcp__x__get_then_send', undefined],
+    ['mcp__x__view_and_approve', undefined],
+  ])('still DMs for %s (action %s)', (toolName, toolAction) => {
+    const result = hook({ event: 'PermissionRequest', toolName, toolAction });
+    expect(result.action).toBe('held');
+    expect(elapse()).toBe(1);
+  });
+
+  it.each(['screenshot', 'zoom'])(
+    'sends no DM for a browser computer call whose action is %s',
+    (toolAction) => {
+      const result = hook({
+        event: 'PermissionRequest',
+        toolName: 'mcp__claude-in-chrome__computer',
+        toolAction,
+      });
+      expect(result.action).toBe('read_only');
+    },
+  );
+
+  it("trusts the call's action, not its display summary", () => {
+    // A click whose description reads like a screenshot still DMs.
+    const result = hook({
+      event: 'PermissionRequest',
+      toolName: 'mcp__claude-in-chrome__computer',
+      toolSummary: 'action: screenshot',
+      toolAction: 'left_click',
+    });
+    expect(result.action).toBe('held');
+  });
+
+  it.each([
+    ['Claude needs your permission to use Read', 'read_only'],
+    ['Claude needs your permission to use Read.', 'read_only'],
+    ['Claude needs your permission to use mcp__github__get_issue', 'read_only'],
+    ['Claude needs your permission to use mcp__gdocs__find_and_replace', 'held'],
+    ['Claude needs your permission to use Bash', 'held'],
+    ['Claude needs your permission', 'held'],
+    // A computer Notification carries no action, so it DMs.
+    ['Claude needs your permission to use mcp__claude-in-chrome__computer', 'held'],
+  ])("reads the tool from Claude's notification message: %j", (message, action) => {
+    expect(
+      hook({ event: 'Notification', notificationType: 'permission_prompt', message }).action,
+    ).toBe(action);
+  });
+
+  describe("Claude's Notification for the same read-only prompt", () => {
+    const notification = (
+      message = 'Claude needs your permission to use github - get_issue (MCP)',
+    ) => hook({ event: 'Notification', notificationType: 'permission_prompt', message });
+
+    it('sends no DM when it follows a read-only PermissionRequest at once, whatever it names', () => {
+      hook({ event: 'PermissionRequest', toolName: 'mcp__github__get_issue' });
+      advance(2000);
+      expect(notification().action).toBe('read_only');
+      expect(elapse()).toBe(0);
+    });
+
+    it('DMs when it comes later than that (a new prompt)', () => {
+      hook({ event: 'PermissionRequest', toolName: 'mcp__github__get_issue' });
+      advance(11_000);
+      expect(notification().action).toBe('held');
+      expect(elapse()).toBe(1);
+    });
+
+    it('DMs when another event came in between', () => {
+      hook({ event: 'PermissionRequest', toolName: 'Read' });
+      hook({ event: 'PostToolUse' });
+      expect(notification().action).toBe('held');
+    });
+
+    it('joins a held DM rather than skipping it', () => {
+      hook({ event: 'PermissionRequest', toolName: 'Bash' });
+      hook({ event: 'PermissionRequest', toolName: 'Read' });
+      expect(notification('Claude needs your permission to use Bash').action).toBe('held');
+      expect(elapse()).toBe(1);
+      expect(queued(DM_TARGET)).toEqual([expect.stringContaining('*Bash*')]);
+    });
+  });
+
+  it('leaves a held DM alone: it may be for a write prompt that still waits', () => {
+    // Parallel subagents share a session: A waits on Bash, B asks for Read.
+    hook({ event: 'PermissionRequest', toolName: 'Bash' });
+    advance(10_000);
+    hook({ event: 'PermissionRequest', toolName: 'Read' });
+    expect(elapse(APPROVAL.graceMs - 10_000)).toBe(1);
+    expect(queued(DM_TARGET)).toEqual([expect.stringContaining('*Bash*')]);
+    expect(pingStates()).toEqual(['sent']);
+  });
+
+  it("doesn't use up the throttle, so the next real prompt still DMs", () => {
+    hook({ event: 'PermissionRequest', toolName: 'Grep' });
+    hook({ event: 'PermissionRequest', toolName: 'Bash' });
+    expect(elapse()).toBe(1);
+    expect(queued(DM_TARGET)).toEqual([expect.stringContaining('*Bash*')]);
+  });
+
+  it('audits the skipped prompt', () => {
+    hook({ event: 'PermissionRequest', toolName: 'Grep' });
+    expect(
+      store.countEvents({
+        kind: 'hook',
+        since: new Date(0),
+        dataField: { name: 'action', value: 'read_only' },
+      }),
+    ).toBe(1);
+  });
+});
+
 describe("approval prompts for agent-bus's own tools", () => {
   it.each([
     ['Claude', 'mcp__agent-bus__register'],

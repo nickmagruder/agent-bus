@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  computerAction,
   extractHookRequest,
   findRepo,
   renderHookOutput,
@@ -77,6 +78,33 @@ describe('extractHookRequest', () => {
       expect(extractHookRequest(payload)).toBeUndefined();
     },
   );
+});
+
+describe('computerAction', () => {
+  it("sends a browser computer call's own action, so a click can't pose as a screenshot", () => {
+    const request = extractHookRequest({
+      hook_event_name: 'PermissionRequest',
+      session_id: 's',
+      tool_name: 'mcp__claude-in-chrome__computer',
+      tool_input: { description: 'action: screenshot', action: 'left_click', coordinate: [1, 2] },
+    });
+    expect(request?.toolAction).toBe('left_click');
+    expect(request?.toolSummary).toBe('action: screenshot');
+  });
+
+  it.each([
+    ['mcp__claude-in-chrome__computer', { action: 'screenshot' }, 'screenshot'],
+    ['mcp__Claude_Browser__computer', { action: 'zoom' }, 'zoom'],
+    ['Bash', { action: 'screenshot' }, undefined], // only computer tools
+    ['mcp__x__computer_use', { action: 'screenshot' }, undefined],
+    ['mcp__claude-in-chrome__computer', { action: 'Screenshot' }, undefined], // not lowercase
+    ['mcp__claude-in-chrome__computer', { action: 'screenshot; rm -rf' }, undefined],
+    ['mcp__claude-in-chrome__computer', { action: 'x'.repeat(33) }, undefined],
+    ['mcp__claude-in-chrome__computer', { action: 7 }, undefined],
+    ['mcp__claude-in-chrome__computer', 'screenshot', undefined],
+  ] as const)('%s %j → %s', (toolName, input, action) => {
+    expect(computerAction(toolName, input)).toBe(action);
+  });
 });
 
 describe('summarizeToolInput', () => {

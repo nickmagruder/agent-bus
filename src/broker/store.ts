@@ -704,10 +704,16 @@ export class Store {
       params.push(`$.${name}`, ...values);
     }
     const row = this.db
-      .prepare(`SELECT id, data FROM events WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT 1`)
+      .prepare(
+        `SELECT id, at, data FROM events WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT 1`,
+      )
       .get(...params) as Row | undefined;
     return row
-      ? { ...(JSON.parse(String(row.data)) as Record<string, unknown>), eventId: Number(row.id) }
+      ? {
+          ...(JSON.parse(String(row.data)) as Record<string, unknown>),
+          eventId: Number(row.id),
+          eventAt: String(row.at),
+        }
       : undefined;
   }
 
