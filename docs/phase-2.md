@@ -318,8 +318,17 @@ Findings:
   held DM. A 10 s tick sends due DMs, keeping the 2-minute throttle; one
   older than 15 minutes (the broker was down) is dropped as stale. Wiring
   `PostToolUse` (Codex: `PreToolUse`) gives the fastest cancel, at the cost
-  of a hook process per tool call. Skipping read-only tools or a quiet mode
-  ([#27](https://github.com/nickmagruder/agent-bus/issues/27)) is still open.
+  of a hook process per tool call.
+  0.12.0 ([#27](https://github.com/nickmagruder/agent-bus/issues/27)) also
+  skips the DM for tools that only read (`isReadOnlyToolPrompt`): Claude
+  Code's read tools by name, MCP tools whose tool part starts with a read
+  verb (`get`, `list`, `read`, `search`, `find`, `fetch`, `describe`,
+  `view`; not `query`, which can write), the browser tools' tab listing, and
+  a browser `computer` screenshot or zoom. Shell commands always DM: a
+  read-only command can't be told apart safely. A read-only
+  `PermissionRequest` still cancels a held DM (the earlier prompt was
+  answered). Decided 2026-11-19: skip read-only tools; a per-session quiet
+  mode can follow if this isn't enough.
 - The reminder DM is posted under the bot's own name and icon, not the
   agent's (`style()` isn't applied to it); cosmetic.
 - Not yet covered live: Codex and Copilot (heartbeats past 300 s / 180 s),

@@ -133,7 +133,9 @@ export type HookAction =
   | 'rate_limited'
   | 'ignored'
   /** An approval prompt for agent-bus's own tools: no DM (see isOwnToolPrompt). */
-  | 'own_tool';
+  | 'own_tool'
+  /** An approval prompt for a tool that only reads: no DM (see isReadOnlyToolPrompt). */
+  | 'read_only';
 
 /**
  * agent-bus's own MCP tools as the apps name them: Claude Code
@@ -149,6 +151,48 @@ const OWN_TOOL = /\bmcp__agent[-_]bus__/i;
  */
 export function isOwnToolPrompt(input: HookInput): boolean {
   return OWN_TOOL.test(input.toolName ?? '') || OWN_TOOL.test(input.message ?? '');
+}
+
+/** Claude Code's built-in tools that only read (files, the web, background output). */
+const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  'Read',
+  'Glob',
+  'Grep',
+  'LS',
+  'NotebookRead',
+  'WebFetch',
+  'WebSearch',
+  'BashOutput',
+  'ListMcpResourcesTool',
+  'ReadMcpResourceTool',
+]);
+
+/**
+ * An MCP tool named like a read, by the usual verbs (`mcp__server__get_x`,
+ * `__list_x`, `__read_x`, `__search_x`, `__find`), plus the browser tools'
+ * tab listing. Matched on the tool part only, never the server name.
+ */
+const READ_ONLY_MCP_TOOL =
+  /^mcp__[^_]+(?:_[^_]+)*__(?:get|list|read|search|find|fetch|describe|view)(?:_[a-z0-9_]*)?$|^mcp__[^_]+(?:_[^_]+)*__tabs_context(?:_mcp)?$/i;
+
+/** A browser `computer` call that only looks: a screenshot or a zoom. */
+const LOOK_ONLY_COMPUTER = /^mcp__[^_]+(?:_[^_]+)*__computer$/i;
+const LOOK_ONLY_ACTION = /^action: (?:screenshot|zoom)(?:;|$)/;
+
+/** Claude's permission_prompt notification names the tool only in its message. */
+const PROMPT_TOOL = /permission to use ([A-Za-z0-9_-]+)/i;
+
+/**
+ * An approval prompt for a tool that only reads, so a DM isn't worth a
+ * buzz (#27): Claude Code's read tools, MCP tools named like reads, and a
+ * browser screenshot or zoom. Shell commands always DM: there's no safe way
+ * to tell a read-only command from the outside.
+ */
+export function isReadOnlyToolPrompt(input: HookInput): boolean {
+  const tool = input.toolName ?? PROMPT_TOOL.exec(input.message ?? '')?.[1];
+  if (!tool) return false;
+  if (READ_ONLY_TOOLS.has(tool) || READ_ONLY_MCP_TOOL.test(tool)) return true;
+  return LOOK_ONLY_COMPUTER.test(tool) && LOOK_ONLY_ACTION.test(input.toolSummary ?? '');
 }
 
 export interface HookResult {
@@ -531,6 +575,11 @@ export class BusService {
   private holdPermission(session: SessionRecord, input: HookInput): HookAction {
     if (isOwnToolPrompt(input)) return 'own_tool';
     const held = this.store.heldPings(session.id).filter((ping) => ping.kind === 'permission');
+    if (isReadOnlyToolPrompt(input)) {
+      // No DM for it, but a new prompt still means the held one was answered.
+      if (input.event === 'PermissionRequest') this.cancelHeldPings(session, 'superseded');
+      return 'read_only';
+    }
     if (input.event === 'Notification' && held.length > 0) return 'held';
     this.store.transaction(() => {
       for (const ping of held) this.closeHeldPing(ping, 'cancelled', 'superseded');
