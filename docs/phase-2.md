@@ -140,6 +140,27 @@ only, with a `UserPromptSubmit` hook that injects the bus ID when the
 session hasn't received one yet (both apps support context from that event),
 and leave (a) to the app's reconnect (decided below).
 
+Built in 0.8.0 ([#22](https://github.com/nickmagruder/agent-bus/issues/22)):
+each prompt re-adds the bus ID until the broker can tell the agent has it,
+counted since the last `SessionStart` it saw:
+
+- the agent used the ID in an MCP call (`session.used`, recorded once), or
+- a response carrying it was written within 1 s of the request
+  (`hook.context_delivered` with `fast: yes`), well inside the hook's 2 s
+  wait, or
+- 3 slower responses were written (one surely got through).
+
+A written response alone isn't proof: `finish` fires when the response is
+handed to the OS, even if the hook has already timed out (found in review).
+`SessionStart` always adds the ID, since after `/clear` or compaction the
+agent has lost it.
+
+Known limit: if a `/clear` or compaction `SessionStart` misses the broker
+(down or restarting), the broker can't know the agent lost its ID, so
+prompts stay quiet. The agent can still call `register` for a new ID.
+Context from `UserPromptSubmit` is not verified live on either app yet
+([#25](https://github.com/nickmagruder/agent-bus/issues/25)).
+
 ## Decisions
 
 | Topic                                         | Decision                                                                                                                                                              |
@@ -206,7 +227,7 @@ this doc keeps the design, decisions and live results.
 
 - PR 3, hooks: [#21](https://github.com/nickmagruder/agent-bus/issues/21)
   Stop-hook inbox check (0.7.0), [#22](https://github.com/nickmagruder/agent-bus/issues/22)
-  `UserPromptSubmit` bus-ID injection
+  `UserPromptSubmit` bus-ID injection (0.8.0)
 - PR 4: [#23](https://github.com/nickmagruder/agent-bus/issues/23) daily
   digest (0.9.0), [#24](https://github.com/nickmagruder/agent-bus/issues/24) clankers
   PRs in the digest

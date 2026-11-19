@@ -81,7 +81,8 @@ function summarizeArguments(input: Payload): string | undefined {
 
 /**
  * What the hook prints for the app. SessionStart adds the agent's bus ID as
- * context; a Stop the broker `blocked` prints `decision: block` with my Slack
+ * context, and so does UserPromptSubmit until the broker can tell the agent
+ * has it. A Stop the broker `blocked` prints `decision: block` with my Slack
  * replies as the reason, so the agent keeps going. Everything else prints
  * nothing: permission prompts are never answered from here.
  */
@@ -92,9 +93,9 @@ export function renderHookOutput(
 ): string {
   // Copilot desktop hooks don't run (Phase 0); Claude Code and Codex share these shapes.
   if (!response || platform === 'copilot') return '';
-  if (event === 'SessionStart' && response.context) {
+  if ((event === 'SessionStart' || event === 'UserPromptSubmit') && response.context) {
     return JSON.stringify({
-      hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: response.context },
+      hookSpecificOutput: { hookEventName: event, additionalContext: response.context },
     });
   }
   if (event === 'Stop' && response.action === 'blocked' && response.reason) {

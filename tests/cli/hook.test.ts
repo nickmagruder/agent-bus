@@ -37,6 +37,16 @@ function env(platform: 'CLAUDE' | 'CODEX' = 'CLAUDE'): NodeJS.ProcessEnv {
   return { [`AGENT_BUS_TOKEN_${platform}`]: token, AGENT_BUS_PORT: String(broker.port) };
 }
 
+/** Bus-ID deliveries the broker has recorded for a platform. */
+function delivered(platform: 'claude' | 'codex'): number {
+  const row = broker.store.db
+    .prepare(
+      "SELECT COUNT(*) AS n FROM events WHERE kind = 'hook.context_delivered' AND platform = ?",
+    )
+    .get(platform) as { n: number };
+  return Number(row.n);
+}
+
 function payload(fields: Record<string, unknown>): string {
   return JSON.stringify({ session_id: 'app-1', cwd: repoRoot, ...fields });
 }
@@ -171,11 +181,50 @@ describe('runHook against the broker', () => {
     expect(result).toEqual({ stdout: '', note: 'broker answered 500' });
   });
 
-  it('gives Stop the longest wait, SessionStart the shortest', () => {
+  it('gives Stop the longest wait, SessionStart and UserPromptSubmit the shortest', () => {
     expect(timeoutFor('Stop')).toBe(15_000);
     expect(timeoutFor('SessionStart')).toBe(2000);
+    expect(timeoutFor('UserPromptSubmit')).toBe(2000);
     expect(timeoutFor('PermissionRequest')).toBe(3000);
-    expect(timeoutFor('UserPromptSubmit')).toBe(3000);
+  });
+
+  it('UserPromptSubmit hands over the bus ID when SessionStart missed, then stays quiet', async () => {
+    const prompt = (sessionId: string) =>
+      runHook({
+        argv: ['codex'],
+        stdin: payload({
+          session_id: sessionId,
+          hook_event_name: 'UserPromptSubmit',
+          prompt: 'my secret prompt',
+        }),
+        env: env('CODEX'),
+        cwd: repoRoot,
+      });
+    const first = JSON.parse((await prompt('app-race')).stdout) as {
+      hookSpecificOutput: { hookEventName: string; additionalContext: string };
+    };
+    expect(first.hookSpecificOutput.hookEventName).toBe('UserPromptSubmit');
+    expect(first.hookSpecificOutput.additionalContext).toMatch(/codex\/agent-bus\/[0-9a-f]{4}/);
+    // Recorded (fast) once the response was written; the very next prompt adds nothing.
+    await expect.poll(() => delivered('codex')).toBe(1);
+    expect((await prompt('app-race')).stdout).toBe('');
+    // The prompt itself never reaches the broker.
+    const audit = JSON.stringify(broker.store.db.prepare('SELECT data FROM events').all());
+    expect(audit).not.toContain('my secret prompt');
+  });
+
+  it('UserPromptSubmit stays quiet when SessionStart delivered the ID', async () => {
+    const run = (event: string) =>
+      runHook({
+        argv: ['claude'],
+        stdin: payload({ session_id: 'app-started', hook_event_name: event }),
+        env: env(),
+        cwd: repoRoot,
+      });
+    const before = delivered('claude');
+    expect((await run('SessionStart')).stdout).toContain('additionalContext');
+    await expect.poll(() => delivered('claude')).toBe(before + 1);
+    expect((await run('UserPromptSubmit')).stdout).toBe('');
   });
 
   it('prints nothing when the broker refuses', async () => {
@@ -230,24 +279,31 @@ describe('POST /hook', () => {
 });
 
 describe('hook process', () => {
-  it('exits 0 with empty stdout when the broker is down', async () => {
-    const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>(
-      (resolve, reject) => {
-        const child = spawn(process.execPath, [path.join(repoRoot, 'src/cli/hook.ts'), 'claude'], {
-          env: { ...process.env, AGENT_BUS_TOKEN_CLAUDE: TOKENS.claude, AGENT_BUS_PORT: '1' },
-        });
-        let stdout = '';
-        let stderr = '';
-        child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
-        child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
-        child.on('error', reject);
-        child.on('close', (code) => resolve({ code, stdout, stderr }));
-        child.stdin.end(payload({ hook_event_name: 'SessionStart' }));
-      },
-    );
-    expect(result.code).toBe(0);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('agent-bus hook:');
-    expect(result.stderr).not.toContain(TOKENS.claude);
-  });
+  it.each(['SessionStart', 'UserPromptSubmit', 'Stop'])(
+    'exits 0 with empty stdout when the broker is down (%s)',
+    async (event) => {
+      const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>(
+        (resolve, reject) => {
+          const child = spawn(
+            process.execPath,
+            [path.join(repoRoot, 'src/cli/hook.ts'), 'claude'],
+            {
+              env: { ...process.env, AGENT_BUS_TOKEN_CLAUDE: TOKENS.claude, AGENT_BUS_PORT: '1' },
+            },
+          );
+          let stdout = '';
+          let stderr = '';
+          child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
+          child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
+          child.on('error', reject);
+          child.on('close', (code) => resolve({ code, stdout, stderr }));
+          child.stdin.end(payload({ hook_event_name: event }));
+        },
+      );
+      expect(result.code).toBe(0);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('agent-bus hook:');
+      expect(result.stderr).not.toContain(TOKENS.claude);
+    },
+  );
 });

@@ -60,6 +60,7 @@ async function handle(
   res: ServerResponse,
   options: HttpOptions,
 ): Promise<void> {
+  const startedAt = performance.now();
   const verdict = checkRequest(
     {
       host: req.headers.host,
@@ -107,10 +108,38 @@ async function handle(
     // Replies handed to a Stop hook count as delivered only once the response
     // is fully written ('finish'); a connection that closes first puts them
     // back. (writableFinished can't tell: Node sets it on a destroyed response.)
+    // These run after the response, outside the request's error handling.
+    const afterResponse = (what: string, work: () => void) => () => {
+      try {
+        work();
+      } catch (error) {
+        options.log('error', `hook ${what} failed`, { error: errorMessage(error) });
+      }
+    };
     if (delivery) {
       let written = false;
       res.once('finish', () => (written = true));
-      res.once('close', () => delivery.settle(written));
+      res.once(
+        'close',
+        afterResponse('delivery', () => delivery.settle(written)),
+      );
+    }
+    // The bus ID: UserPromptSubmit re-sends it until the broker can tell the
+    // agent has it (see BusService.markContextDelivered).
+    if (result.context) {
+      const { session } = result;
+      const { event } = parsed.data;
+      res.once(
+        'finish',
+        afterResponse('context record', () =>
+          options.service.markContextDelivered(
+            verdict.platform,
+            session,
+            event,
+            performance.now() - startedAt,
+          ),
+        ),
+      );
     }
     return json(res, 200, result);
   }
