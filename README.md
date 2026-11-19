@@ -393,6 +393,15 @@ are made.
 
 ## Changelog
 
+### 0.10.4 (2026-11-19)
+
+- **Cancelled held calls end** ([#48](https://github.com/nickmagruder/agent-bus/issues/48)):
+  cancelling `ask_human` or `wait_for_reply` (Esc) now ends the broker's
+  hold at once, and the call takes nothing, so a reply that comes later
+  waits for the next call instead of vanishing. Before, the hold ran for up
+  to 150 s and could take the reply. Stopping the broker answers held calls
+  with `pending` first, so agents aren't left waiting out their tool timeout.
+
 ### 0.10.3 (2026-11-19)
 
 - Tests for held calls across a broker restart and a client disconnect

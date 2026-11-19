@@ -82,6 +82,7 @@ into tracked files.
 - `src/shared/hook-protocol.ts`: `/hook` request schema and size limits
 - `src/broker/store.ts`: SQLite (`node:sqlite`) sessions, append-only audit log, outbox, migrations
 - `src/broker/slack/`: Socket Mode connection, Web API adapter, channel directory, post queue
+- `src/broker/held-calls.ts`: held `ask_human`/`wait_for_reply` calls, so a cancel (or broker stop) can end them
 - `src/broker/heartbeat.ts`: progress notifications for long tool calls
 - `src/shared/guard.ts`: Host/Origin/per-platform bearer checks
 - `src/shared/config.ts`: zod-validated environment

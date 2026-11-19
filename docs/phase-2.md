@@ -20,8 +20,8 @@ Phase 1: [phase-1.md](phase-1.md).
   60 s. Confirmed to reset Claude Code's 300 s idle timer; **untested on
   Codex (300 s) and Copilot (180 s)**.
 - `/mcp` is stateless streamable HTTP: one server per request, so a held
-  tool call is just an open SSE response. A broker restart drops it (the
-  client then waits out its own timeout; see #48).
+  tool call is just an open SSE response. A broker stop answers it with
+  `pending` first (0.10.4, #48).
 - Hooks: `SessionStart`, `PermissionRequest`, Claude `Notification`, `Stop`.
   Rule today: hooks never block or decide. Phase 2 changes that **for `Stop`
   only** (see below); `AGENTS.md` and its tests change with it.
@@ -263,6 +263,13 @@ Context from `UserPromptSubmit` is not verified live on either app yet
       out its own tool timeout), and a _cancelled_ call (Esc) keeps holding
       for up to 150 s and can take a reply the agent never sees:
       [#48](https://github.com/nickmagruder/agent-bus/issues/48)
+- [x] Fixed in 0.10.4 (#48): a broker-wide registry of held calls
+      (`src/broker/held-calls.ts`, keyed by platform and request ID) lets a
+      `notifications/cancelled` that arrives on its own request end the hold;
+      a cancelled hold takes nothing. `broker.stop()` answers held calls with
+      `pending` before closing connections, so a restart doesn't strand them.
+      Left: replies taken in the milliseconds before the broker hears of a
+      cancel ([#50](https://github.com/nickmagruder/agent-bus/issues/50))
 - [x] Live: answered by button from the phone and by thread reply; left
       to remind and expire (2026-11-18, see Live results)
 

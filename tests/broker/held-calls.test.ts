@@ -78,23 +78,25 @@ const askArgs = (session: string) => ({
 });
 
 describe('held calls across a broker restart', () => {
-  it('the held ask_human never returns a result; the question survives and wait_for_reply gets the answer', async () => {
+  it('the held ask_human answers "pending" as the broker stops; after the restart wait_for_reply gets the answer', async () => {
     const first = await start();
     const session = await register(await connect(first));
-    // The client's own tool timeout ends the call (Claude Code's is 300 s; no
-    // heartbeats arrive from a stopped broker). See #48.
-    const asking = (await connect(first))
-      .callTool({ name: 'ask_human', arguments: askArgs(session) }, undefined, { timeout: 1500 })
-      .then(
-        () => 'returned',
-        () => 'failed',
-      );
+    // A long client timeout: the call must end because the broker answered,
+    // not because the client gave up.
+    const asking = (await connect(first)).callTool(
+      { name: 'ask_human', arguments: askArgs(session) },
+      undefined,
+      { timeout: HOLD_MS * 2 },
+    );
     await expect.poll(() => first.notifier.waiting(session)).toBe(1);
     const questionId = first.store.openQuestions(session)[0]?.id ?? '';
     expect(questionId).toMatch(/^q-/);
 
+    const stopping = Date.now();
     await stop(first);
-    expect(await asking).toBe('failed');
+    const pending = await asking;
+    expect(Date.now() - stopping).toBeLessThan(3000);
+    expect(pending.structuredContent).toMatchObject({ state: 'pending', question_id: questionId });
 
     const second = await start();
     expect(second.store.getQuestion(questionId)?.state).toBe('open');
@@ -185,8 +187,100 @@ describe('a client disconnecting mid-hold', () => {
     const [question] = broker.store.openQuestions(session);
     expect(question?.deliveredAt).toBeNull();
   }, 15_000);
+});
 
-  it.todo(
-    'a cancelled (aborted) held call ends its hold and takes nothing: see #48 (today it holds until the limit)',
-  );
+describe('a client cancelling a held call (Esc), #48', () => {
+  it('ends the wait_for_reply hold at once, and a later reply stays for the next call', async () => {
+    const broker = await start();
+    const session = await register(await connect(broker));
+    const holder = await connect(broker);
+    const controller = new AbortController();
+    const waiting = holder
+      .callTool({ name: 'wait_for_reply', arguments: { session } }, undefined, {
+        signal: controller.signal,
+        timeout: HOLD_MS * 2,
+      })
+      .then(
+        () => 'returned',
+        () => 'cancelled',
+      );
+    await expect.poll(() => broker.notifier.waiting(session)).toBe(1);
+    expect(broker.heldCalls.size).toBe(1);
+
+    controller.abort('Esc');
+    expect(await waiting).toBe('cancelled');
+    // The cancel came on its own request; the hold still ends, long before HOLD_MS.
+    await expect.poll(() => broker.notifier.waiting(session), { timeout: 3000 }).toBe(0);
+    expect(broker.heldCalls.size).toBe(0);
+
+    broker.store.setThread(session, 'C_HELD', '1700000500.000001');
+    broker.inbox.receive({
+      channel: 'C_HELD',
+      channelType: 'channel',
+      ts: '1700000500.000002',
+      threadTs: '1700000500.000001',
+      user: USER_ID,
+      text: 'Reply after the cancel',
+      hasFiles: false,
+    });
+    // Nobody took it: the cancelled call is gone, so it waits for the next one.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(broker.store.countUndelivered(session)).toBe(1);
+    const next = await holder.callTool({ name: 'check_inbox', arguments: { session } });
+    expect(next.structuredContent).toMatchObject({
+      messages: [expect.objectContaining({ text: 'Reply after the cancel' })],
+    });
+  }, 15_000);
+
+  it('ends an ask_human hold; the question stays open and its answer undelivered', async () => {
+    const broker = await start();
+    const session = await register(await connect(broker));
+    const holder = await connect(broker);
+    const controller = new AbortController();
+    const asking = holder
+      .callTool({ name: 'ask_human', arguments: askArgs(session) }, undefined, {
+        signal: controller.signal,
+        timeout: HOLD_MS * 2,
+      })
+      .catch(() => 'cancelled');
+    await expect.poll(() => broker.notifier.waiting(session)).toBe(1);
+    controller.abort();
+    expect(await asking).toBe('cancelled');
+    await expect.poll(() => broker.notifier.waiting(session), { timeout: 3000 }).toBe(0);
+
+    const questionId = broker.store.openQuestions(session)[0]?.id ?? '';
+    expect(broker.questions.answerByButton(questionId, 1, USER_ID)).toBe('answered');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(broker.store.getQuestion(questionId)?.deliveredAt).toBeNull();
+    const answer = await holder.callTool({
+      name: 'wait_for_reply',
+      arguments: { session, question_id: questionId },
+    });
+    expect(answer.structuredContent).toMatchObject({ state: 'answered', answer: 'No' });
+  }, 15_000);
+
+  it("doesn't end another client's hold on a different request", async () => {
+    const broker = await start();
+    const session = await register(await connect(broker));
+    const keep = await connect(broker);
+    const kept = keep
+      .callTool({ name: 'wait_for_reply', arguments: { session, timeout_seconds: 2 } })
+      .then((result) => result.content);
+    const cancelled = await connect(broker);
+    const controller = new AbortController();
+    // Register first, so this client's next request ID differs from `keep`'s.
+    await cancelled.callTool({ name: 'check_inbox', arguments: { session } });
+    const cancelling = cancelled
+      .callTool({ name: 'wait_for_reply', arguments: { session } }, undefined, {
+        signal: controller.signal,
+        timeout: HOLD_MS * 2,
+      })
+      .catch(() => 'cancelled');
+    await expect.poll(() => broker.notifier.waiting(session)).toBe(2);
+    controller.abort();
+    expect(await cancelling).toBe('cancelled');
+    await expect.poll(() => broker.notifier.waiting(session), { timeout: 3000 }).toBe(1);
+    // The other call runs to its own 2 s limit and answers normally.
+    expect(JSON.stringify(await kept)).toContain('Nothing new from Nick yet');
+  }, 15_000);
 });

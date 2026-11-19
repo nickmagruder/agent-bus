@@ -1,14 +1,18 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import {
+  CancelledNotificationSchema,
+  type CallToolResult,
+} from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type { Platform } from '../shared/platform.ts';
+import { HeldCalls } from './held-calls.ts';
 import { startHeartbeat, type HeartbeatTarget } from './heartbeat.ts';
 import type { Inbox } from './inbox.ts';
 import { outcomeText, QUESTION_LIMITS, type Notifier, type Questions } from './questions.ts';
 import { BusError, URGENCIES, type BusService } from './service.ts';
 import type { InboxRecord, QuestionRecord } from './store.ts';
 
-export const SERVER_INFO = { name: 'agent-bus', version: '0.10.3' } as const;
+export const SERVER_INFO = { name: 'agent-bus', version: '0.10.4' } as const;
 
 export interface McpDeps {
   service: BusService;
@@ -17,6 +21,8 @@ export interface McpDeps {
   notifier: Notifier;
   /** Hold limit for ask_human / wait_for_reply (tests shorten it). */
   holdMs?: number | undefined;
+  /** Held calls across all requests, so a cancel on its own request can end one. */
+  heldCalls?: HeldCalls | undefined;
 }
 
 const sessionArg = z
@@ -34,6 +40,14 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
   const { service, inbox, questions, notifier } = deps;
   const holdMs = deps.holdMs ?? QUESTION_LIMITS.holdMs;
   const server = new McpServer(SERVER_INFO, { capabilities: { logging: {} } });
+  const heldCalls = deps.heldCalls ?? new HeldCalls();
+  // A client's cancel for a held call arrives as its own request, which this
+  // fresh server handles: end the hold wherever it runs. (The SDK's default
+  // handler only knows this server's own requests, and this one has none.)
+  server.server.setNotificationHandler(CancelledNotificationSchema, (notification) => {
+    const { requestId, reason } = notification.params;
+    if (requestId !== undefined) heldCalls.cancel(platform, requestId, reason);
+  });
 
   server.registerTool(
     'register',
@@ -225,22 +239,28 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
    */
   async function hold<T>(
     sessionId: string,
-    extra: HeartbeatTarget & { signal: AbortSignal },
+    extra: HeartbeatTarget & { signal: AbortSignal; requestId: string | number },
     ms: number,
     check: () => T | undefined,
   ): Promise<T | undefined> {
     const deadline = Date.now() + ms;
+    // Ends on the client closing the connection or cancelling the call.
+    const held = heldCalls.hold(platform, extra.requestId);
+    const signal = AbortSignal.any([extra.signal, held.signal]);
     const stop = startHeartbeat(extra, 'Waiting for Nick in Slack');
     try {
       for (;;) {
+        // A cancelled call takes nothing: the agent won't read the answer.
+        if (signal.aborted) return undefined;
         const result = check();
         if (result !== undefined) return result;
         const left = deadline - Date.now();
         if (left <= 0) return undefined;
-        if ((await notifier.wait(sessionId, left, extra.signal)) === 'aborted') return undefined;
+        if ((await notifier.wait(sessionId, left, signal)) === 'aborted') return undefined;
       }
     } finally {
       stop();
+      held.release();
     }
   }
 
