@@ -204,25 +204,39 @@ export class Inbox {
    * an `inbox.undelivered` event after them.
    */
   untake(session: SessionRecord, taken: InboxTake, via: DeliveryVia): void {
-    if (taken.messages.length === 0 && taken.outcomes.length === 0) return;
+    this.untakeIds(
+      session,
+      taken.messages.map((m) => m.id),
+      taken.outcomes.map((q) => q.id),
+      via,
+    );
+  }
+
+  /** `untake` by IDs (only rows still delivered via `via` change). */
+  untakeIds(
+    session: SessionRecord,
+    messageIds: readonly number[],
+    questionIds: readonly string[],
+    via: DeliveryVia,
+  ): void {
+    if (messageIds.length === 0 && questionIds.length === 0) return;
     this.store.transaction(() => {
-      this.store.markUndelivered(
-        taken.messages.map((m) => m.id),
-        via,
-      );
-      for (const outcome of taken.outcomes) this.store.markQuestionUndelivered(outcome.id, via);
+      this.store.markUndelivered(messageIds, via);
+      for (const id of questionIds) this.store.markQuestionUndelivered(id, via);
       this.store.appendEvent({
         kind: 'inbox.undelivered',
         platform: session.platform,
         sessionId: session.id,
-        data: {
-          via,
-          ids: taken.messages.map((m) => m.id),
-          questionIds: taken.outcomes.map((q) => q.id),
-        },
+        data: { via, ids: messageIds, questionIds },
       });
     });
     this.notifier.notify(session.id);
+  }
+
+  /** ✅ on the replies with these IDs, and on those that answered these questions. */
+  confirmIds(messageIds: readonly number[], questionIds: readonly string[]): void {
+    this.reactDelivered(this.store.inboxByIds(messageIds));
+    for (const id of questionIds) this.reactDelivered(this.store.questionReplies(id));
   }
 
   /** ✅ on my messages the agent has now read. */
