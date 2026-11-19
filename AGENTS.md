@@ -72,6 +72,7 @@ into tracked files.
 - `src/broker/mcp.ts`: MCP tools (`register`, `notify_human`, `check_inbox`, `ask_human`, `wait_for_reply`)
 - `src/broker/inbox.ts`: my Slack replies → session inboxes (sender gating, routing, reactions, DM hint)
 - `src/broker/slack/inbound.ts`: Bolt `message` listener feeding the inbox; question button handler
+- `src/broker/digest.ts`: daily digest in `#agents` (`fyi` items, questions, sessions seen; catch-up at start)
 - `src/broker/questions.ts`: `ask_human` questions after they're asked (answers, reminder, expiry, outcomes, waiting)
 - `src/broker/http.ts`: `127.0.0.1` HTTP server (`/mcp`, `/hook`, `/health`) behind the guard
 - `src/cli/hook.ts`: hook command for Claude Code and Codex (always exits 0)

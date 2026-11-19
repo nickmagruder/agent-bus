@@ -28,6 +28,7 @@ beforeAll(async () => {
       slackApi: slack,
       connection: null,
       queueOptions: { minIntervalMs: 0 },
+      digest: null,
       holdMs: HOLD_MS,
       tickMs: 60_000,
     },

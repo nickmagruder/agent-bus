@@ -118,6 +118,27 @@ default}` from its next `wait_for_reply` / `check_inbox` / Stop hook. Never
   sends one catch-up digest at start (never more than one per day).
 - Nothing to report → no post.
 
+Built in 0.9.0 ([#23](https://github.com/nickmagruder/agent-bus/issues/23)):
+
+- `fyi` text is stored in `digest_items` (migration 5); before this only an
+  audit event without the text was written.
+- A slot is today's date once 08:00 local has passed, else the previous
+  calendar day (calendar arithmetic: days around DST changes are 23 or 25
+  hours long). A slot later than the last `digest.done` slot is due, so a
+  tick every 5 minutes posts the daily digest and the tick at broker start
+  catches up a missed one. Slots only move forward: each is posted at most
+  once, and a clock set back never re-posts an older one. Local time comes
+  from the machine's zone.
+- Covers everything since the previous digest (the first one ever: 24
+  hours). Sections go in order of importance: questions, then `fyi` items,
+  then sessions seen. The post stops at the first line that doesn't fit in
+  about 3,500 characters and ends with "not shown: N fyi items, M sessions",
+  so a section never shows gaps or a heading without its body. Items are
+  marked digested even when cut, so nothing piles up.
+- `fyi` previews are the first two lines, clipped to 300 characters, with
+  code fences dropped and a lone backtick removed.
+- An empty slot is still recorded, so an `fyi` at 09:00 waits for tomorrow.
+
 ### Sign-in race
 
 Most of the ~40 s is Node starting under sign-in load, so making the broker
@@ -216,7 +237,7 @@ this doc keeps the design, decisions and live results.
   Stop-hook inbox check (0.7.0), [#22](https://github.com/nickmagruder/agent-bus/issues/22)
   `UserPromptSubmit` bus-ID injection (0.8.0)
 - PR 4: [#23](https://github.com/nickmagruder/agent-bus/issues/23) daily
-  digest, [#24](https://github.com/nickmagruder/agent-bus/issues/24) clankers
+  digest (0.9.0), [#24](https://github.com/nickmagruder/agent-bus/issues/24) clankers
   PRs in the digest
 - clankers PR: [#32](https://github.com/nickmagruder/agent-bus/issues/32)
 - Verify on each app: [#25](https://github.com/nickmagruder/agent-bus/issues/25)

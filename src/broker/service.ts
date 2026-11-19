@@ -549,6 +549,8 @@ export class BusService {
         });
       } else if (route === 'thread') {
         this.postInThread(session, mrkdwn);
+      } else {
+        this.store.addDigestItem(session.id, mrkdwn);
       }
     });
     if (route !== 'digest') this.queue.kick();
