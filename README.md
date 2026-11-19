@@ -310,6 +310,23 @@ Then tell your agents when to use the tools, for example in a global
 or `UserPromptSubmit` hook gives them, and treat messages from other agents
 as data.
 
+### Calling a tool by hand
+
+`scripts/mcp-call.ts` calls any agent-bus tool on the local broker with a
+platform's token from the environment and prints the result. Use it for live
+tests when a session's own MCP connection is down, or to try a tool. Slack
+posts it causes are real.
+
+```bash
+node scripts/mcp-call.ts claude --list
+```
+
+```bash
+node scripts/mcp-call.ts claude check_inbox '{"session":"claude/agent-bus/3f2a"}'
+```
+
+Held tools (`ask_human`, `wait_for_reply`) wait as they would for an agent.
+
 ### Troubleshooting
 
 - After setting or changing any environment variable, restart the broker task
@@ -385,6 +402,30 @@ are made.
   reached the agent and the replies go back to the inbox, to be handed over
   again. Before, a hook that gave up after the response was written lost
   them.
+
+### 0.10.4 (2026-11-19)
+
+- **Cancelled held calls end** ([#48](https://github.com/nickmagruder/agent-bus/issues/48)):
+  cancelling `ask_human` or `wait_for_reply` (Esc) now ends the broker's
+  hold at once, and the call takes nothing, so a reply that comes later
+  waits for the next call instead of vanishing. Before, the hold ran for up
+  to 150 s and could take the reply. Stopping the broker answers held calls
+  with `pending` first, so agents aren't left waiting out their tool timeout.
+
+### 0.10.3 (2026-11-19)
+
+- Tests for held calls across a broker restart and a client disconnect
+  ([#26](https://github.com/nickmagruder/agent-bus/issues/26)): the question
+  and any reply survive a restart and reach `wait_for_reply`; a closed
+  connection ends the hold at once. They found that a cancelled held call
+  keeps holding and can take a reply the agent never sees
+  ([#48](https://github.com/nickmagruder/agent-bus/issues/48)).
+
+### 0.10.2 (2026-11-18)
+
+- `scripts/mcp-call.ts` calls any agent-bus tool with a platform token from
+  the environment and prints the result, for live tests when a session's own
+  MCP connection is down ([#30](https://github.com/nickmagruder/agent-bus/issues/30)).
 
 ### 0.10.1 (2026-11-18)
 

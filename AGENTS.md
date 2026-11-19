@@ -82,6 +82,7 @@ into tracked files.
 - `src/shared/hook-protocol.ts`: `/hook` request schema and size limits
 - `src/broker/store.ts`: SQLite (`node:sqlite`) sessions, append-only audit log, outbox, migrations
 - `src/broker/slack/`: Socket Mode connection, Web API adapter, channel directory, post queue
+- `src/broker/held-calls.ts`: held `ask_human`/`wait_for_reply` calls, so a cancel (or broker stop) can end them
 - `src/broker/heartbeat.ts`: progress notifications for long tool calls
 - `src/shared/guard.ts`: Host/Origin/per-platform bearer checks
 - `src/shared/config.ts`: zod-validated environment
@@ -89,6 +90,7 @@ into tracked files.
 - `src/broker/log.ts`: JSON-lines logger and daily log files (`--log-to-file`)
 - `scripts/install-task.ps1`: registers the "agent-bus broker" logon task
 - `scripts/run-broker.ps1`: launcher the task runs; restarts after crashes, stops on exit 78
+- `scripts/mcp-call.ts`: calls one agent-bus tool with a platform token (live tests, manual checks)
 - `.husky/`: pre-commit (lint-staged, then `scripts/gitleaks-staged.sh`) and commit-msg (`scripts/commit-msg.ts`, rules in `scripts/commit-msg-rules.ts`) hooks
 - `.github/workflows/`: `ci.yml` (the required `check` job), `codeql.yml`, `scorecard.yml`; actions pinned by SHA
 - `.github/copilot-instructions.md`, `.github/instructions/security.instructions.md`, `.github/skills/code-review/`: Copilot PR review

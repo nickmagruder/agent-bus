@@ -7,6 +7,7 @@ import { defaultDataDir, loadBrokerConfig, type BrokerConfig } from '../shared/c
 import { startHttpServer, type RunningHttpServer } from './http.ts';
 import { Digest } from './digest.ts';
 import { createGitHubApi, type GitHubApi } from './github.ts';
+import { HeldCalls } from './held-calls.ts';
 import { Inbox } from './inbox.ts';
 import { createFileWriter, createLogger, errorMessage, type Logger } from './log.ts';
 import { BusService } from './service.ts';
@@ -41,6 +42,8 @@ export interface Broker {
   service: BusService;
   inbox: Inbox;
   questions: Questions;
+  notifier: Notifier;
+  heldCalls: HeldCalls;
   stop: () => Promise<void>;
 }
 
@@ -75,6 +78,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
   const queue = new PostQueue(store, slackApi, directory, { log, ...deps.queueOptions });
   const service = new BusService(store, queue, undefined, directory);
   const notifier = new Notifier();
+  const heldCalls = new HeldCalls();
   const questions = new Questions({
     store,
     queue,
@@ -128,6 +132,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
       questions,
       notifier,
       holdMs: deps.holdMs,
+      heldCalls,
       log,
       health: () => ({ slack: connection?.state ?? 'disabled' }),
     });
@@ -176,9 +181,16 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
     service,
     inbox,
     questions,
+    notifier,
+    heldCalls,
     async stop() {
       questions.stop();
       digest?.stop();
+      // Held calls answer "pending" before their connections close, so an
+      // agent isn't left waiting out its tool timeout (it calls
+      // wait_for_reply again once the broker is back).
+      heldCalls.cancelAll('agent-bus is restarting');
+      await heldCalls.drained(1000);
       await server.close();
       await queue.stop();
       await connection?.stop();
