@@ -373,10 +373,12 @@ are made.
 
 - **Daily digest** ([#23](https://github.com/nickmagruder/agent-bus/issues/23)):
   at 08:00 local the broker posts to `#agents` what happened since the last
-  digest: `fyi` notifications grouped by session, open questions and those
-  that expired, and the sessions seen. A digest missed while the broker was
-  off is sent once at start; nothing to report means no post. `fyi` text is
-  now stored for it (schema v5, `digest_items`).
+  digest: open questions and those that expired, `fyi` notifications grouped
+  by session, and the sessions seen, in that order; a long digest ends with
+  a count of what didn't fit. A digest missed while the broker was off is
+  sent once at start, each day at most once, including across DST changes;
+  nothing to report means no post. `fyi` text is now stored for it (schema
+  v5, `digest_items`).
 
 ### 0.8.0 (2026-11-18)
 

@@ -23,7 +23,13 @@ beforeAll(async () => {
       tokens: TOKENS,
       slack: { botToken: 'xoxb-test', appToken: 'xapp-test', userId: USER_ID },
     },
-    { log: silentLogger, slackApi: slack, connection: null, queueOptions: { minIntervalMs: 0 } },
+    {
+      log: silentLogger,
+      slackApi: slack,
+      connection: null,
+      queueOptions: { minIntervalMs: 0 },
+      digest: null,
+    },
   );
 });
 

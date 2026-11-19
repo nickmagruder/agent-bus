@@ -1,6 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Digest, DIGEST, digestSlot, localTime } from '../../src/broker/digest.ts';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  Digest,
+  DIGEST,
+  digestSlot,
+  itemPreview,
+  localTime,
+  previousDay,
+} from '../../src/broker/digest.ts';
 import { silentLogger } from '../../src/broker/log.ts';
+import { startBroker } from '../../src/broker/main.ts';
+import { FakeSlack, TOKENS, USER_ID } from './fakes.ts';
 import { BusService } from '../../src/broker/service.ts';
 import { Store } from '../../src/broker/store.ts';
 
@@ -62,6 +74,10 @@ describe('digestSlot', () => {
     // July: PDT (UTC−7), so 08:00 local is 15:00Z.
     expect(digestSlot(at('2026-07-01T14:59:00Z'), TZ)).toBe('2026-06-30');
     expect(digestSlot(at('2026-07-01T15:00:00Z'), TZ)).toBe('2026-07-01');
+    // 00:30 on the day after spring forward: 24 h earlier is the 7th, the slot is the 8th.
+    expect(digestSlot(at('2026-03-09T07:30:00Z'), TZ)).toBe('2026-03-08');
+    // 23:30 on the 25-hour fall-back day.
+    expect(digestSlot(at('2026-11-02T07:30:00Z'), TZ)).toBe('2026-11-01');
   });
 });
 
@@ -135,12 +151,151 @@ describe('Digest.tick', () => {
     expect(post).not.toContain('Old session');
   });
 
-  it('runs a tick at start (the catch-up) and keeps checking', () => {
-    const session = register('Started');
-    fyi(session, 'Hello');
-    now = at('2026-11-18T16:00:00Z');
-    digest.start(60_000);
-    expect(posts()).toHaveLength(1);
+  it('runs a tick at start (the catch-up) and keeps checking on its timer', () => {
+    vi.useFakeTimers();
+    try {
+      const session = register('Started');
+      fyi(session, 'Hello');
+      now = at('2026-11-18T16:00:00Z');
+      digest.start(60_000);
+      expect(posts()).toHaveLength(1);
+      now = at('2026-11-19T16:00:00Z');
+      fyi(session, 'Next day');
+      vi.advanceTimersByTime(59_000);
+      expect(posts()).toHaveLength(1);
+      vi.advanceTimersByTime(1000);
+      expect(posts()).toHaveLength(2);
+      digest.stop();
+      now = at('2026-11-20T16:00:00Z');
+      fyi(session, 'After stop');
+      vi.advanceTimersByTime(120_000);
+      expect(posts()).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('logs a failing tick instead of throwing out of the timer', () => {
+    const logs: string[] = [];
+    const failing = new Digest({
+      store,
+      queue: { kick: () => undefined },
+      log: (_level, message) => logs.push(message),
+      now: () => now,
+      timeZone: TZ,
+    });
+    store.close();
+    expect(() => failing.start(60_000)).not.toThrow();
+    failing.stop();
+    expect(logs).toEqual(['digest tick failed']);
+    store = new Store(':memory:', { now: () => now }); // for afterEach
+  });
+
+  describe('daylight saving time', () => {
+    it('posts each morning once across spring forward, never at night', () => {
+      // 2026-03-08 02:00 PST → 03:00 PDT; that day is 23 hours long.
+      const session = register('DST');
+      digestedAt('2026-03-08T15:00:00Z'); // 08:00 PDT on the 8th
+      for (const iso of [
+        '2026-03-09T07:30:00Z', // 00:30 PDT on the 9th
+        '2026-03-09T08:00:00Z', // 01:00
+        '2026-03-09T14:59:00Z', // 07:59
+      ]) {
+        now = at(iso);
+        fyi(session, `at ${iso}`);
+        expect(digest.tick(), iso).toBe('not_due');
+      }
+      now = at('2026-03-09T15:00:00Z'); // 08:00 PDT
+      expect(digest.tick()).toBe('sent');
+    });
+
+    it('posts each morning once across fall back', () => {
+      // 2026-11-01 02:00 PDT → 01:00 PST; that day is 25 hours long.
+      const session = register('DST');
+      digestedAt('2026-11-01T16:00:00Z'); // 08:00 PST on the 1st, after the change
+      for (const iso of ['2026-11-02T07:30:00Z', '2026-11-02T08:30:00Z', '2026-11-02T15:59:00Z']) {
+        now = at(iso);
+        fyi(session, `at ${iso}`);
+        expect(digest.tick(), iso).toBe('not_due');
+      }
+      now = at('2026-11-02T16:00:00Z'); // 08:00 PST
+      expect(digest.tick()).toBe('sent');
+    });
+  });
+
+  it('never goes back to an older slot (clock set back, or a zone further east)', () => {
+    digestedAt('2026-11-18T16:00:00Z');
+    const session = register('Clock');
+    fyi(session, 'news');
+    now = at('2026-11-16T16:00:00Z');
+    expect(digest.tick()).toBe('not_due');
+    expect(posts()).toEqual([]);
+  });
+});
+
+describe('previousDay', () => {
+  it.each([
+    ['2026-11-18', '2026-11-17'],
+    ['2026-03-01', '2026-02-28'],
+    ['2028-03-01', '2028-02-29'],
+    ['2027-01-01', '2026-12-31'],
+    ['2026-03-09', '2026-03-08'],
+  ])('%s → %s', (day, before) => {
+    expect(previousDay(day)).toBe(before);
+  });
+});
+
+describe('itemPreview', () => {
+  it('drops code fences so a preview never leaves code formatting open', () => {
+    expect(itemPreview('```npm test``` passed')).toBe('npm test passed');
+    expect(itemPreview('```\nconst x = 1;\nmore\n```')).toBe('const x = 1; more');
+  });
+
+  it('removes a lone backtick left by clipping', () => {
+    const text = `${'a'.repeat(DIGEST.itemChars - 10)} \`some code that runs long\``;
+    const preview = itemPreview(text);
+    expect(preview.split('`').length - 1).toBe(0);
+    expect(preview.endsWith('…')).toBe(true);
+  });
+
+  it('keeps balanced backticks', () => {
+    expect(itemPreview('ran `npm test`')).toBe('ran `npm test`');
+  });
+
+  it('never splits an entity when clipping', () => {
+    const text = `${'a'.repeat(DIGEST.itemChars - 4)} &amp; more`;
+    const preview = itemPreview(text);
+    expect(preview).not.toMatch(/&[a-z]*…$/);
+    expect(preview.endsWith('…')).toBe(true);
+  });
+
+  it('shows the first two non-empty lines', () => {
+    expect(itemPreview('one\n\ntwo\nthree')).toBe('one two …');
+  });
+});
+
+describe('broker wiring', () => {
+  it('starts with the broker (catch-up at start), and can be turned off', async () => {
+    for (const digestOption of [{ timeZone: TZ, now: () => at('2026-11-18T16:00:00Z') }, null]) {
+      const dir = await mkdtemp(path.join(tmpdir(), 'agent-bus-digest-'));
+      const broker = await startBroker(
+        {
+          port: 0,
+          dataDir: dir,
+          tokens: TOKENS,
+          slack: { botToken: 'xoxb-test', appToken: 'xapp-test', userId: USER_ID },
+        },
+        { log: silentLogger, slackApi: new FakeSlack(), connection: null, digest: digestOption },
+      );
+      try {
+        const done = broker.store.latestEventOfKind('digest.done');
+        if (digestOption) expect(done?.data).toMatchObject({ slot: '2026-11-18', posted: false });
+        else expect(done).toBeUndefined();
+      } finally {
+        await broker.stop();
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
   });
 });
 
@@ -220,10 +375,33 @@ describe('digest content', () => {
     now = at('2026-11-18T16:00:00Z');
     digest.tick();
     const [post = ''] = posts();
-    expect(post.length).toBeLessThan(DIGEST.maxChars + 100);
-    expect(post).toMatch(/_…\d+ more lines not shown_$/);
+    expect(post.length).toBeLessThanOrEqual(DIGEST.maxChars);
+    expect(post).toMatch(/\n_…not shown: \d+ fyi items, 1 session_$/);
+    // Shown items are contiguous: note 0, 1, 2, … with no gaps.
+    const shown = [...post.matchAll(/• note (\d+) /g)].map((m) => Number(m[1]));
+    expect(shown).toEqual(shown.map((_, i) => i));
     // Every item counts as digested, shown or not: none roll into tomorrow.
     expect(store.pendingDigestItems()).toEqual([]);
+  });
+
+  it('puts questions first, so a chatty fyi section never pushes them out', () => {
+    const session = register('Chatty');
+    for (let i = 0; i < 40; i++) fyi(session, i % 2 ? 'short' : `long ${'z'.repeat(290)}`);
+    const open = service.ask({
+      platform: 'claude',
+      session,
+      question: 'Ship it?',
+      defaultAnswer: 'wait',
+    });
+    now = at('2026-11-18T16:00:00Z');
+    digest.tick();
+    const [post = ''] = posts();
+    expect(post.indexOf('*Questions* (1)')).toBeLessThan(post.indexOf('*FYI*'));
+    expect(post).toContain(`\`${open.id}\``);
+    // The cut never leaves a heading or blank line without its body.
+    const beforeFooter = post.split('\n').at(-2) ?? '';
+    expect(beforeFooter.startsWith('•')).toBe(true);
+    expect(post).toMatch(/_…not shown: \d+ fyi items, 1 session_$/);
   });
 
   it('records each digest in the audit log without its text', () => {
