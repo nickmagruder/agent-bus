@@ -246,9 +246,12 @@ describe('UserPromptSubmit', () => {
     expect(prompt()).toMatchObject({ action: 'context', session: start.session });
   });
 
-  it('stays quiet once SessionStart delivered it', () => {
+  const FAST = 20;
+  const SLOW = LIMITS.contextConfirmMs + 1;
+
+  it('stays quiet once SessionStart delivered it quickly', () => {
     const start = hook({ event: 'SessionStart' });
-    service.markContextDelivered('claude', start.session, 'SessionStart');
+    service.markContextDelivered('claude', start.session, 'SessionStart', FAST);
     const result = prompt();
     expect(result.action).toBe('ignored');
     expect(result.context).toBeUndefined();
@@ -256,7 +259,7 @@ describe('UserPromptSubmit', () => {
 
   it('hands it over once: later prompts stay quiet', () => {
     const first = prompt();
-    service.markContextDelivered('claude', first.session, 'UserPromptSubmit');
+    service.markContextDelivered('claude', first.session, 'UserPromptSubmit', FAST);
     expect(prompt().action).toBe('ignored');
     expect(prompt().action).toBe('ignored');
   });
@@ -266,10 +269,57 @@ describe('UserPromptSubmit', () => {
     expect(prompt().action).toBe('context');
   });
 
+  it("re-sends after a slow response: written isn't read (the hook may have timed out)", () => {
+    const start = hook({ event: 'SessionStart' });
+    service.markContextDelivered('claude', start.session, 'SessionStart', SLOW);
+    expect(prompt().action).toBe('context');
+    expect(store.countEvents({ kind: 'hook.context_delivered', since: new Date(0) })).toBe(1);
+  });
+
+  it('stops re-sending after enough slow responses', () => {
+    const { session } = prompt();
+    for (let i = 0; i < LIMITS.contextSlowDeliveries - 1; i++) {
+      service.markContextDelivered('claude', session, 'UserPromptSubmit', SLOW);
+      expect(prompt().action).toBe('context');
+    }
+    service.markContextDelivered('claude', session, 'UserPromptSubmit', SLOW);
+    expect(prompt().action).toBe('ignored');
+  });
+
+  it('stays quiet once the agent used the ID in an MCP call', () => {
+    const { session } = prompt();
+    service.markContextDelivered('claude', session, 'UserPromptSubmit', SLOW);
+    service.notify({ platform: 'claude', session, text: 'hi', urgency: 'fyi' });
+    expect(prompt().action).toBe('ignored');
+    // Recorded once, not on every call.
+    service.notify({ platform: 'claude', session, text: 'again', urgency: 'fyi' });
+    expect(store.countEvents({ kind: 'session.used', since: new Date(0) })).toBe(1);
+  });
+
+  it("doesn't count a call another platform made with the ID", () => {
+    const { session } = prompt();
+    expect(() =>
+      service.notify({ platform: 'codex', session, text: 'hi', urgency: 'fyi' }),
+    ).toThrow(BusError);
+    expect(prompt().action).toBe('context');
+  });
+
+  it('starts over at each SessionStart (after /clear or compaction the agent lost it)', () => {
+    const { session } = prompt();
+    service.notify({ platform: 'claude', session, text: 'hi', urgency: 'fyi' });
+    expect(prompt().action).toBe('ignored');
+    // SessionStart (compact) reaches the broker, but its response is slow.
+    hook({ event: 'SessionStart', source: 'compact' });
+    service.markContextDelivered('claude', session, 'SessionStart', SLOW);
+    expect(prompt().action).toBe('context');
+    service.notify({ platform: 'claude', session, text: 'hi', urgency: 'fyi' });
+    expect(prompt().action).toBe('ignored');
+  });
+
   it('works the same on Codex, per app session', () => {
     const codex = prompt('codex');
     expect(codex.session).toMatch(/^codex\//);
-    service.markContextDelivered('codex', codex.session, 'UserPromptSubmit');
+    service.markContextDelivered('codex', codex.session, 'UserPromptSubmit', FAST);
     expect(prompt('codex').action).toBe('ignored');
     // Another app session still needs its own ID.
     const other = hook({ event: 'UserPromptSubmit', appSessionId: 'app-456' }, 'codex');
@@ -279,13 +329,13 @@ describe('UserPromptSubmit', () => {
 
   it("doesn't record a delivery for Copilot, whose hooks can't print context", () => {
     const { session } = hook({ event: 'SessionStart' }, 'copilot');
-    service.markContextDelivered('copilot', session, 'SessionStart');
+    service.markContextDelivered('copilot', session, 'SessionStart', FAST);
     expect(store.countEvents({ kind: 'hook.context_delivered', since: new Date(0) })).toBe(0);
   });
 
   it('SessionStart always hands it over (after /clear or compaction the agent lost it)', () => {
     const start = hook({ event: 'SessionStart' });
-    service.markContextDelivered('claude', start.session, 'SessionStart');
+    service.markContextDelivered('claude', start.session, 'SessionStart', FAST);
     expect(hook({ event: 'SessionStart', source: 'compact' }).action).toBe('context');
   });
 });

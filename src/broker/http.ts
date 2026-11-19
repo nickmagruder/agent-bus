@@ -60,6 +60,7 @@ async function handle(
   res: ServerResponse,
   options: HttpOptions,
 ): Promise<void> {
+  const startedAt = performance.now();
   const verdict = checkRequest(
     {
       host: req.headers.host,
@@ -123,15 +124,20 @@ async function handle(
         afterResponse('delivery', () => delivery.settle(written)),
       );
     }
-    // Likewise the bus ID: UserPromptSubmit re-sends it until a response
-    // carrying it has been written.
+    // The bus ID: UserPromptSubmit re-sends it until the broker can tell the
+    // agent has it (see BusService.markContextDelivered).
     if (result.context) {
       const { session } = result;
       const { event } = parsed.data;
       res.once(
         'finish',
         afterResponse('context record', () =>
-          options.service.markContextDelivered(verdict.platform, session, event),
+          options.service.markContextDelivered(
+            verdict.platform,
+            session,
+            event,
+            performance.now() - startedAt,
+          ),
         ),
       );
     }

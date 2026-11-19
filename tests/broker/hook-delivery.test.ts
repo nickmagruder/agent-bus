@@ -1,10 +1,10 @@
 import { request, type ServerResponse } from 'node:http';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startHttpServer, type RunningHttpServer } from '../../src/broker/http.ts';
 import { Inbox, REACTION } from '../../src/broker/inbox.ts';
 import { silentLogger } from '../../src/broker/log.ts';
 import { Notifier, Questions } from '../../src/broker/questions.ts';
-import { BusService } from '../../src/broker/service.ts';
+import { BusService, LIMITS } from '../../src/broker/service.ts';
 import { Store } from '../../src/broker/store.ts';
 import { TOKENS, USER_ID } from './fakes.ts';
 
@@ -18,10 +18,12 @@ let inbox: Inbox;
 let http: RunningHttpServer;
 let reactions: { channel: string; ts: string; name: string }[];
 let lastResponse: ServerResponse | undefined;
+let logs: { level: string; message: string; data?: Record<string, unknown> }[];
 
 beforeEach(async () => {
   store = new Store(':memory:');
   reactions = [];
+  logs = [];
   const queue = { kick: () => undefined };
   const notifier = new Notifier();
   const questions = new Questions({
@@ -48,7 +50,7 @@ beforeEach(async () => {
     inbox,
     questions,
     notifier,
-    log: silentLogger,
+    log: (level, message, data) => logs.push({ level, message, ...(data ? { data } : {}) }),
   });
   http.server.prependListener('request', (_req, res: ServerResponse) => (lastResponse = res));
 });
@@ -132,6 +134,51 @@ describe('/hook bus-ID delivery', () => {
     expect(recorded()).toEqual({ n: 0 });
     expect(contextOf(await postHook('UserPromptSubmit', 'app-9'))).toMatch(/^agent-bus: /);
     await expect.poll(recorded).toEqual({ n: 1 });
+    expect(contextOf(await postHook('UserPromptSubmit', 'app-9'))).toBeUndefined();
+  });
+
+  it('logs a failure after the response instead of crashing the broker', async () => {
+    service.markContextDelivered = () => {
+      throw new Error('database is locked');
+    };
+    expect(contextOf(await postHook('SessionStart', 'app-9'))).toMatch(/^agent-bus: /);
+    await expect
+      .poll(() => logs)
+      .toContainEqual({
+        level: 'error',
+        message: 'hook context record failed',
+        data: { error: 'database is locked' },
+      });
+    // The broker still answers.
+    expect(contextOf(await postHook('UserPromptSubmit', 'app-9'))).toMatch(/^agent-bus: /);
+  });
+
+  it('re-sends it when the response was written too late for the hook to read', async () => {
+    // A busy broker: the request takes longer than the confirm window, so the
+    // hook (2 s timeout) may have given up even though 'finish' fires.
+    const realNow = performance.now.bind(performance);
+    let offset = 0;
+    const spy = vi.spyOn(performance, 'now').mockImplementation(() => realNow() + offset);
+    const hook = service.hook.bind(service);
+    service.hook = (platform, input, check) => {
+      offset += LIMITS.contextConfirmMs + 500;
+      return hook(platform, input, check);
+    };
+    try {
+      expect(contextOf(await postHook('SessionStart', 'app-9'))).toMatch(/^agent-bus: /);
+      await expect.poll(recorded).toEqual({ n: 1 });
+    } finally {
+      service.hook = hook;
+      spy.mockRestore();
+    }
+    const [slow] = store.db
+      .prepare("SELECT data FROM events WHERE kind = 'hook.context_delivered'")
+      .all() as { data: string }[];
+    expect(JSON.parse(slow?.data ?? '{}')).toMatchObject({ fast: 'no' });
+    // Written, but maybe never read: the first prompt re-sends it, quickly this time.
+    expect(contextOf(await postHook('UserPromptSubmit', 'app-9'))).toMatch(/^agent-bus: /);
+    await expect.poll(recorded).toEqual({ n: 2 });
+    // One fast delivery is enough (two deliveries is below the slow cap of 3).
     expect(contextOf(await postHook('UserPromptSubmit', 'app-9'))).toBeUndefined();
   });
 });

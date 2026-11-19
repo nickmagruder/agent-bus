@@ -646,9 +646,30 @@ export class Store {
       params.push(`$.${name}`, ...values);
     }
     const row = this.db
-      .prepare(`SELECT data FROM events WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT 1`)
+      .prepare(`SELECT id, data FROM events WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT 1`)
       .get(...params) as Row | undefined;
-    return row ? (JSON.parse(String(row.data)) as Record<string, unknown>) : undefined;
+    return row
+      ? { ...(JSON.parse(String(row.data)) as Record<string, unknown>), eventId: Number(row.id) }
+      : undefined;
+  }
+
+  /** Counts a session's events of a kind logged after event `afterId` (0: all of them). */
+  countEventsAfter(filter: {
+    kind: string;
+    sessionId: string;
+    afterId: number;
+    dataField?: { name: string; value: string };
+  }): number {
+    const where = ['kind = ?', 'session_id = ?', 'id > ?'];
+    const params: SQLInputValue[] = [filter.kind, filter.sessionId, filter.afterId];
+    if (filter.dataField) {
+      where.push('json_extract(data, ?) = ?');
+      params.push(`$.${filter.dataField.name}`, filter.dataField.value);
+    }
+    const row = this.db
+      .prepare(`SELECT COUNT(*) AS n FROM events WHERE ${where.join(' AND ')}`)
+      .get(...params) as Row;
+    return Number(row.n);
   }
 
   /** Counts events since a time, optionally matching a top-level `data` field. */

@@ -81,7 +81,8 @@ function summarizeArguments(input: Payload): string | undefined {
 
 /**
  * What the hook prints for the app. SessionStart adds the agent's bus ID as
- * context (and UserPromptSubmit, when SessionStart's never got through); a Stop the broker `blocked` prints `decision: block` with my Slack
+ * context, and so does UserPromptSubmit until the broker can tell the agent
+ * has it. A Stop the broker `blocked` prints `decision: block` with my Slack
  * replies as the reason, so the agent keeps going. Everything else prints
  * nothing: permission prompts are never answered from here.
  */

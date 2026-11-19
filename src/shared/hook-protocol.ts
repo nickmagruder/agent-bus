@@ -34,7 +34,7 @@ export type HookRequest = z.infer<typeof hookRequestSchema>;
 export interface HookResponse {
   session: string;
   action: string;
-  /** SessionStart: the bus ID as added context. */
+  /** SessionStart, and UserPromptSubmit until delivered: the bus ID as added context. */
   context?: string;
   /** Stop with action `blocked`: my Slack replies, for `{"decision":"block","reason":…}`. */
   reason?: string;

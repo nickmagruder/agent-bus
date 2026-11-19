@@ -37,6 +37,16 @@ function env(platform: 'CLAUDE' | 'CODEX' = 'CLAUDE'): NodeJS.ProcessEnv {
   return { [`AGENT_BUS_TOKEN_${platform}`]: token, AGENT_BUS_PORT: String(broker.port) };
 }
 
+/** Bus-ID deliveries the broker has recorded for a platform. */
+function delivered(platform: 'claude' | 'codex'): number {
+  const row = broker.store.db
+    .prepare(
+      "SELECT COUNT(*) AS n FROM events WHERE kind = 'hook.context_delivered' AND platform = ?",
+    )
+    .get(platform) as { n: number };
+  return Number(row.n);
+}
+
 function payload(fields: Record<string, unknown>): string {
   return JSON.stringify({ session_id: 'app-1', cwd: repoRoot, ...fields });
 }
@@ -195,8 +205,9 @@ describe('runHook against the broker', () => {
     };
     expect(first.hookSpecificOutput.hookEventName).toBe('UserPromptSubmit');
     expect(first.hookSpecificOutput.additionalContext).toMatch(/codex\/agent-bus\/[0-9a-f]{4}/);
-    // Recorded once the response was written; the next prompt adds nothing.
-    await expect.poll(async () => (await prompt('app-race')).stdout).toBe('');
+    // Recorded (fast) once the response was written; the very next prompt adds nothing.
+    await expect.poll(() => delivered('codex')).toBe(1);
+    expect((await prompt('app-race')).stdout).toBe('');
     // The prompt itself never reaches the broker.
     const audit = JSON.stringify(broker.store.db.prepare('SELECT data FROM events').all());
     expect(audit).not.toContain('my secret prompt');
@@ -210,8 +221,10 @@ describe('runHook against the broker', () => {
         env: env(),
         cwd: repoRoot,
       });
+    const before = delivered('claude');
     expect((await run('SessionStart')).stdout).toContain('additionalContext');
-    await expect.poll(async () => (await run('UserPromptSubmit')).stdout).toBe('');
+    await expect.poll(() => delivered('claude')).toBe(before + 1);
+    expect((await run('UserPromptSubmit')).stdout).toBe('');
   });
 
   it('prints nothing when the broker refuses', async () => {

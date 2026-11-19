@@ -128,10 +128,25 @@ session hasn't received one yet (both apps support context from that event),
 and leave (a) to the app's reconnect (decided below).
 
 Built in 0.8.0 ([#22](https://github.com/nickmagruder/agent-bus/issues/22)):
-the broker records `hook.context_delivered` when a response carrying the bus
-ID has been written to the hook (`SessionStart` or `UserPromptSubmit`). Until
-then each prompt adds the ID; afterwards prompts add nothing. `SessionStart`
-always adds it, since after `/clear` or compaction the agent has lost it.
+each prompt re-adds the bus ID until the broker can tell the agent has it,
+counted since the last `SessionStart` it saw:
+
+- the agent used the ID in an MCP call (`session.used`, recorded once), or
+- a response carrying it was written within 1 s of the request
+  (`hook.context_delivered` with `fast: yes`), well inside the hook's 2 s
+  wait, or
+- 3 slower responses were written (one surely got through).
+
+A written response alone isn't proof: `finish` fires when the response is
+handed to the OS, even if the hook has already timed out (found in review).
+`SessionStart` always adds the ID, since after `/clear` or compaction the
+agent has lost it.
+
+Known limit: if a `/clear` or compaction `SessionStart` misses the broker
+(down or restarting), the broker can't know the agent lost its ID, so
+prompts stay quiet. The agent can still call `register` for a new ID.
+Context from `UserPromptSubmit` is not verified live on either app yet
+([#25](https://github.com/nickmagruder/agent-bus/issues/25)).
 
 ## Decisions
 
