@@ -14,8 +14,18 @@ import type { HookResponse } from '../shared/hook-protocol.ts';
 import { PLATFORMS, type Platform } from '../shared/platform.ts';
 import { extractHookRequest, findRepo, renderHookOutput } from './hook-extract.ts';
 
-/** SessionStart delays the session's first turn, so it gets the shortest wait. */
-const TIMEOUT_MS = { SessionStart: 2000, default: 3000 } as const;
+/**
+ * SessionStart delays the session's first turn, so it gets the shortest wait.
+ * Stop isn't latency-sensitive and may carry my Slack replies: give a busy
+ * broker longer before the agent stops without them.
+ */
+const TIMEOUT_MS = { SessionStart: 2000, Stop: 15_000, default: 3000 } as const;
+
+export function timeoutFor(event: string): number {
+  if (event === 'SessionStart') return TIMEOUT_MS.SessionStart;
+  if (event === 'Stop') return TIMEOUT_MS.Stop;
+  return TIMEOUT_MS.default;
+}
 
 export interface HookRunOptions {
   argv: string[];
@@ -58,7 +68,7 @@ export async function runHook(options: HookRunOptions): Promise<HookRunResult> {
   if (!request) return { stdout: '', note: 'hook payload has no event or session ID' };
 
   const port = Number(options.env.AGENT_BUS_PORT ?? DEFAULT_PORT);
-  const timeout = request.event === 'SessionStart' ? TIMEOUT_MS.SessionStart : TIMEOUT_MS.default;
+  const timeout = timeoutFor(request.event);
   const doFetch = options.fetch ?? fetch;
   const response = await doFetch(`http://127.0.0.1:${port}/hook`, {
     method: 'POST',

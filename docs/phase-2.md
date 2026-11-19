@@ -101,7 +101,14 @@ default}` from its next `wait_for_reply` / `check_inbox` / Stop hook. Never
   new), I get the usual "waiting for you" post; a stop continued by some
   other Stop hook is still ignored.
 - Copilot's Stop hook can't run, so its replies are never taken by one.
-- Broker down or slow (3 s timeout) → no output, the agent stops normally.
+- Broker down or slow (15 s timeout for `Stop`) → no output, the agent stops
+  normally. Replies count as delivered only once the broker has written the
+  response; if the hook gave up first, they go back to the inbox
+  (`inbox.undelivered`) for the next stop or `check_inbox`. Left: a hook that
+  aborts after the response is written but before it reads it
+  ([#41](https://github.com/nickmagruder/agent-bus/issues/41)).
+- The "waiting for you" post says how many of my replies the agent hasn't
+  read yet (e.g. past the cap).
 
 ### Daily digest
 

@@ -22,6 +22,8 @@ export const LIMITS = {
   urgentPerSession: 10,
   /** Stop-hook blocks (Slack replies handed to the agent): the loop guard. */
   stopBlocksPerSession: 6,
+  /** Replies handed over in one Stop-hook block; the rest wait for the next. */
+  stopTakePerBlock: 5,
 } as const;
 
 /** Minimum gap between hook pings of one kind for one session. */
@@ -133,6 +135,9 @@ export interface HookResult {
  * none. Supplied by the HTTP layer, which owns the inbox.
  */
 export type StopInboxCheck = (session: SessionRecord) => string | undefined;
+
+/** Hook events that end or begin a turn (see lastStopBlocked). */
+const TURN_EVENTS = ['Stop', 'UserPromptSubmit', 'SessionStart'] as const;
 
 /** Platforms whose Stop hooks run and honour `decision: block` (Phase 0). */
 const STOP_BLOCK_PLATFORMS: ReadonlySet<Platform> = new Set(['claude', 'codex']);
@@ -306,23 +311,30 @@ export class BusService {
         }
         break;
       case 'Stop':
-        reason = this.stopBlockReason(platform, session, stopInbox);
+        // Taking the replies and recording the block commit together, so a
+        // failed audit write can't leave replies marked delivered but unsent.
+        reason = this.store.transaction(() => {
+          const found = this.stopBlockReason(platform, session, stopInbox);
+          if (found) this.auditHook(platform, session, input, 'blocked');
+          return found;
+        });
         if (reason) {
-          action = 'blocked';
-        } else if (!input.stopHookActive || this.lastStopBlocked(session)) {
+          return { session: session.id, action: 'blocked', reason };
+        }
+        if (!input.stopHookActive || this.lastStopBlocked(session)) {
           // stop_hook_active: a Stop hook already kept the agent going. If it was
           // ours, the agent has now dealt with my replies and really is waiting.
-          action = this.hookPing(session, 'stop', 'normal', stopText(input));
+          action = this.hookPing(
+            session,
+            'stop',
+            'normal',
+            stopText(input, this.store.countUndelivered(session.id)),
+          );
         }
         break;
     }
 
-    this.store.appendEvent({
-      kind: 'hook',
-      platform,
-      sessionId: session.id,
-      data: { event: input.event, action, source: input.source ?? null },
-    });
+    this.auditHook(platform, session, input, action);
     return {
       session: session.id,
       action,
@@ -353,13 +365,31 @@ export class BusService {
     return stopInbox(session);
   }
 
+  private auditHook(
+    platform: Platform,
+    session: SessionRecord,
+    input: HookInput,
+    action: HookAction,
+  ): void {
+    this.store.appendEvent({
+      kind: 'hook',
+      platform,
+      sessionId: session.id,
+      data: { event: input.event, action, source: input.source ?? null },
+    });
+  }
+
+  /**
+   * Whether this turn's previous Stop was our block. A later prompt or
+   * session start begins a new turn, so an old block doesn't count.
+   */
   private lastStopBlocked(session: SessionRecord): boolean {
     const last = this.store.latestEvent({
       kind: 'hook',
       sessionId: session.id,
-      dataField: { name: 'event', value: 'Stop' },
+      dataField: { name: 'event', value: TURN_EVENTS },
     });
-    return last?.action === 'blocked';
+    return last?.event === 'Stop' && last.action === 'blocked';
   }
 
   /** Finds the bus session for an app session, creating it on first sight. */
@@ -636,9 +666,15 @@ export function permissionText(input: HookInput): string {
   return `:lock: Waiting for your approval to use ${tool}${block}\nAnswer in the app.`;
 }
 
-export function stopText(input: HookInput): string {
+/** `waiting`: my replies the agent hasn't read (e.g. past the Stop-hook cap). */
+export function stopText(input: HookInput, waiting = 0): string {
   const snippet = input.lastMessage ? `\n${quote(input.lastMessage)}` : '';
-  return `:hourglass_flowing_sand: Turn finished; waiting for you${snippet}`;
+  const replies = waiting === 1 ? '1 reply' : `${waiting} replies`;
+  const unread =
+    waiting > 0
+      ? `\n_${replies} from you not read yet: they reach it at its next \`check_inbox\` or stop._`
+      : '';
+  return `:hourglass_flowing_sand: Turn finished; waiting for you${snippet}${unread}`;
 }
 
 function truncate(text: string, max = SNIPPET_CHARS): string {

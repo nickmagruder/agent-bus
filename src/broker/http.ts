@@ -5,7 +5,8 @@ import { checkRequest } from '../shared/guard.ts';
 import { hookRequestSchema, type HookResponse } from '../shared/hook-protocol.ts';
 import type { Platform } from '../shared/platform.ts';
 import { errorMessage, type Logger } from './log.ts';
-import { createBusMcpServer, stopInboxCheck, type McpDeps } from './mcp.ts';
+import { createBusMcpServer, type McpDeps } from './mcp.ts';
+import { StopDelivery } from './stop-hook.ts';
 import type { BusService } from './service.ts';
 
 const MAX_BODY_BYTES = 1_000_000;
@@ -96,11 +97,21 @@ async function handle(
   if (url.pathname === '/hook') {
     const parsed = hookRequestSchema.safeParse(body);
     if (!parsed.success) return reply(res, 400, 'Invalid hook request');
+    // A hook that already gave up (timed out, closed) can't deliver anything.
+    const delivery = req.socket.destroyed ? undefined : new StopDelivery(options.inbox);
     const result: HookResponse = options.service.hook(
       verdict.platform,
       parsed.data,
-      stopInboxCheck(options.inbox),
+      delivery?.check,
     );
+    // Replies handed to a Stop hook count as delivered only once the response
+    // is fully written ('finish'); a connection that closes first puts them
+    // back. (writableFinished can't tell: Node sets it on a destroyed response.)
+    if (delivery) {
+      let written = false;
+      res.once('finish', () => (written = true));
+      res.once('close', () => delivery.settle(written));
+    }
     return json(res, 200, result);
   }
 

@@ -8,9 +8,10 @@ import {
   type InboundMessage,
 } from '../../src/broker/inbox.ts';
 import { silentLogger } from '../../src/broker/log.ts';
-import { inboxText, STOP_TAKE_LIMIT, stopInboxCheck } from '../../src/broker/mcp.ts';
+import { inboxText } from '../../src/broker/mcp.ts';
+import { StopDelivery } from '../../src/broker/stop-hook.ts';
 import { Notifier, Questions } from '../../src/broker/questions.ts';
-import { BusService } from '../../src/broker/service.ts';
+import { BusService, LIMITS } from '../../src/broker/service.ts';
 import { toInboundMessage } from '../../src/broker/slack/inbound.ts';
 import { DM_TARGET, Store, type SessionRecord } from '../../src/broker/store.ts';
 import { fromSlackText } from '../../src/shared/slack-text.ts';
@@ -27,6 +28,7 @@ let reactions: { channel: string; ts: string; name: string }[];
 let kicks: number;
 let now: Date;
 let session: SessionRecord;
+let service: BusService;
 let nextTs: number;
 
 beforeEach(() => {
@@ -54,7 +56,7 @@ beforeEach(() => {
     reactions: { add: (channel, ts, name) => reactions.push({ channel, ts, name }) },
     now: () => now,
   });
-  const service = new BusService(store, queue, () => now);
+  service = new BusService(store, queue, () => now);
   session = service.register({ platform: 'claude', purpose: 'Inbox', project: 'clankers' }).session;
   // What the post queue records once the thread root and an urgent DM are sent.
   store.setThread(session.id, CHANNEL, ROOT_TS);
@@ -264,30 +266,83 @@ describe('toInboundMessage', () => {
   });
 });
 
-describe('stopInboxCheck', () => {
+describe('StopDelivery', () => {
+  const delivered = (ts: string) => ({ channel: CHANNEL, ts, name: REACTION.delivered });
+
   it('returns nothing and marks nothing when the inbox is empty', () => {
-    expect(stopInboxCheck(inbox)(session)).toBeUndefined();
+    const delivery = new StopDelivery(inbox);
+    expect(delivery.check(session)).toBeUndefined();
+    delivery.settle(false);
     expect(events('inbox.delivered')).toEqual([]);
+    expect(events('inbox.undelivered')).toEqual([]);
   });
 
-  it('words my replies as the reason, labelled as mine, and marks them delivered', () => {
+  it('words my replies as the reason, labelled as mine; ✅ only once the response is written', () => {
     const m = message({ text: 'Use plan B' });
     inbox.receive(m);
-    const reason = stopInboxCheck(inbox)(session) ?? '';
+    const delivery = new StopDelivery(inbox);
+    const reason = delivery.check(session) ?? '';
     expect(reason).toContain('Nick replied in Slack before you stopped');
     expect(reason).toContain('from Nick, sent from his own Slack account');
     expect(reason).toContain('Use plan B');
     expect(store.countUndelivered(session.id)).toBe(0);
     expect(events('inbox.delivered')).toEqual([expect.objectContaining({ via: 'stop_hook' })]);
-    expect(reactions).toContainEqual({ channel: CHANNEL, ts: m.ts, name: REACTION.delivered });
+    expect(reactions).not.toContainEqual(delivered(m.ts));
+    delivery.settle(true);
+    expect(reactions).toContainEqual(delivered(m.ts));
     // Delivered once: the next stop has nothing to hand over.
-    expect(stopInboxCheck(inbox)(session)).toBeUndefined();
+    expect(new StopDelivery(inbox).check(session)).toBeUndefined();
   });
 
-  it('hands over at most STOP_TAKE_LIMIT replies and says how many wait', () => {
-    for (let i = 0; i < STOP_TAKE_LIMIT + 2; i++) inbox.receive(message({ text: `note ${i}` }));
-    const reason = stopInboxCheck(inbox)(session) ?? '';
-    expect(reason).toContain(`${STOP_TAKE_LIMIT} messages from Nick`);
+  it('puts the replies back when the response never reached the hook', () => {
+    const m = message({ text: 'Use plan B' });
+    inbox.receive(m);
+    const lost = new StopDelivery(inbox);
+    lost.check(session);
+    lost.settle(false);
+    lost.settle(true); // settles once: a late call changes nothing
+    expect(store.countUndelivered(session.id)).toBe(1);
+    expect(reactions).not.toContainEqual(delivered(m.ts));
+    expect(events('inbox.undelivered')).toEqual([
+      expect.objectContaining({ via: 'stop_hook', questionIds: [] }),
+    ]);
+    // The next stop (or check_inbox) hands them over again.
+    expect(new StopDelivery(inbox).check(session)).toContain('Use plan B');
+  });
+
+  it('puts back a question outcome and the reply that answered it', () => {
+    service.ask({
+      platform: 'claude',
+      session: session.id,
+      question: 'A or B?',
+      defaultAnswer: 'A',
+    });
+    inbox.receive(message({ text: 'B' }));
+    const lost = new StopDelivery(inbox);
+    expect(lost.check(session)).toContain('B');
+    lost.settle(false);
+    const again = new StopDelivery(inbox).check(session) ?? '';
+    expect(again).toMatch(/Nick replied on q-[0-9a-f]+ \("A or B\?"\)/);
+    expect(store.countUndelivered(session.id)).toBe(0);
+  });
+
+  it('never un-delivers what check_inbox delivered', () => {
+    inbox.receive(message({ text: 'one' }));
+    const stop = new StopDelivery(inbox);
+    stop.check(session);
+    // check_inbox got there first for this one; settle must leave it alone.
+    const other = message({ text: 'two' });
+    inbox.receive(other);
+    inbox.take(session, 'check_inbox');
+    stop.settle(false);
+    expect(store.undelivered(session.id, 10).map((r) => r.body)).toEqual(['one']);
+  });
+
+  it('hands over at most stopTakePerBlock replies and says how many wait', () => {
+    const limit = LIMITS.stopTakePerBlock;
+    for (let i = 0; i < limit + 2; i++) inbox.receive(message({ text: `note ${i}` }));
+    const reason = new StopDelivery(inbox).check(session) ?? '';
+    expect(reason).toContain(`${limit} messages from Nick`);
     expect(reason).toContain('2 more waiting');
     expect(store.countUndelivered(session.id)).toBe(2);
   });

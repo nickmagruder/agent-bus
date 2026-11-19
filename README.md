@@ -368,6 +368,11 @@ are made.
   once the agent stops after our block, I get the usual "waiting for you"
   post. Loop guard: 6 blocks per session per hour, then replies wait for
   `check_inbox`. Copilot replies are never taken by a Stop hook.
+- Replies count as delivered (✅) only once the hook response is written; if
+  the hook gave up first, they go back to the inbox. The Stop hook waits up
+  to 15 s (was 3 s). Taking the replies and auditing the block commit
+  together.
+- "Waiting for you" posts say how many of my replies the agent hasn't read.
 
 ### 0.6.5 (2026-11-18)
 

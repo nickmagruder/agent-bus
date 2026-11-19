@@ -4,6 +4,7 @@ import {
   BusService,
   HOOK_THROTTLE_MS,
   LIMITS,
+  stopText,
   type HookInput,
   type StopInboxCheck,
 } from '../../src/broker/service.ts';
@@ -268,6 +269,47 @@ describe('Stop with Slack replies waiting', () => {
     );
     expect(after.action).toBe('sent');
     expect(queued('proj-clankers')[1]).toContain('> Did it.');
+  });
+
+  it('ignores a stop another hook continued after the post-block ping', () => {
+    const inbox = fakeInbox(['reply']);
+    hook({ event: 'Stop' }, 'claude', inbox);
+    expect(hook({ event: 'Stop', stopHookActive: true }, 'claude', inbox).action).toBe('sent');
+    // Some other Stop hook kept it going; when it stops again it isn't ours to report.
+    expect(hook({ event: 'Stop', stopHookActive: true }, 'claude', inbox).action).toBe('ignored');
+  });
+
+  it("doesn't count a block from an earlier turn", () => {
+    const inbox = fakeInbox(['reply']);
+    hook({ event: 'Stop' }, 'claude', inbox);
+    // The agent's next stop never reached us; Nick prompts a new turn.
+    hook({ event: 'UserPromptSubmit' }, 'claude', inbox);
+    // Another tool's Stop hook continues this turn's stop: not waiting yet.
+    expect(hook({ event: 'Stop', stopHookActive: true }, 'claude', inbox).action).toBe('ignored');
+  });
+
+  it('rolls back the take when the block cannot be recorded', () => {
+    const takeThenProbe: StopInboxCheck = () => {
+      store.appendEvent({ kind: 'probe' });
+      return 'reply';
+    };
+    const append = store.appendEvent.bind(store);
+    store.appendEvent = (event) => {
+      if (event.kind === 'hook') throw new Error('disk full');
+      return append(event);
+    };
+    expect(() => hook({ event: 'Stop' }, 'claude', takeThenProbe)).toThrow('disk full');
+    store.appendEvent = append;
+    const probes = store.db.prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'probe'").get();
+    expect(probes).toEqual({ n: 0 });
+  });
+
+  it("tells me in the ping when replies haven't reached the agent", () => {
+    expect(stopText({ ...base, event: 'Stop' }, 2)).toContain(
+      '_2 replies from you not read yet: they reach it at its next `check_inbox` or stop._',
+    );
+    expect(stopText({ ...base, event: 'Stop' }, 1)).toContain('_1 reply from you');
+    expect(stopText({ ...base, event: 'Stop' }, 0)).not.toContain('not read yet');
   });
 
   it('loop guard: stops blocking at the hourly cap, leaving the replies unread', () => {

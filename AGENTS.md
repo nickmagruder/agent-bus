@@ -76,6 +76,7 @@ into tracked files.
 - `src/broker/http.ts`: `127.0.0.1` HTTP server (`/mcp`, `/hook`, `/health`) behind the guard
 - `src/cli/hook.ts`: hook command for Claude Code and Codex (always exits 0)
 - `src/cli/hook-extract.ts`: picks fields from hook payloads, finds repo/branch, renders app output
+- `src/broker/stop-hook.ts`: Stop-hook delivery of my replies (take, then confirm or put back)
 - `src/shared/hook-protocol.ts`: `/hook` request schema and size limits
 - `src/broker/store.ts`: SQLite (`node:sqlite`) sessions, append-only audit log, outbox, migrations
 - `src/broker/slack/`: Socket Mode connection, Web API adapter, channel directory, post queue
