@@ -103,11 +103,18 @@ default}` from its next `wait_for_reply` / `check_inbox` / Stop hook. Never
   other Stop hook is still ignored.
 - Copilot's Stop hook can't run, so its replies are never taken by one.
 - Broker down or slow (15 s timeout for `Stop`) → no output, the agent stops
-  normally. Replies count as delivered only once the broker has written the
-  response; if the hook gave up first, they go back to the inbox
-  (`inbox.undelivered`) for the next stop or `check_inbox`. Left: a hook that
-  aborts after the response is written but before it reads it
-  ([#41](https://github.com/nickmagruder/agent-bus/issues/41)).
+  normally. If the hook gave up before the response was written, the
+  replies go back to the inbox (`inbox.undelivered`) at once.
+- At least once (0.10.5, [#41](https://github.com/nickmagruder/agent-bus/issues/41)):
+  a written response still isn't proof the agent read it, so each block
+  records a `stop.offered` event with the replies' IDs. They stay marked
+  delivered (`check_inbox` can't hand them over twice) until the next turn
+  event settles the offer: a `Stop` with `stop_hook_active` (the app kept the
+  agent going with our reason) confirms it, `stop.confirmed`, and only then
+  do the replies get ✅; a `Stop` without the flag, a `UserPromptSubmit` or a
+  `SessionStart` returns it, `stop.returned`, and that same `Stop` can offer
+  them again (within the loop guard). Rows that were since delivered another
+  way are left alone.
 - The "waiting for you" post says how many of my replies the agent hasn't
   read yet (e.g. past the cap).
 

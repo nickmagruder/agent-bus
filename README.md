@@ -393,6 +393,16 @@ are made.
 
 ## Changelog
 
+### 0.10.5 (2026-11-19)
+
+- **Stop-hook replies are delivered at least once** ([#41](https://github.com/nickmagruder/agent-bus/issues/41)):
+  replies handed to a Stop hook get ✅ only when the next `Stop` arrives with
+  `stop_hook_active`, the app's proof it kept the agent going. If a `Stop`
+  without it, a new prompt or a session start comes first, the block never
+  reached the agent and the replies go back to the inbox, to be handed over
+  again. Before, a hook that gave up after the response was written lost
+  them.
+
 ### 0.10.4 (2026-11-19)
 
 - **Cancelled held calls end** ([#48](https://github.com/nickmagruder/agent-bus/issues/48)):

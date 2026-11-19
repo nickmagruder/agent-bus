@@ -127,6 +127,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
       port: config.port,
       tokens: config.tokens,
       service,
+      store,
       inbox,
       questions,
       notifier,

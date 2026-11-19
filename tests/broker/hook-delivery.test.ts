@@ -47,6 +47,7 @@ beforeEach(async () => {
     port: 0,
     tokens: TOKENS,
     service,
+    store,
     inbox,
     questions,
     notifier,
@@ -81,7 +82,11 @@ function postStop(): Promise<string | undefined> {
   return postHook('Stop', 'app-1');
 }
 
-function postHook(event: string, appSessionId: string): Promise<string | undefined> {
+function postHook(
+  event: string,
+  appSessionId: string,
+  extra: Record<string, unknown> = {},
+): Promise<string | undefined> {
   return new Promise((resolve) => {
     const req = request(
       {
@@ -104,7 +109,7 @@ function postHook(event: string, appSessionId: string): Promise<string | undefin
       },
     );
     req.on('error', () => resolve(undefined));
-    req.end(JSON.stringify({ event, appSessionId }));
+    req.end(JSON.stringify({ event, appSessionId, ...extra }));
   });
 }
 
@@ -186,14 +191,39 @@ describe('/hook bus-ID delivery', () => {
 const delivered = { channel: CHANNEL, ts: REPLY_TS, name: REACTION.delivered };
 
 describe('/hook Stop delivery', () => {
-  it('confirms the replies (✅) once the response is written', async () => {
+  it('confirms the replies (✅) when the next Stop shows the app kept the agent going', async () => {
     const session = sessionWithReply();
     const body = JSON.parse((await postStop()) ?? '{}') as { action: string; reason: string };
     expect(body.action).toBe('blocked');
     expect(body.reason).toContain('Use plan B');
-    await expect.poll(() => reactions).toContainEqual(delivered);
     expect(store.countUndelivered(session)).toBe(0);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(reactions).not.toContainEqual(delivered);
+    // The agent read it and stops again: stop_hook_active.
+    await postHook('Stop', 'app-1', { stopHookActive: true });
+    expect(reactions).toContainEqual(delivered);
   });
+
+  it.each(['Stop', 'UserPromptSubmit', 'SessionStart'])(
+    'puts the replies back when a %s shows the block never reached the agent',
+    async (event) => {
+      const session = sessionWithReply();
+      await postStop();
+      expect(store.countUndelivered(session)).toBe(0);
+      const answer = JSON.parse((await postHook(event, 'app-1')) ?? '{}') as {
+        action: string;
+        reason?: string;
+      };
+      if (event === 'Stop') {
+        // The same Stop offers them again.
+        expect(answer).toMatchObject({ action: 'blocked' });
+        expect(answer.reason).toContain('Use plan B');
+      } else {
+        expect(store.countUndelivered(session)).toBe(1);
+      }
+      expect(reactions).not.toContainEqual(delivered);
+    },
+  );
 
   it('puts the replies back when the hook is gone before the response is written', async () => {
     const session = sessionWithReply();
