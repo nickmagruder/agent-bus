@@ -1,6 +1,8 @@
 # Phase 3: Agents hand work to each other
 
-Status: **planned** (2026-11-19). Decisions settled (below); the work is
+Status: **planned** (2026-11-19), and grilled the same day (see "Grilling
+outcomes"). No Phase 3 code starts until the Phase 2 live check
+([#25](https://github.com/nickmagruder/agent-bus/issues/25)) passes. Decisions settled (below); the work is
 tracked in the [Phase 3 milestone](https://github.com/nickmagruder/agent-bus/milestone/4). Design:
 [design.md](design.md); previous phase: [phase-2.md](phase-2.md).
 
@@ -14,12 +16,17 @@ the bus is for **cross-platform** work and for me.
 
 - **Identity from the connection:** each platform has its own bearer token,
   and the broker stamps every call with the caller's platform and session.
-  An agent can't speak as another agent or as me.
+  **Correction (grilling):** that holds only _across_ platforms today. The
+  broker checks the platform, not the session, so a session can act as
+  another session of the same platform; Phase 3 adds a per-session key
+  ([#65](https://github.com/nickmagruder/agent-bus/issues/65)). No agent can speak as me.
 - **Sessions** (`platform/project/xxxx`) with a Slack thread each, minted by
   hooks or `register`; `session.used` shows which are alive.
 - **Delivery to agents that can't be pushed to:** the inbox (`check_inbox`),
   held calls (`wait_for_reply`, with cancel and restart handling), and the
-  Stop-hook hand-over (Claude Code, Codex), with at-least-once confirmation.
+  Stop-hook hand-over (Claude Code, Codex). **Correction (grilling):** only
+  the Stop path confirms delivery; `check_inbox` marks items delivered as it
+  returns them (at most once). Phase 3 makes tasks the record instead.
 - **Questions to me** (`ask_human`) with buttons, reminders and expiry to the
   agent's own default.
 - **Safety plumbing:** per-session and per-platform caps, the append-only
@@ -85,7 +92,8 @@ target's **inbox**, next to my replies but labelled differently:
 - **Hop limit:** a task created while working on another task records its
   parent; past N hops `create_task` is refused (loops, runaway delegation).
 - **Caps:** tasks per session per hour, open tasks per target, messages per
-  task; the existing hourly caps keep applying to Slack posts.
+  task. (Correction: the only per-platform cap today is `registerPerPlatform`;
+  Phase 3 adds its own, see the grilling outcomes.)
 - **Provenance:** sender, time and parent chain are stamped by the broker
   from the connection; agents can't set them. No signatures in this phase
   (D4): the one local broker is the authority.
@@ -94,19 +102,68 @@ target's **inbox**, next to my replies but labelled differently:
 
 Settled 2026-11-19 (asked one by one; all as recommended).
 
-| #   | Question                                            | Decision                                                                                                                                                              |
-| --- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| D1  | Who can give work to whom?                          | Any session to a named session, or to "any session of platform X in project Y", **cross-platform only**. Claude ↔ Claude stays on Claude Code's own features.         |
-| D2  | Do I approve tasks before the target sees them?     | **Yes, for v1.** Each new task posts with Approve and Cancel buttons and waits for me, expiring like a question; nothing runs on another agent's say-so. Relax later. |
-| D3  | Can the Stop hook hand over a task or task message? | **No.** Only my replies block a stop; agent work waits for `check_inbox` or `wait_for_reply`, so the strongest channel stays human-only.                              |
-| D4  | Signing beyond broker-stamped provenance?           | **No.** The broker stamps sender, time and parent from the connection token; signatures come with an A2A endpoint (Phase 5).                                          |
-| D5  | Hop limit and caps                                  | **2 hops** (a task may spawn one sub-task), **10 tasks per session per hour**, **3 open tasks per target session**.                                                   |
-| D6  | Leases (#31) in this phase?                         | **Yes.**                                                                                                                                                              |
-| D7  | Can Copilot sessions receive tasks?                 | **Yes.** A task waits until the Copilot session checks its inbox; waiting tasks show in the digest.                                                                   |
+| #   | Question                                            | Decision                                                                                                                                                                                                                                                    |
+| --- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1  | Who can give work to whom?                          | Any session to a named session, or to "any session of platform X in project Y", **cross-platform only**. Claude ↔ Claude stays on Claude Code's own features.                                                                                               |
+| D2  | Do I approve tasks before the target sees them?     | **Yes, for v1.** Each new task posts with Approve and Cancel buttons and waits for me, expiring like a question; nothing runs on another agent's say-so. Relax later.                                                                                       |
+| D3  | Can the Stop hook hand over a task or task message? | **No agent text, ever.** _Amended 2026-11-19 (grilling Q3, Q21):_ it may hand over **fixed notices the broker writes** (to the target: approved, canceled; to the creator: input-required, completed, failed, rejected), within the existing 6/h cap.       |
+| D4  | Signing beyond broker-stamped provenance?           | **No.** The broker stamps sender, time and parent from the connection token; signatures come with an A2A endpoint (Phase 5).                                                                                                                                |
+| D5  | Hop limit and caps                                  | **2 hops** (a task may spawn one sub-task), **10 tasks per session per hour**, **3 open tasks per target session**.                                                                                                                                         |
+| D6  | Leases (#31) in this phase?                         | **Yes.**                                                                                                                                                                                                                                                    |
+| D7  | Can Copilot sessions receive tasks?                 | **Yes, as a pool.** _Amended 2026-11-19 (grilling Q13):_ only as "any Copilot session in project Y" (its session IDs change on restart); a task waits until one checks its inbox; `register` warns on an unknown project; waiting tasks show in the digest. |
+
+## Grilling outcomes (2026-11-19)
+
+The whole plan was stress-tested with the grill-me skill (24 questions, every
+recommendation taken). These decisions refine the sections above and win
+where they differ; the issues carry the matching changes as comments.
+
+| Q   | Decision                                                                                                                                                                                         |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | v1 scope: two handoffs, Claude plans → Codex implements (ending in a PR), and another platform reviewing a PR. A result is text plus optional branch and PR links.                               |
+| 2   | Order: no Phase 3 code until #25 passes; then #56, then #57 onward.                                                                                                                              |
+| 3   | D3 amended: the Stop hook may hand over fixed broker-written notices, never agent text.                                                                                                          |
+| 4   | The hop parent is set by the broker from the task the session holds; `create_task` has no `parent` argument.                                                                                     |
+| 5   | Approve means "deliver this", not "Nick endorses it".                                                                                                                                            |
+| 6   | Agent cards: platform, project, branch, purpose, last seen (no skills or status).                                                                                                                |
+| 7   | Leases are opt-in per repo and only warn, with a Break button in Slack.                                                                                                                          |
+| 8   | A holder silent for more than 4 h flags the task as stuck, with Cancel and Release (back to `submitted`).                                                                                        |
+| 9   | If no receiving session was seen recently, the approval post says so and gives a ready line to start one.                                                                                        |
+| 10  | A per-session secret key (returned by SessionStart and `register`, stored hashed, never logged) fixes same-platform impersonation ([#65](https://github.com/nickmagruder/agent-bus/issues/65)).  |
+| 11  | `from` and `trust` labels go inside `structuredContent`: Codex and VS Code Copilot show only that. A Phase 2 bug, fixed before #25 ([#64](https://github.com/nickmagruder/agent-bus/issues/64)). |
+| 12  | Tasks are the record; the inbox only points to them; `list_tasks` re-reads. The "at-least-once" claim is dropped.                                                                                |
+| 13  | D7 narrowed: Copilot receives tasks only as a project pool; `register` warns on an unknown project.                                                                                              |
+| 14  | Named targets also claim or reject; `rejected` is a real A2A v1.0 state.                                                                                                                         |
+| 15  | Approval comes as a DM (linking the task thread) with one reminder, expiring after 8 h.                                                                                                          |
+| 16  | Task threads always live in `#agents`, with link lines in the session threads.                                                                                                                   |
+| 17  | New limits: at most 5 tasks awaiting approval per platform, 20 messages per task, 4,000 characters per brief or message; mirroring has its own caps.                                             |
+| 18  | Loops (A → B → A) are refused; `input-required` replaces a sub-task back to the creator.                                                                                                         |
+| 19  | Records use minimal A2A v1.0.0 names, with `contextId` and the result as an artifact `{text, links}`.                                                                                            |
+| 20  | Phase 3 tools require the key now; Phase 1–2 tools adopt it in a follow-up ([#66](https://github.com/nickmagruder/agent-bus/issues/66)).                                                         |
+| 21  | Stop notices: to the target, approved and canceled; to the creator, input-required and completed, failed or rejected.                                                                            |
+| 22  | Leases: the repo list lives in a user env var; SessionStart claims a free lease, the holder's activity renews it, it lapses after 2 h idle; Copilot claims explicitly.                           |
+| 23  | Unclaimed tasks don't expire; after 24 h they show in the digest with Cancel.                                                                                                                    |
+| 24  | `wait_for_reply` gains an optional `task` argument.                                                                                                                                              |
+
+Research already answered (#56): Codex and VS Code Copilot pass only
+`structuredContent` to the model when it's present (Q11); A2A is at v1.0.0,
+with `rejected` as a terminal state (Q14, Q19). Still to check: whether the
+**Copilot desktop app** now runs hooks (VS Code has them in preview); if so,
+Q13 and Q22 come back.
+
+Left open on purpose: what counts as "seen recently", when the approval
+reminder fires and the digest wording (decided while building); the full
+A2A wire format, skills on agent cards, signatures and an A2A endpoint
+(Phase 5); when D2's approve-every-task relaxes (after #63); and a broker
+rule against risky task mixes (untrusted input + private data + outbound
+channel), covered for now by approval and agent-comms.
 
 ## Work breakdown
 
-1. **Records and migrations** ([#57](https://github.com/nickmagruder/agent-bus/issues/57)): agents (cards), tasks, task messages, leases;
+0. **Phase 2 label fix** ([#64](https://github.com/nickmagruder/agent-bus/issues/64)), before #25: `from` and `trust` inside
+   `structuredContent`.
+
+1. **Records and migrations** ([#57](https://github.com/nickmagruder/agent-bus/issues/57)), with the **session key** ([#65](https://github.com/nickmagruder/agent-bus/issues/65)): agents (cards), tasks, task messages, leases;
    audit events; store tests including upgrades.
 2. **`list_agents` and agent cards** ([#58](https://github.com/nickmagruder/agent-bus/issues/58)): status from `session.used` and hook
    activity; `register` updates skills/purpose.
