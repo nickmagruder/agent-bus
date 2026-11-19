@@ -65,7 +65,7 @@ describe('Store migrations', () => {
     expect(store.findByAppSession('claude', 'app-2')).toBeUndefined();
   });
 
-  it.each([2, 3])('upgrades a v%i database, keeping its posts', async (from) => {
+  it.each([2, 3, 4])('upgrades a v%i database, keeping its posts', async (from) => {
     const dir = await mkdtemp(path.join(tmpdir(), 'agent-bus-store-'));
     try {
       const file = path.join(dir, 'bus.db');
@@ -82,6 +82,7 @@ describe('Store migrations', () => {
       expect(store.getPost(1)).toMatchObject({ text: 'hi', blocks: null });
       expect(store.db.prepare('SELECT COUNT(*) AS n FROM inbox').get()).toEqual({ n: 0 });
       expect(store.db.prepare('SELECT COUNT(*) AS n FROM questions').get()).toEqual({ n: 0 });
+      expect(store.db.prepare('SELECT COUNT(*) AS n FROM digest_items').get()).toEqual({ n: 0 });
       store.close();
     } finally {
       await rm(dir, { recursive: true, force: true });

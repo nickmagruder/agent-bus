@@ -114,6 +114,17 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE inbox ADD COLUMN question_id TEXT REFERENCES questions (id);
   ALTER TABLE outbox ADD COLUMN blocks TEXT;
   `,
+  // v5: fyi notifications, held for the daily digest (Slack mrkdwn, escaped).
+  `
+  CREATE TABLE digest_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions (id),
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    digested_at TEXT
+  );
+  CREATE INDEX digest_items_pending ON digest_items (digested_at, id);
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -137,6 +148,15 @@ export interface SessionRecord {
   announcedAt: string | null;
   createdAt: string;
   lastSeenAt: string;
+}
+
+/** An fyi notification waiting for the daily digest. */
+export interface DigestItemRecord {
+  id: number;
+  sessionId: string;
+  /** Slack mrkdwn, already escaped. */
+  text: string;
+  createdAt: string;
 }
 
 export interface NewEvent {
@@ -649,6 +669,64 @@ export class Store {
       .prepare(`SELECT data FROM events WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT 1`)
       .get(...params) as Row | undefined;
     return row ? (JSON.parse(String(row.data)) as Record<string, unknown>) : undefined;
+  }
+
+  /** The newest event of a kind across all sessions, with its time. */
+  latestEventOfKind(kind: string): { at: string; data: Record<string, unknown> } | undefined {
+    const row = this.db
+      .prepare('SELECT at, data FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1')
+      .get(kind) as Row | undefined;
+    if (!row) return undefined;
+    return { at: String(row.at), data: JSON.parse(String(row.data)) as Record<string, unknown> };
+  }
+
+  // Daily digest
+
+  addDigestItem(sessionId: string, text: string): void {
+    this.db
+      .prepare('INSERT INTO digest_items (session_id, text, created_at) VALUES (?, ?, ?)')
+      .run(sessionId, text, this.timestamp());
+  }
+
+  /** fyi items not yet in a digest, oldest first. */
+  pendingDigestItems(): DigestItemRecord[] {
+    const rows = this.db
+      .prepare('SELECT * FROM digest_items WHERE digested_at IS NULL ORDER BY id')
+      .all() as Row[];
+    return rows.map((row) => ({
+      id: Number(row.id),
+      sessionId: String(row.session_id),
+      text: String(row.text),
+      createdAt: String(row.created_at),
+    }));
+  }
+
+  markDigested(ids: readonly number[]): void {
+    const statement = this.db.prepare(
+      'UPDATE digest_items SET digested_at = ? WHERE id = ? AND digested_at IS NULL',
+    );
+    const at = this.timestamp();
+    for (const id of ids) statement.run(at, id);
+  }
+
+  /** Questions still open, and those that expired at or after `since`. */
+  digestQuestions(since: Date): QuestionRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM questions
+         WHERE state = 'open' OR (state = 'expired' AND closed_at >= ?)
+         ORDER BY created_at`,
+      )
+      .all(since.toISOString()) as Row[];
+    return rows.map(toQuestion);
+  }
+
+  /** Sessions active at or after `since`, most recent first. */
+  sessionsSeenSince(since: Date): SessionRecord[] {
+    const rows = this.db
+      .prepare('SELECT * FROM sessions WHERE last_seen_at >= ? ORDER BY last_seen_at DESC')
+      .all(since.toISOString()) as Row[];
+    return rows.map(toSession);
   }
 
   /** Counts events since a time, optionally matching a top-level `data` field. */

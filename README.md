@@ -74,7 +74,7 @@ and decisions) is in [docs/design.md](docs/design.md).
 | Tool                                                                       | What it does                                                                                                                                                                                     |
 | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `register(purpose, project?, branch?, session?)`                           | Announces a session in `#proj-<project>` (or `#agents`) and returns its ID (`platform/project/xxxx`)                                                                                             |
-| `notify_human(session, text, urgency)`                                     | `urgent` → DM to me, `normal` → the session's thread, `fyi` → stored for the digest. Per-session and per-platform hourly caps stop loops                                                         |
+| `notify_human(session, text, urgency)`                                     | `urgent` → DM to me, `normal` → the session's thread, `fyi` → the daily digest in `#agents` (08:00 local). Per-session and per-platform hourly caps stop loops                                   |
 | `check_inbox(session)`                                                     | Returns my Slack replies to the session and the outcomes of its questions                                                                                                                        |
 | `ask_human(session, question, options?, default_action, timeout_minutes?)` | DMs me the question with buttons for up to five options (a reply in its thread works too) and waits up to 150 s, then returns `pending` with a question ID. A pointer goes in the session thread |
 | `wait_for_reply(session, question_id?)`                                    | Waits again, for one question or for anything new                                                                                                                                                |
@@ -357,6 +357,15 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.9.0 (2026-11-18)
+
+- **Daily digest** ([#23](https://github.com/nickmagruder/agent-bus/issues/23)):
+  at 08:00 local the broker posts to `#agents` what happened since the last
+  digest: `fyi` notifications grouped by session, open questions and those
+  that expired, and the sessions seen. A digest missed while the broker was
+  off is sent once at start; nothing to report means no post. `fyi` text is
+  now stored for it (schema v5, `digest_items`).
 
 ### 0.7.0 (2026-11-18)
 

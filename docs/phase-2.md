@@ -118,6 +118,19 @@ default}` from its next `wait_for_reply` / `check_inbox` / Stop hook. Never
   sends one catch-up digest at start (never more than one per day).
 - Nothing to report → no post.
 
+Built in 0.9.0 ([#23](https://github.com/nickmagruder/agent-bus/issues/23)):
+
+- `fyi` text is stored in `digest_items` (migration 5); before this only an
+  audit event without the text was written.
+- A slot is today's 08:00 once it has passed, else yesterday's. A slot
+  without a `digest.done` event is due, so a tick every 5 minutes posts the
+  daily digest and the tick at broker start catches up a missed one; each
+  slot is posted at most once. Local time comes from the machine's zone.
+- Covers everything since the previous digest (the first one ever: 24
+  hours). Items are marked digested even when the post is cut at about
+  3,500 characters ("N more lines not shown"), so nothing piles up.
+- An empty slot is still recorded, so an `fyi` at 09:00 waits for tomorrow.
+
 ### Sign-in race
 
 Most of the ~40 s is Node starting under sign-in load, so making the broker
@@ -195,7 +208,7 @@ this doc keeps the design, decisions and live results.
   Stop-hook inbox check (0.7.0), [#22](https://github.com/nickmagruder/agent-bus/issues/22)
   `UserPromptSubmit` bus-ID injection
 - PR 4: [#23](https://github.com/nickmagruder/agent-bus/issues/23) daily
-  digest, [#24](https://github.com/nickmagruder/agent-bus/issues/24) clankers
+  digest (0.9.0), [#24](https://github.com/nickmagruder/agent-bus/issues/24) clankers
   PRs in the digest
 - clankers PR: [#32](https://github.com/nickmagruder/agent-bus/issues/32)
 - Verify on each app: [#25](https://github.com/nickmagruder/agent-bus/issues/25)

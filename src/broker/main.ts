@@ -5,6 +5,7 @@
 import path from 'node:path';
 import { defaultDataDir, loadBrokerConfig, type BrokerConfig } from '../shared/config.ts';
 import { startHttpServer, type RunningHttpServer } from './http.ts';
+import { Digest } from './digest.ts';
 import { Inbox } from './inbox.ts';
 import { createFileWriter, createLogger, errorMessage, type Logger } from './log.ts';
 import { BusService } from './service.ts';
@@ -53,6 +54,8 @@ export interface BrokerDeps {
   /** `null` skips the Socket Mode connection (tests). */
   connection?: SlackConnection | null;
   queueOptions?: Partial<ConstructorParameters<typeof PostQueue>[3]>;
+  /** Daily digest settings (tests); `null` turns the scheduler off. */
+  digest?: { timeZone?: string; hour?: number; tickMs?: number; now?: () => Date } | null;
 }
 
 export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): Promise<Broker> {
@@ -136,6 +139,10 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
   // Posts queued before a restart go out now; reminders and expiries missed while off run now.
   queue.kick();
   questions.start(deps.tickMs);
+  // A digest slot missed while the broker was off is caught up now.
+  const digest =
+    deps.digest === null ? undefined : new Digest({ store, queue, log, ...deps.digest });
+  digest?.start(deps.digest?.tickMs);
   log('info', 'agent-bus broker listening', { url: `http://127.0.0.1:${http.port}/mcp` });
 
   const server = http;
@@ -148,6 +155,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
     questions,
     async stop() {
       questions.stop();
+      digest?.stop();
       await server.close();
       await queue.stop();
       await connection?.stop();
