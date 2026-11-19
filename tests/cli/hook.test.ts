@@ -168,12 +168,17 @@ describe('runHook against the broker', () => {
     expect(blocked.decision).toBe('block');
     expect(blocked.reason).toContain('Use plan B');
     expect(broker.store.countUndelivered(busId)).toBe(0);
-    // ✅ once the response was written to the hook.
-    await expect
-      .poll(() => slack.reactions)
-      .toContainEqual({ channel: 'C_STOP', ts: '1700000100.000002', name: 'white_check_mark' });
-    // The agent dealt with it and stops again: no block, so the app stops normally.
+    const confirmed = {
+      channel: 'C_STOP',
+      ts: '1700000100.000002',
+      name: 'white_check_mark',
+    };
+    // Written isn't read: no ✅ until the app shows it kept the agent going.
+    expect(slack.reactions).not.toContainEqual(confirmed);
+    // The agent dealt with it and stops again (stop_hook_active): no block, so
+    // the app stops normally, and that confirms the delivery.
     expect(await stop(true)).toEqual({ stdout: '' });
+    await expect.poll(() => slack.reactions).toContainEqual(confirmed);
   });
 
   it('Stop prints nothing when the broker fails', async () => {

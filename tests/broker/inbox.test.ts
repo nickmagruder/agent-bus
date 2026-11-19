@@ -270,34 +270,85 @@ describe('StopDelivery', () => {
   const delivered = (ts: string) => ({ channel: CHANNEL, ts, name: REACTION.delivered });
 
   it('returns nothing and marks nothing when the inbox is empty', () => {
-    const delivery = new StopDelivery(inbox);
+    const delivery = new StopDelivery(inbox, store);
     expect(delivery.check(session)).toBeUndefined();
     delivery.settle(false);
     expect(events('inbox.delivered')).toEqual([]);
     expect(events('inbox.undelivered')).toEqual([]);
   });
 
-  it('words my replies as the reason, labelled as mine; ✅ only once the response is written', () => {
+  it('words my replies as the reason, labelled as mine; ✅ only once the app confirms', () => {
     const m = message({ text: 'Use plan B' });
     inbox.receive(m);
-    const delivery = new StopDelivery(inbox);
+    const delivery = new StopDelivery(inbox, store);
     const reason = delivery.check(session) ?? '';
     expect(reason).toContain('Nick replied in Slack before you stopped');
     expect(reason).toContain('from Nick, sent from his own Slack account');
     expect(reason).toContain('Use plan B');
     expect(store.countUndelivered(session.id)).toBe(0);
     expect(events('inbox.delivered')).toEqual([expect.objectContaining({ via: 'stop_hook' })]);
-    expect(reactions).not.toContainEqual(delivered(m.ts));
+    expect(events('stop.offered')).toEqual([
+      expect.objectContaining({ messageIds: [expect.any(Number)], questionIds: [] }),
+    ]);
+    // Written isn't read: no ✅ yet.
     delivery.settle(true);
+    expect(reactions).not.toContainEqual(delivered(m.ts));
+    // In flight: check_inbox and the next stop don't hand it over a second time.
+    expect(inbox.take(session, 'check_inbox').messages).toEqual([]);
+    // The next stop_hook_active Stop confirms it.
+    new StopDelivery(inbox, store).confirm(session);
     expect(reactions).toContainEqual(delivered(m.ts));
-    // Delivered once: the next stop has nothing to hand over.
-    expect(new StopDelivery(inbox).check(session)).toBeUndefined();
+    expect(events('stop.confirmed')).toHaveLength(1);
+    // Confirmed once: a later prompt doesn't put it back.
+    new StopDelivery(inbox, store).putBack(session, 'UserPromptSubmit');
+    expect(store.countUndelivered(session.id)).toBe(0);
+    expect(new StopDelivery(inbox, store).check(session)).toBeUndefined();
+  });
+
+  it('puts an unconfirmed offer back when the next turn event shows the block was not read', () => {
+    const m = message({ text: 'Use plan B' });
+    inbox.receive(m);
+    const delivery = new StopDelivery(inbox, store);
+    delivery.check(session);
+    delivery.settle(true);
+    // e.g. a Stop without stop_hook_active: the agent stopped without our reason.
+    new StopDelivery(inbox, store).putBack(session, 'Stop');
+    expect(store.countUndelivered(session.id)).toBe(1);
+    expect(reactions).not.toContainEqual(delivered(m.ts));
+    expect(events('stop.returned')).toEqual([{ reason: 'Stop' }]);
+    // Handed over again by the next stop, and confirming twice is harmless.
+    const again = new StopDelivery(inbox, store);
+    expect(again.check(session)).toContain('Use plan B');
+    again.confirm(session);
+    again.confirm(session);
+    expect(reactions.filter((r) => r.name === REACTION.delivered)).toHaveLength(1);
+  });
+
+  it('putBack and confirm with no open offer change nothing', () => {
+    inbox.receive(message({ text: 'one' }));
+    inbox.take(session, 'check_inbox');
+    const delivery = new StopDelivery(inbox, store);
+    delivery.putBack(session, 'Stop');
+    delivery.confirm(session);
+    expect(store.countUndelivered(session.id)).toBe(0);
+    expect(events('stop.returned')).toEqual([]);
+    expect(events('stop.confirmed')).toEqual([]);
+  });
+
+  it('putting an offer back leaves alone a reply check_inbox took meanwhile', () => {
+    inbox.receive(message({ text: 'one' }));
+    const delivery = new StopDelivery(inbox, store);
+    delivery.check(session);
+    // Simulate check_inbox having taken it for real (delivered by another route).
+    store.db.prepare("UPDATE inbox SET delivered_via = 'check_inbox'").run();
+    delivery.putBack(session, 'UserPromptSubmit');
+    expect(store.countUndelivered(session.id)).toBe(0);
   });
 
   it('puts the replies back when the response never reached the hook', () => {
     const m = message({ text: 'Use plan B' });
     inbox.receive(m);
-    const lost = new StopDelivery(inbox);
+    const lost = new StopDelivery(inbox, store);
     lost.check(session);
     lost.settle(false);
     lost.settle(true); // settles once: a late call changes nothing
@@ -307,7 +358,7 @@ describe('StopDelivery', () => {
       expect.objectContaining({ via: 'stop_hook', questionIds: [] }),
     ]);
     // The next stop (or check_inbox) hands them over again.
-    expect(new StopDelivery(inbox).check(session)).toContain('Use plan B');
+    expect(new StopDelivery(inbox, store).check(session)).toContain('Use plan B');
   });
 
   it('puts back a question outcome and the reply that answered it', () => {
@@ -318,17 +369,17 @@ describe('StopDelivery', () => {
       defaultAnswer: 'A',
     });
     inbox.receive(message({ text: 'B' }));
-    const lost = new StopDelivery(inbox);
+    const lost = new StopDelivery(inbox, store);
     expect(lost.check(session)).toContain('B');
     lost.settle(false);
-    const again = new StopDelivery(inbox).check(session) ?? '';
+    const again = new StopDelivery(inbox, store).check(session) ?? '';
     expect(again).toMatch(/Nick replied on q-[0-9a-f]+ \("A or B\?"\)/);
     expect(store.countUndelivered(session.id)).toBe(0);
   });
 
   it('never un-delivers what check_inbox delivered', () => {
     inbox.receive(message({ text: 'one' }));
-    const stop = new StopDelivery(inbox);
+    const stop = new StopDelivery(inbox, store);
     stop.check(session);
     // check_inbox got there first for this one; settle must leave it alone.
     const other = message({ text: 'two' });
@@ -341,7 +392,7 @@ describe('StopDelivery', () => {
   it('hands over at most stopTakePerBlock replies and says how many wait', () => {
     const limit = LIMITS.stopTakePerBlock;
     for (let i = 0; i < limit + 2; i++) inbox.receive(message({ text: `note ${i}` }));
-    const reason = new StopDelivery(inbox).check(session) ?? '';
+    const reason = new StopDelivery(inbox, store).check(session) ?? '';
     expect(reason).toContain(`${limit} messages from Nick`);
     expect(reason).toContain('2 more waiting');
     expect(store.countUndelivered(session.id)).toBe(2);

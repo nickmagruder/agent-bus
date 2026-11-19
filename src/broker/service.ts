@@ -143,6 +143,20 @@ export interface HookResult {
  */
 export type StopInboxCheck = (session: SessionRecord) => string | undefined;
 
+/**
+ * What became of the replies the last Stop block handed over. The hook's
+ * response being written doesn't prove the agent read it, so the offer
+ * stays open until the next turn event says:
+ * - `confirm`: a Stop with `stop_hook_active`, the app's proof it kept the
+ *   agent going with our reason (✅ on the replies);
+ * - `putBack`: a Stop without it, a new prompt or a session start, so the
+ *   block never reached the agent (the replies go back to the inbox).
+ */
+export interface StopOffers {
+  confirm(session: SessionRecord): void;
+  putBack(session: SessionRecord, reason: string): void;
+}
+
 /** Hook events that end or begin a turn (see lastStopBlocked). */
 const TURN_EVENTS = ['Stop', 'UserPromptSubmit', 'SessionStart'] as const;
 
@@ -297,8 +311,21 @@ export class BusService {
    * replied in Slack, it blocks the stop (up to a per-session cap) so the
    * agent reads my replies and keeps going.
    */
-  hook(platform: Platform, input: HookInput, stopInbox?: StopInboxCheck): HookResult {
+  hook(
+    platform: Platform,
+    input: HookInput,
+    stopInbox?: StopInboxCheck,
+    offers?: StopOffers,
+  ): HookResult {
     const session = this.hookSession(platform, input);
+    // Settle the last Stop block's offer first: a Stop that puts it back can
+    // then offer the same replies again.
+    if (offers && STOP_BLOCK_PLATFORMS.has(platform)) {
+      if (input.event === 'Stop' && input.stopHookActive) offers.confirm(session);
+      else if ((TURN_EVENTS as readonly string[]).includes(input.event)) {
+        offers.putBack(session, input.event);
+      }
+    }
     let action: HookAction = 'ignored';
     let context: string | undefined;
     let reason: string | undefined;
