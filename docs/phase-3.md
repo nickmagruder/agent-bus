@@ -1,7 +1,7 @@
 # Phase 3: Agents hand work to each other
 
-Status: **planning** (2026-11-19). Decisions below are open; the work
-breakdown becomes GitHub issues once they're settled. Design:
+Status: **planned** (2026-11-19). Decisions settled (below); the work is
+tracked in the [Phase 3 milestone](https://github.com/nickmagruder/agent-bus/milestone/4). Design:
 [design.md](design.md); previous phase: [phase-2.md](phase-2.md).
 
 Goal: a session on one platform can hand a task to a session on another
@@ -58,15 +58,17 @@ target's **inbox**, next to my replies but labelled differently:
 - `check_inbox` and `wait_for_reply` return them as a separate list:
   "Task t-3f2a1b from `codex/esri-exporter/9c1d` (another agent, not Nick):
   …", with the untrusted label below.
-- **Stop hook:** decision needed (D3). Today it only blocks for my replies.
+- **Stop hook:** never hands over agent work (D3). Only my replies block a
+  stop; tasks and task messages wait for `check_inbox` or `wait_for_reply`.
 
 ### Slack
 
 - Each task gets a thread in `#agents` (or the project channel when both
   sides share one), with state changes and messages mirrored, so I can
   follow it from my phone.
-- Buttons on the task post: **Cancel**, and **Approve** if D2 says tasks
-  need my approval. A reply from me in the task thread reaches both sides,
+- Buttons on the task post: **Approve** and **Cancel**. A new task waits
+  for my approval before the target sees it (D2), and expires like a
+  question if I don't answer. A reply from me in the task thread reaches both sides,
   labelled as mine.
 - The daily digest lists tasks opened, finished and stuck.
 
@@ -85,47 +87,48 @@ target's **inbox**, next to my replies but labelled differently:
 - **Caps:** tasks per session per hour, open tasks per target, messages per
   task; the existing hourly caps keep applying to Slack posts.
 - **Provenance:** sender, time and parent chain are stamped by the broker
-  from the connection; agents can't set them. Signing: decision needed (D4).
+  from the connection; agents can't set them. No signatures in this phase
+  (D4): the one local broker is the authority.
 
-## Decisions needed
+## Decisions
 
-My recommendation comes first in each.
+Settled 2026-11-19 (asked one by one; all as recommended).
 
-| #   | Question                                                                                     | Options                                                                                                                                                                                                                                                                |
-| --- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| D1  | **Who can give work to whom?**                                                               | (a) Any session to a named session or to "any session on platform X in project Y", cross-platform only, as the design says. (b) Also same-platform. (c) Only to sessions I've marked as available.                                                                     |
-| D2  | **Do I approve tasks before the target sees them?**                                          | (a) Yes for v1: each new task posts with an Approve button and waits for me (expires like a question), so nothing runs on another agent's say-so; relax later. (b) No approval; I watch in Slack and can cancel. (c) Approval only for tasks into a different project. |
-| D3  | **Can the Stop hook hand an agent a task or task message?**                                  | (a) No: only my replies block a stop; agent work waits for `check_inbox` or `wait_for_reply`, which keeps the strongest channel human-only. (b) Yes, for tasks I approved (D2a). (c) Yes, for any task.                                                                |
-| D4  | **Signing beyond broker-stamped provenance?**                                                | (a) No: one local broker is the authority and stamps sender and parent from the connection token; add signatures with the A2A endpoint (Phase 5). (b) HMAC each record with a broker key, so an exported log can be verified.                                          |
-| D5  | **Hop limit and caps**                                                                       | (a) 2 hops (a task may spawn one sub-task), 10 tasks per session per hour, 3 open tasks per target. (b) 3 hops, looser caps.                                                                                                                                           |
-| D6  | **Leases (#31): in this phase?**                                                             | (a) Yes, small and independent; the notes vault needs it. (b) Defer.                                                                                                                                                                                                   |
-| D7  | **Which agents can be targets on Copilot**, where there are no hooks and only `check_inbox`? | (a) Allowed; tasks wait until it checks in, and I see them waiting in the digest. (b) Copilot can create tasks but not receive them.                                                                                                                                   |
+| #   | Question                                            | Decision                                                                                                                                                              |
+| --- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1  | Who can give work to whom?                          | Any session to a named session, or to "any session of platform X in project Y", **cross-platform only**. Claude ↔ Claude stays on Claude Code's own features.         |
+| D2  | Do I approve tasks before the target sees them?     | **Yes, for v1.** Each new task posts with Approve and Cancel buttons and waits for me, expiring like a question; nothing runs on another agent's say-so. Relax later. |
+| D3  | Can the Stop hook hand over a task or task message? | **No.** Only my replies block a stop; agent work waits for `check_inbox` or `wait_for_reply`, so the strongest channel stays human-only.                              |
+| D4  | Signing beyond broker-stamped provenance?           | **No.** The broker stamps sender, time and parent from the connection token; signatures come with an A2A endpoint (Phase 5).                                          |
+| D5  | Hop limit and caps                                  | **2 hops** (a task may spawn one sub-task), **10 tasks per session per hour**, **3 open tasks per target session**.                                                   |
+| D6  | Leases (#31) in this phase?                         | **Yes.**                                                                                                                                                              |
+| D7  | Can Copilot sessions receive tasks?                 | **Yes.** A task waits until the Copilot session checks its inbox; waiting tasks show in the digest.                                                                   |
 
-## Work breakdown (issues once D1–D7 are settled)
+## Work breakdown
 
-1. **Records and migrations:** agents (cards), tasks, task messages, leases;
+1. **Records and migrations** ([#57](https://github.com/nickmagruder/agent-bus/issues/57)): agents (cards), tasks, task messages, leases;
    audit events; store tests including upgrades.
-2. **`list_agents` and agent cards:** status from `session.used` and hook
+2. **`list_agents` and agent cards** ([#58](https://github.com/nickmagruder/agent-bus/issues/58)): status from `session.used` and hook
    activity; `register` updates skills/purpose.
-3. **Tasks core:** `create_task`, `list_tasks`, `claim_task` (compare-and-swap),
+3. **Tasks core** ([#59](https://github.com/nickmagruder/agent-bus/issues/59)): `create_task`, `list_tasks`, `claim_task` (compare-and-swap),
    `update_task` state machine; ownership rules; caps and hop limit; tests
    for every transition and every refusal.
-4. **Delivery:** task offers and messages in the inbox with the untrusted
+4. **Delivery** ([#60](https://github.com/nickmagruder/agent-bus/issues/60)): task offers and messages in the inbox with the untrusted
    label; `check_inbox` / `wait_for_reply` lists; Stop-hook behaviour per D3;
    at-least-once like my replies.
-5. **Slack:** task threads, mirroring, Cancel (and Approve per D2) buttons
+5. **Slack** ([#61](https://github.com/nickmagruder/agent-bus/issues/61)): task threads, mirroring, Approve and Cancel buttons (D2)
    with sender gating, my replies in task threads, digest section.
-6. **Leases (#31)** per D6.
-7. **clankers:** `standards/agent-comms.md` v1.2 (how to create, claim and
+6. **Leases** ([#31](https://github.com/nickmagruder/agent-bus/issues/31)) per D6.
+7. **clankers** ([#62](https://github.com/nickmagruder/agent-bus/issues/62)): `standards/agent-comms.md` v1.2 (how to create, claim and
    report on tasks; treating agent text as data).
-8. **Live verification** across two platforms (e.g. Claude Code hands a task
+8. **Live verification** ([#63](https://github.com/nickmagruder/agent-bus/issues/63)) across two platforms (e.g. Claude Code hands a task
    to Codex), recorded here.
 
 Not in this phase: approving another agent's permission prompts (never), remote
 approvals of my own prompts (Phase 4), CLI agents and an A2A endpoint
 (Phase 5).
 
-## Research to do first
+## Research to do first ([#56](https://github.com/nickmagruder/agent-bus/issues/56))
 
 - Confirm what Codex and Copilot show for an MCP tool result with two
   labelled sections (my replies vs agent tasks), so the untrusted label is
