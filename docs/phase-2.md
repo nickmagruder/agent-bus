@@ -339,7 +339,8 @@ Findings:
   on #53 settled the write words, the action field, the notification pair
   and keeping held DMs.
 - The reminder DM is posted under the bot's own name and icon, not the
-  agent's (`style()` isn't applied to it); cosmetic.
+  agent's (`style()` isn't applied to it); cosmetic. Fixed in 0.10.1
+  ([#29](https://github.com/nickmagruder/agent-bus/issues/29)).
 - Not yet covered live: Codex and Copilot (heartbeats past 300 s / 180 s),
   the Claude app's own MCP client, a foreign user's or bot's reply, the
   top-level DM hint.

@@ -1,4 +1,4 @@
-import { PLATFORM_STYLE, type Platform } from '../shared/platform.ts';
+import { postStyle, type Platform } from '../shared/platform.ts';
 import { newSessionId, NO_PROJECT, projectSlug } from '../shared/session-id.ts';
 import { escapeSlackText, toSlackMrkdwn } from '../shared/slack-text.ts';
 import { FALLBACK_CHANNEL } from './slack/directory.ts';
@@ -982,8 +982,7 @@ export class BusService {
 }
 
 function style(session: SessionRecord): { username: string; icon: string } {
-  const { label, icon } = PLATFORM_STYLE[session.platform];
-  return { username: `${label} · ${session.project}`, icon };
+  return postStyle(session.platform, session.project);
 }
 
 export function sessionStartText(session: SessionRecord): string {
