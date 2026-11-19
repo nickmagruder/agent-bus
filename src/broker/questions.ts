@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { postStyle } from '../shared/platform.ts';
 import { escapeSlackText, toSlackMrkdwn } from '../shared/slack-text.ts';
 import { errorMessage, type Logger } from './log.ts';
 import {
@@ -247,6 +248,8 @@ export class Questions {
           target: DM_TARGET,
           sessionId: session.id,
           text: reminderText(session, question),
+          // Like the question DM: the session's name and icon, not the bot's.
+          ...postStyle(session.platform, session.project),
         });
         this.store.setQuestionPost(question.id, 'reminder', post.id);
         this.store.appendEvent({
