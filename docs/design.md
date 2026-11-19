@@ -133,8 +133,9 @@ Enforced in the broker, not left to agent instructions:
   another agent or me.
 - **Sender gating:** only my Slack user ID can answer, send to a session or
   press buttons. Everything else is dropped and audited (without its text).
-- **Hooks only notify.** They never return allow/deny or block a stop until
-  Phase 4, and then only with tests for every path.
+- **Hooks don't decide.** They never return allow/deny until Phase 4, and
+  then only with tests for every path. Since Phase 2, `Stop` may block to
+  hand the agent my Slack replies, within a per-session hourly cap.
 - **Minimal hook data:** prompts, transcripts and full tool input stay on the
   machine; only the fields in `src/shared/hook-protocol.ts` are sent.
 - **Escaping:** agent text can't trigger `@channel` or disguise links.

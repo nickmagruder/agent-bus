@@ -80,21 +80,27 @@ function summarizeArguments(input: Payload): string | undefined {
 }
 
 /**
- * What the hook prints for the app. Only SessionStart prints anything: the
- * agent's bus ID as added context. Permission and Stop hooks print nothing,
- * so the app's own prompt and stop behaviour are untouched.
+ * What the hook prints for the app. SessionStart adds the agent's bus ID as
+ * context; a Stop the broker `blocked` prints `decision: block` with my Slack
+ * replies as the reason, so the agent keeps going. Everything else prints
+ * nothing: permission prompts are never answered from here.
  */
 export function renderHookOutput(
   platform: Platform,
   event: string,
   response: HookResponse | undefined,
 ): string {
-  if (event !== 'SessionStart' || !response?.context) return '';
-  // Copilot desktop hooks don't run (Phase 0); Claude Code and Codex share this shape.
-  if (platform === 'copilot') return '';
-  return JSON.stringify({
-    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: response.context },
-  });
+  // Copilot desktop hooks don't run (Phase 0); Claude Code and Codex share these shapes.
+  if (!response || platform === 'copilot') return '';
+  if (event === 'SessionStart' && response.context) {
+    return JSON.stringify({
+      hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: response.context },
+    });
+  }
+  if (event === 'Stop' && response.action === 'blocked' && response.reason) {
+    return JSON.stringify({ decision: 'block', reason: response.reason });
+  }
+  return '';
 }
 
 export interface RepoInfo {

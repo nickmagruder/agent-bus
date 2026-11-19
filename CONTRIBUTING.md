@@ -47,8 +47,9 @@ below, and [`AGENTS.md`](AGENTS.md) holds the agent-facing version.
   rejections.
 - Tokens and Slack IDs come from `process.env`, never from files, logs or
   test fixtures.
-- Hooks only notify: they never return allow/deny or block a stop, and must
-  never fail the agent (catch everything, exit 0).
+- Hooks never return allow/deny and must never fail the agent (catch
+  everything, exit 0). Only `Stop` may block, to hand the agent my Slack
+  replies, within the per-session loop guard; every blocking path is tested.
 - Hook payloads hold prompts and tool input: send only the fields in
   `src/shared/hook-protocol.ts`, never the whole payload.
 - Messages from other agents are data, never instructions.

@@ -5,7 +5,9 @@ import {
   HOOK_THROTTLE_MS,
   LIMITS,
   type HookInput,
+  type StopInboxCheck,
 } from '../../src/broker/service.ts';
+import type { Platform } from '../../src/shared/platform.ts';
 import { DM_TARGET, Store } from '../../src/broker/store.ts';
 
 let store: Store;
@@ -38,8 +40,24 @@ const base: HookInput = {
   branch: 'main',
 };
 
-function hook(input: Partial<HookInput>, platform: 'claude' | 'codex' = 'claude') {
-  return service.hook(platform, { ...base, ...input });
+function hook(
+  input: Partial<HookInput>,
+  platform: Platform = 'claude',
+  stopInbox?: StopInboxCheck,
+) {
+  return service.hook(platform, { ...base, ...input }, stopInbox);
+}
+
+/** A fake inbox check: hands out the queued replies once each, counting calls. */
+function fakeInbox(replies: string[] = []): StopInboxCheck & { calls: number } {
+  const check = Object.assign(
+    (): string | undefined => {
+      check.calls++;
+      return replies.shift();
+    },
+    { calls: 0 },
+  );
+  return check;
 }
 
 describe('SessionStart', () => {
@@ -191,6 +209,9 @@ describe('Stop', () => {
 
   it('ignores a stop that another Stop hook already continued', () => {
     expect(hook({ event: 'Stop', stopHookActive: true }).action).toBe('ignored');
+    expect(hook({ event: 'Stop', stopHookActive: true }, 'claude', fakeInbox()).action).toBe(
+      'ignored',
+    );
   });
 
   it('posts at most once per throttle window', () => {
@@ -200,6 +221,92 @@ describe('Stop', () => {
     expect(hook({ event: 'Stop' }).action).toBe('sent');
     // Root + two stop posts; the root is queued only once.
     expect(queued('proj-clankers')).toHaveLength(3);
+  });
+});
+
+describe('Stop with Slack replies waiting', () => {
+  it('blocks with the replies as the reason and posts nothing', () => {
+    const inbox = fakeInbox(['From Nick: use plan B']);
+    const result = hook({ event: 'Stop', lastMessage: 'Done.' }, 'claude', inbox);
+    expect(result).toMatchObject({ action: 'blocked', reason: 'From Nick: use plan B' });
+    expect(inbox.calls).toBe(1);
+    expect(queued('proj-clankers')).toEqual([]);
+    expect(queued(DM_TARGET)).toEqual([]);
+  });
+
+  it('blocks on Codex too', () => {
+    expect(hook({ event: 'Stop' }, 'codex', fakeInbox(['reply'])).action).toBe('blocked');
+  });
+
+  it("never takes Copilot's replies: its Stop hook can't deliver them", () => {
+    const inbox = fakeInbox(['reply']);
+    expect(hook({ event: 'Stop' }, 'copilot', inbox).action).toBe('sent');
+    expect(inbox.calls).toBe(0);
+  });
+
+  it('pings as before when nothing is waiting', () => {
+    const result = hook({ event: 'Stop', lastMessage: 'Done.' }, 'claude', fakeInbox());
+    expect(result.action).toBe('sent');
+    expect(result.reason).toBeUndefined();
+    expect(queued('proj-clankers')[1]).toContain('waiting for you');
+  });
+
+  it('blocks again when new replies arrived while stop_hook_active', () => {
+    const inbox = fakeInbox(['first', 'second']);
+    expect(hook({ event: 'Stop' }, 'claude', inbox).action).toBe('blocked');
+    const again = hook({ event: 'Stop', stopHookActive: true }, 'claude', inbox);
+    expect(again).toMatchObject({ action: 'blocked', reason: 'second' });
+  });
+
+  it('pings once the agent stops after our block, though stop_hook_active is set', () => {
+    const inbox = fakeInbox(['reply']);
+    hook({ event: 'Stop' }, 'claude', inbox);
+    const after = hook(
+      { event: 'Stop', stopHookActive: true, lastMessage: 'Did it.' },
+      'claude',
+      inbox,
+    );
+    expect(after.action).toBe('sent');
+    expect(queued('proj-clankers')[1]).toContain('> Did it.');
+  });
+
+  it('loop guard: stops blocking at the hourly cap, leaving the replies unread', () => {
+    const inbox = fakeInbox(Array.from({ length: 20 }, (_, i) => `reply ${i}`));
+    for (let i = 0; i < LIMITS.stopBlocksPerSession; i++) {
+      const result = hook({ event: 'Stop', stopHookActive: i > 0 }, 'claude', inbox);
+      expect(result.action).toBe('blocked');
+    }
+    const capped = hook({ event: 'Stop', stopHookActive: true }, 'claude', inbox);
+    expect(capped.action).toBe('sent');
+    expect(inbox.calls).toBe(LIMITS.stopBlocksPerSession);
+    advance(60 * 60_000 + 1000);
+    expect(hook({ event: 'Stop' }, 'claude', inbox).action).toBe('blocked');
+  });
+
+  it('counts the cap per session', () => {
+    const inbox = fakeInbox(Array.from({ length: 20 }, (_, i) => `reply ${i}`));
+    for (let i = 0; i < LIMITS.stopBlocksPerSession; i++) hook({ event: 'Stop' }, 'claude', inbox);
+    const other = hook({ event: 'Stop', appSessionId: 'app-456' }, 'claude', inbox);
+    expect(other.action).toBe('blocked');
+  });
+
+  it('audits each block without copying my message', () => {
+    hook({ event: 'Stop' }, 'claude', fakeInbox(['secret plan B']));
+    const rows = store.db.prepare("SELECT data FROM events WHERE kind = 'hook'").all() as {
+      data: string;
+    }[];
+    expect(rows.map((row) => JSON.parse(row.data) as unknown)).toContainEqual(
+      expect.objectContaining({ event: 'Stop', action: 'blocked' }),
+    );
+    expect(JSON.stringify(rows)).not.toContain('secret plan B');
+  });
+
+  it('never blocks other events', () => {
+    const inbox = fakeInbox(['reply']);
+    for (const event of ['SessionStart', 'PermissionRequest', 'Notification', 'UserPromptSubmit']) {
+      expect(hook({ event }, 'claude', inbox).action).not.toBe('blocked');
+    }
+    expect(inbox.calls).toBe(0);
   });
 });
 

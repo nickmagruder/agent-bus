@@ -5,10 +5,10 @@ import type { Platform } from '../shared/platform.ts';
 import { startHeartbeat, type HeartbeatTarget } from './heartbeat.ts';
 import type { Inbox } from './inbox.ts';
 import { outcomeText, QUESTION_LIMITS, type Notifier, type Questions } from './questions.ts';
-import { BusError, URGENCIES, type BusService } from './service.ts';
+import { BusError, URGENCIES, type BusService, type StopInboxCheck } from './service.ts';
 import type { InboxRecord, QuestionRecord } from './store.ts';
 
-export const SERVER_INFO = { name: 'agent-bus', version: '0.6.0' } as const;
+export const SERVER_INFO = { name: 'agent-bus', version: '0.7.0' } as const;
 
 export interface McpDeps {
   service: BusService;
@@ -324,6 +324,26 @@ export function inboxText(
   }
   if (remaining > 0) parts.push(`${remaining} more waiting: call check_inbox again.`);
   return parts.join('\n\n');
+}
+
+/** At most this many replies go into one Stop-hook reason; the rest wait for check_inbox. */
+export const STOP_TAKE_LIMIT = 5;
+
+/**
+ * The Stop hook's inbox check: takes the session's undelivered replies and
+ * question outcomes (marked delivered via `stop_hook`) and words them as the
+ * reason the agent must keep going.
+ */
+export function stopInboxCheck(inbox: Inbox): StopInboxCheck {
+  return (session) => {
+    const taken = inbox.take(session, 'stop_hook', STOP_TAKE_LIMIT);
+    if (taken.messages.length === 0 && taken.outcomes.length === 0) return undefined;
+    return (
+      'agent-bus: Nick replied in Slack before you stopped. Read his reply and act on it ' +
+      '(answer him with notify_human if he asked something), then finish your turn.\n\n' +
+      inboxText(taken.messages, taken.outcomes, taken.remaining)
+    );
+  };
 }
 
 /** Turns a BusError into a tool error the agent can read; anything else is a bug. */

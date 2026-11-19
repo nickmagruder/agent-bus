@@ -20,6 +20,8 @@ export const LIMITS = {
   registerPerPlatform: 30,
   notifyPerSession: 60,
   urgentPerSession: 10,
+  /** Stop-hook blocks (Slack replies handed to the agent): the loop guard. */
+  stopBlocksPerSession: 6,
 } as const;
 
 /** Minimum gap between hook pings of one kind for one session. */
@@ -91,6 +93,8 @@ export interface HookInput {
 
 export type HookAction =
   | 'context'
+  /** Stop only: the agent was kept going with my Slack replies as the reason. */
+  | 'blocked'
   | 'sent'
   | 'throttled'
   | 'rate_limited'
@@ -119,7 +123,19 @@ export interface HookResult {
   action: HookAction;
   /** Text for the app to add to the model's context (SessionStart). */
   context?: string;
+  /** Why the agent must keep going (Stop, action `blocked`): my replies, labelled as mine. */
+  reason?: string;
 }
+
+/**
+ * Takes a session's undelivered Slack replies for a Stop hook, marking them
+ * delivered, and returns them as the block reason; undefined when there are
+ * none. Supplied by the HTTP layer, which owns the inbox.
+ */
+export type StopInboxCheck = (session: SessionRecord) => string | undefined;
+
+/** Platforms whose Stop hooks run and honour `decision: block` (Phase 0). */
+const STOP_BLOCK_PLATFORMS: ReadonlySet<Platform> = new Set(['claude', 'codex']);
 
 export type Route = 'dm' | 'thread' | 'digest';
 
@@ -261,13 +277,16 @@ export class BusService {
   // Hooks
 
   /**
-   * Handles one hook event. Hooks never decide anything for the app (no
-   * allow/deny, no blocking); they only ping me and hand the agent its bus ID.
+   * Handles one hook event. Hooks ping me and hand the agent its bus ID; they
+   * never allow or deny anything. The one decision is Stop's: when I've
+   * replied in Slack, it blocks the stop (up to a per-session cap) so the
+   * agent reads my replies and keeps going.
    */
-  hook(platform: Platform, input: HookInput): HookResult {
+  hook(platform: Platform, input: HookInput, stopInbox?: StopInboxCheck): HookResult {
     const session = this.hookSession(platform, input);
     let action: HookAction = 'ignored';
     let context: string | undefined;
+    let reason: string | undefined;
 
     switch (input.event) {
       case 'SessionStart':
@@ -287,8 +306,12 @@ export class BusService {
         }
         break;
       case 'Stop':
-        // A Stop hook (ours or another) already kept the agent going; it isn't waiting yet.
-        if (!input.stopHookActive) {
+        reason = this.stopBlockReason(platform, session, stopInbox);
+        if (reason) {
+          action = 'blocked';
+        } else if (!input.stopHookActive || this.lastStopBlocked(session)) {
+          // stop_hook_active: a Stop hook already kept the agent going. If it was
+          // ours, the agent has now dealt with my replies and really is waiting.
           action = this.hookPing(session, 'stop', 'normal', stopText(input));
         }
         break;
@@ -300,7 +323,43 @@ export class BusService {
       sessionId: session.id,
       data: { event: input.event, action, source: input.source ?? null },
     });
-    return { session: session.id, action, ...(context ? { context } : {}) };
+    return {
+      session: session.id,
+      action,
+      ...(context ? { context } : {}),
+      ...(reason ? { reason } : {}),
+    };
+  }
+
+  /**
+   * My undelivered replies as a block reason, or undefined: none waiting, a
+   * platform whose Stop hook can't block, or the loop guard's cap reached
+   * (the replies then wait for check_inbox or a later stop).
+   */
+  private stopBlockReason(
+    platform: Platform,
+    session: SessionRecord,
+    stopInbox: StopInboxCheck | undefined,
+  ): string | undefined {
+    if (!stopInbox || !STOP_BLOCK_PLATFORMS.has(platform)) return undefined;
+    const since = new Date(this.now().getTime() - HOUR_MS);
+    const blocks = this.store.countEvents({
+      kind: 'hook',
+      sessionId: session.id,
+      since,
+      dataField: { name: 'action', value: 'blocked' },
+    });
+    if (blocks >= LIMITS.stopBlocksPerSession) return undefined;
+    return stopInbox(session);
+  }
+
+  private lastStopBlocked(session: SessionRecord): boolean {
+    const last = this.store.latestEvent({
+      kind: 'hook',
+      sessionId: session.id,
+      dataField: { name: 'event', value: 'Stop' },
+    });
+    return last?.action === 'blocked';
   }
 
   /** Finds the bus session for an app session, creating it on first sight. */

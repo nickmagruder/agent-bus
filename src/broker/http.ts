@@ -5,7 +5,7 @@ import { checkRequest } from '../shared/guard.ts';
 import { hookRequestSchema, type HookResponse } from '../shared/hook-protocol.ts';
 import type { Platform } from '../shared/platform.ts';
 import { errorMessage, type Logger } from './log.ts';
-import { createBusMcpServer, type McpDeps } from './mcp.ts';
+import { createBusMcpServer, stopInboxCheck, type McpDeps } from './mcp.ts';
 import type { BusService } from './service.ts';
 
 const MAX_BODY_BYTES = 1_000_000;
@@ -96,7 +96,11 @@ async function handle(
   if (url.pathname === '/hook') {
     const parsed = hookRequestSchema.safeParse(body);
     if (!parsed.success) return reply(res, 400, 'Invalid hook request');
-    const result: HookResponse = options.service.hook(verdict.platform, parsed.data);
+    const result: HookResponse = options.service.hook(
+      verdict.platform,
+      parsed.data,
+      stopInboxCheck(options.inbox),
+    );
     return json(res, 200, result);
   }
 

@@ -18,8 +18,10 @@ change here as a possible security regression.
 - **Slack input:** only events from `SLACK_USER_ID` count. Bots, other users,
   edits, joins and retries are dropped (retries idempotently) and audited
   without their text. Button clicks are checked the same way.
-- **Hooks:** never return allow/deny, never block a stop, never throw out of
-  `main`; exit 0 on every path. Only the fields defined in
+- **Hooks:** never return allow/deny, never throw out of `main`; exit 0 on
+  every path. Only `Stop` may block, and only with my undelivered Slack
+  replies as the reason, within `LIMITS.stopBlocksPerSession` per hour; a
+  change to that path needs tests for every branch. Only the fields defined in
   `src/shared/hook-protocol.ts` are sent, within its size limits; nothing
   named like a secret or a body.
 - **Output to Slack:** agent text goes through the escaping in

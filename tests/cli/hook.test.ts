@@ -117,6 +117,45 @@ describe('runHook against the broker', () => {
     expect(result.note).toContain('must be one of');
   });
 
+  it('Stop hands my Slack reply to the agent once, then pings when it stops again', async () => {
+    const start = await runHook({
+      argv: ['claude'],
+      stdin: payload({ session_id: 'app-stop', hook_event_name: 'SessionStart' }),
+      env: env(),
+      cwd: repoRoot,
+    });
+    const busId = /claude\/agent-bus\/[0-9a-f]{4}/.exec(start.stdout)?.[0] ?? '';
+    broker.store.setThread(busId, 'C_STOP', '1700000100.000001');
+    broker.inbox.receive({
+      channel: 'C_STOP',
+      channelType: 'channel',
+      ts: '1700000100.000002',
+      threadTs: '1700000100.000001',
+      user: USER_ID,
+      text: 'Use plan B',
+      hasFiles: false,
+    });
+
+    const stop = (active: boolean) =>
+      runHook({
+        argv: ['claude'],
+        stdin: payload({
+          session_id: 'app-stop',
+          hook_event_name: 'Stop',
+          stop_hook_active: active,
+          last_assistant_message: 'Done.',
+        }),
+        env: env(),
+        cwd: repoRoot,
+      });
+    const blocked = JSON.parse((await stop(false)).stdout) as { decision: string; reason: string };
+    expect(blocked.decision).toBe('block');
+    expect(blocked.reason).toContain('Use plan B');
+    expect(broker.store.countUndelivered(busId)).toBe(0);
+    // The agent dealt with it and stops again: no block, so the app stops normally.
+    expect(await stop(true)).toEqual({ stdout: '' });
+  });
+
   it('prints nothing when the broker refuses', async () => {
     const result = await runHook({
       argv: ['claude'],

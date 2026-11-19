@@ -8,7 +8,7 @@ import {
   type InboundMessage,
 } from '../../src/broker/inbox.ts';
 import { silentLogger } from '../../src/broker/log.ts';
-import { inboxText } from '../../src/broker/mcp.ts';
+import { inboxText, STOP_TAKE_LIMIT, stopInboxCheck } from '../../src/broker/mcp.ts';
 import { Notifier, Questions } from '../../src/broker/questions.ts';
 import { BusService } from '../../src/broker/service.ts';
 import { toInboundMessage } from '../../src/broker/slack/inbound.ts';
@@ -261,6 +261,35 @@ describe('toInboundMessage', () => {
   it('rejects events without a channel or ts', () => {
     expect(toInboundMessage({ type: 'message', ts: '1.2' })).toBeUndefined();
     expect(toInboundMessage(null)).toBeUndefined();
+  });
+});
+
+describe('stopInboxCheck', () => {
+  it('returns nothing and marks nothing when the inbox is empty', () => {
+    expect(stopInboxCheck(inbox)(session)).toBeUndefined();
+    expect(events('inbox.delivered')).toEqual([]);
+  });
+
+  it('words my replies as the reason, labelled as mine, and marks them delivered', () => {
+    const m = message({ text: 'Use plan B' });
+    inbox.receive(m);
+    const reason = stopInboxCheck(inbox)(session) ?? '';
+    expect(reason).toContain('Nick replied in Slack before you stopped');
+    expect(reason).toContain('from Nick, sent from his own Slack account');
+    expect(reason).toContain('Use plan B');
+    expect(store.countUndelivered(session.id)).toBe(0);
+    expect(events('inbox.delivered')).toEqual([expect.objectContaining({ via: 'stop_hook' })]);
+    expect(reactions).toContainEqual({ channel: CHANNEL, ts: m.ts, name: REACTION.delivered });
+    // Delivered once: the next stop has nothing to hand over.
+    expect(stopInboxCheck(inbox)(session)).toBeUndefined();
+  });
+
+  it('hands over at most STOP_TAKE_LIMIT replies and says how many wait', () => {
+    for (let i = 0; i < STOP_TAKE_LIMIT + 2; i++) inbox.receive(message({ text: `note ${i}` }));
+    const reason = stopInboxCheck(inbox)(session) ?? '';
+    expect(reason).toContain(`${STOP_TAKE_LIMIT} messages from Nick`);
+    expect(reason).toContain('2 more waiting');
+    expect(store.countUndelivered(session.id)).toBe(2);
   });
 });
 

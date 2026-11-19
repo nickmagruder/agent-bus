@@ -177,7 +177,7 @@ export interface NewPost {
 }
 
 /** How an inbox message or question outcome reached the agent. */
-export type DeliveryVia = 'check_inbox' | 'wait_for_reply' | 'ask_human';
+export type DeliveryVia = 'check_inbox' | 'wait_for_reply' | 'ask_human' | 'stop_hook';
 
 export type QuestionState = 'open' | 'answered' | 'expired';
 export type AnswerSource = 'button' | 'reply';
@@ -603,6 +603,24 @@ export class Store {
         JSON.stringify(event.data ?? {}),
       );
     return Number(result.lastInsertRowid);
+  }
+
+  /** The newest event of a kind for a session, optionally matching a top-level `data` field. */
+  latestEvent(filter: {
+    kind: string;
+    sessionId: string;
+    dataField?: { name: string; value: string };
+  }): Record<string, unknown> | undefined {
+    const where = ['kind = ?', 'session_id = ?'];
+    const params: SQLInputValue[] = [filter.kind, filter.sessionId];
+    if (filter.dataField) {
+      where.push('json_extract(data, ?) = ?');
+      params.push(`$.${filter.dataField.name}`, filter.dataField.value);
+    }
+    const row = this.db
+      .prepare(`SELECT data FROM events WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT 1`)
+      .get(...params) as Row | undefined;
+    return row ? (JSON.parse(String(row.data)) as Record<string, unknown>) : undefined;
   }
 
   /** Counts events since a time, optionally matching a top-level `data` field. */

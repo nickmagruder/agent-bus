@@ -93,9 +93,14 @@ default}` from its next `wait_for_reply` / `check_inbox` / Stop hook. Never
   it prints `{"decision":"block","reason":"…"}` with the messages (labelled
   as mine) and marks them delivered, so the agent keeps going with my reply.
 - No messages → today's behaviour ("turn finished" post, throttled).
-- Loop guard: at most N blocks per session per hour; when
-  `stop_hook_active` is set, block only if _new_ messages arrived since the
-  last block.
+- Loop guard: at most 6 blocks per session per hour
+  (`LIMITS.stopBlocksPerSession`); when `stop_hook_active` is set, block
+  only if _new_ messages arrived since the last block (delivered replies are
+  never handed over twice). At most 5 replies per block; the rest wait.
+- When the agent stops again after our block (`stop_hook_active`, nothing
+  new), I get the usual "waiting for you" post; a stop continued by some
+  other Stop hook is still ignored.
+- Copilot's Stop hook can't run, so its replies are never taken by one.
 - Broker down or slow (3 s timeout) → no output, the agent stops normally.
 
 ### Daily digest
@@ -180,7 +185,7 @@ From 2026-11-18, status lives in the
 this doc keeps the design, decisions and live results.
 
 - PR 3, hooks: [#21](https://github.com/nickmagruder/agent-bus/issues/21)
-  Stop-hook inbox check, [#22](https://github.com/nickmagruder/agent-bus/issues/22)
+  Stop-hook inbox check (0.7.0), [#22](https://github.com/nickmagruder/agent-bus/issues/22)
   `UserPromptSubmit` bus-ID injection
 - PR 4: [#23](https://github.com/nickmagruder/agent-bus/issues/23) daily
   digest, [#24](https://github.com/nickmagruder/agent-bus/issues/24) clankers

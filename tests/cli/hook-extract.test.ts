@@ -113,6 +113,24 @@ describe('renderHookOutput', () => {
     expect(renderHookOutput(platform, event, { ...response, action: 'sent' })).toBe('');
   });
 
+  it.each(['claude', 'codex'] as const)('blocks a Stop the broker blocked, for %s', (platform) => {
+    const blocked = { session: 's', action: 'blocked', reason: 'Nick: use plan B' };
+    expect(JSON.parse(renderHookOutput(platform, 'Stop', blocked))).toEqual({
+      decision: 'block',
+      reason: 'Nick: use plan B',
+    });
+  });
+
+  it.each([
+    ['copilot', 'Stop', { action: 'blocked', reason: 'r' }],
+    ['claude', 'Stop', { action: 'blocked' }],
+    ['claude', 'Stop', { action: 'sent', reason: 'r' }],
+    ['claude', 'PermissionRequest', { action: 'blocked', reason: 'r' }],
+    ['codex', 'PermissionRequest', { action: 'blocked', reason: 'r' }],
+  ] as const)('never blocks for %s %s %j', (platform, event, fields) => {
+    expect(renderHookOutput(platform, event, { session: 's', ...fields })).toBe('');
+  });
+
   it('prints nothing without a broker response', () => {
     expect(renderHookOutput('claude', 'SessionStart', undefined)).toBe('');
   });
