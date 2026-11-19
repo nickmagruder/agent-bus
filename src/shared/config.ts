@@ -5,8 +5,12 @@ import { PLATFORMS, type Platform } from './platform.ts';
 
 export const DEFAULT_PORT = 47823;
 
-/** A GitHub repo as `owner/name`. */
-export const REPO_PATTERN = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
+/**
+ * A GitHub repo as `owner/name`: owners are letters, digits and inner
+ * hyphens; names are letters, digits, `.`, `_`, `-`, but never `.` or `..`.
+ */
+export const REPO_PATTERN =
+  /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
 
 /** `AGENT_BUS_DIGEST_REPOS`: comma-separated `owner/name` list. */
 const repoList = z

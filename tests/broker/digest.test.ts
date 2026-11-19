@@ -277,6 +277,47 @@ describe('itemPreview', () => {
 });
 
 describe('broker wiring', () => {
+  it.each([
+    [['octo/clankers'], 'tok-123', 1],
+    [[], 'tok-123', 0],
+  ])(
+    'creates the GitHub client only when repos are set (repos %j)',
+    async (repos, token, expectedCalls) => {
+      const calls: { url: string; auth: string | undefined }[] = [];
+      const fakeFetch = (async (url: string, init?: RequestInit) => {
+        calls.push({ url, auth: (init?.headers as Record<string, string>).authorization });
+        return new Response('[]', { status: 200 });
+      }) as typeof fetch;
+      const dir = await mkdtemp(path.join(tmpdir(), 'agent-bus-digest-'));
+      const broker = await startBroker(
+        {
+          port: 0,
+          dataDir: dir,
+          tokens: TOKENS,
+          slack: { botToken: 'xoxb-test', appToken: 'xapp-test', userId: USER_ID },
+          github: { repos, token },
+        },
+        {
+          log: silentLogger,
+          slackApi: new FakeSlack(),
+          connection: null,
+          digest: { timeZone: TZ, now: () => at('2026-11-18T16:00:00Z'), fetch: fakeFetch },
+        },
+      );
+      try {
+        await expect.poll(() => broker.store.latestEventOfKind('digest.done')).toBeDefined();
+        expect(calls).toHaveLength(expectedCalls);
+        if (expectedCalls > 0) {
+          expect(calls[0]?.url).toContain('/repos/octo/clankers/pulls');
+          expect(calls[0]?.auth).toBe('Bearer tok-123');
+        }
+      } finally {
+        await broker.stop();
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('starts with the broker (catch-up at start), and can be turned off', async () => {
     for (const digestOption of [{ timeZone: TZ, now: () => at('2026-11-18T16:00:00Z') }, null]) {
       const dir = await mkdtemp(path.join(tmpdir(), 'agent-bus-digest-'));
@@ -319,15 +360,18 @@ describe('merged PRs', () => {
     ...fields,
   });
 
+  type Answer = MergedPr[] | Error | { prs: MergedPr[]; truncated?: boolean; dropped?: number };
+
   /** A fake GitHub: answers per repo, or throws; records the `since` it was asked for. */
-  function fakeGitHub(answers: Record<string, MergedPr[] | Error>) {
+  function fakeGitHub(answers: Record<string, Answer>) {
     const asked: { repo: string; since: string }[] = [];
     const github: GitHubApi = {
       async mergedPullRequests(repo, since) {
         asked.push({ repo, since: since.toISOString() });
-        const answer = answers[repo];
+        const answer = answers[repo] ?? [];
         if (answer instanceof Error) throw answer;
-        return answer ?? [];
+        if (Array.isArray(answer)) return { prs: answer, truncated: false, dropped: 0 };
+        return { truncated: false, dropped: 0, ...answer };
       },
     };
     return { github, asked };
@@ -427,7 +471,7 @@ describe('merged PRs', () => {
     const github: GitHubApi = {
       mergedPullRequests: () =>
         new Promise((resolve) => {
-          release = () => resolve([pr(1)]);
+          release = () => resolve({ prs: [pr(1)], truncated: false, dropped: 0 });
         }),
     };
     const d = digestWith(github, ['octo/clankers']);
@@ -447,6 +491,93 @@ describe('merged PRs', () => {
     now = at('2026-11-18T16:00:00Z');
     await d.tick();
     expect(posts()[0]).toMatch(/_…not shown: \d+ merged PRs_$/);
+  });
+
+  it('starts the next window where the last one ended, before its GitHub call', async () => {
+    // The previous digest's GitHub call took 2 minutes; a PR merged during it
+    // must fall in the next window, not between the two.
+    let calls = 0;
+    const asked: string[] = [];
+    const github: GitHubApi = {
+      async mergedPullRequests(_repo, since) {
+        asked.push(since.toISOString());
+        calls++;
+        if (calls === 1) now = at('2026-11-17T16:02:00Z');
+        return { prs: [], truncated: false, dropped: 0 };
+      },
+    };
+    const d = digestWith(github, ['octo/clankers']);
+    now = at('2026-11-17T16:00:00Z');
+    await d.tick();
+    now = at('2026-11-18T16:00:00Z');
+    await d.tick();
+    expect(asked.at(-1)).toBe('2026-11-17T16:00:00.000Z');
+  });
+
+  it('falls back to the event time for digests recorded before windows had an end', async () => {
+    store.appendEvent({ kind: 'digest.done', data: { slot: '2026-11-16', posted: false } });
+    const { github, asked } = fakeGitHub({});
+    const d = digestWith(github, ['octo/clankers']);
+    now = at('2026-11-18T16:00:00Z');
+    await d.tick();
+    expect(asked[0]?.repo).toBe('octo/clankers');
+    expect(asked[0]?.since).toBe('2026-11-18T15:00:00.000Z'); // the event's time (beforeEach clock)
+  });
+
+  it('sorts merged PRs across repos by when they merged', async () => {
+    const { github } = fakeGitHub({
+      'octo/clankers': [pr(1, { mergedAt: '2026-11-18T12:00:00Z' })],
+      'octo/agent-bus': [pr(2, { repo: 'octo/agent-bus', mergedAt: '2026-11-18T09:00:00Z' })],
+    });
+    const d = digestWith(github, ['octo/clankers', 'octo/agent-bus']);
+    now = at('2026-11-18T16:00:00Z');
+    await d.tick();
+    const [post = ''] = posts();
+    expect(post.indexOf('octo/agent-bus#2')).toBeLessThan(post.indexOf('octo/clankers#1'));
+  });
+
+  it('says when older merged PRs were not listed, and logs it and dropped links', async () => {
+    const logs: string[] = [];
+    const { github } = fakeGitHub({
+      'octo/clankers': { prs: [pr(1)], truncated: true, dropped: 2 },
+    });
+    const d = digestWith(github, ['octo/clankers'], logs);
+    now = at('2026-11-18T16:00:00Z');
+    await d.tick();
+    expect(posts()[0]).toContain(
+      '*Merged PRs* (1)\n• _Older merged PRs not listed: more than GitHub returned in one pass_',
+    );
+    expect(logs).toEqual([
+      expect.stringContaining("left out merged PRs whose link isn't the repo's own"),
+      expect.stringContaining('listed only the most recent merged PRs'),
+    ]);
+    expect(logs[0]).toContain('"dropped":2');
+  });
+
+  it('a truncated list with no merged PRs still says so', async () => {
+    const { github } = fakeGitHub({ 'octo/clankers': { prs: [], truncated: true } });
+    const d = digestWith(github, ['octo/clankers']);
+    now = at('2026-11-18T16:00:00Z');
+    expect(await d.tick()).toBe('sent');
+    expect(posts()[0]).toContain('Older merged PRs not listed');
+  });
+
+  it('does nothing after stop() if GitHub answers late (the store may be closed)', async () => {
+    let release: () => void = () => undefined;
+    const github: GitHubApi = {
+      mergedPullRequests: () =>
+        new Promise((resolve) => {
+          release = () => resolve({ prs: [pr(1)], truncated: false, dropped: 0 });
+        }),
+    };
+    const d = digestWith(github, ['octo/clankers']);
+    now = at('2026-11-18T16:00:00Z');
+    const pending = d.tick();
+    d.stop();
+    release();
+    expect(await pending).toBe('not_due');
+    expect(posts()).toEqual([]);
+    expect(store.latestEventOfKind('digest.done')).toBeUndefined();
   });
 });
 

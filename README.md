@@ -380,12 +380,15 @@ are made.
 
 - **Merged PRs in the digest** ([#24](https://github.com/nickmagruder/agent-bus/issues/24)):
   with `AGENT_BUS_DIGEST_REPOS` set (for example to the clankers repo), the
-  daily digest lists PRs merged there since the last digest, right after
-  questions: title, link, author, and the agent from the PR's
-  "Generated with …" footer. Public repos need no token; set a read-only
+  daily digest lists PRs merged into their default branch since the last
+  digest, right after questions: title, link, author, and the agent when the
+  PR carries its marker (Claude Code footer, Codex task link, Copilot's own
+  account). Public repos need no token; set a read-only
   `AGENT_BUS_GITHUB_TOKEN` for private ones. If GitHub can't be reached, the
-  section is skipped and logged. The digest tick is now async, and a slow
-  GitHub call can't post a slot twice.
+  section is skipped and logged; if it returns more than one pass can read,
+  the digest says older PRs weren't listed. Each digest's window starts where
+  the last one ended, so no PR falls between two. The digest tick is now
+  async, and a slow GitHub call can't post a slot twice.
 
 ### 0.9.0 (2026-11-18)
 

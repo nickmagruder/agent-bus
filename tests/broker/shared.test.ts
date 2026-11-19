@@ -31,27 +31,34 @@ describe('loadBrokerConfig: digest repos', () => {
     });
   });
 
-  it.each(['clankers', 'octo/clankers/extra', 'https://github.com/octo/clankers', 'octo/a b'])(
-    'rejects %j without echoing the token',
-    (repos) => {
-      expect(() =>
-        loadBrokerConfig({
-          ...validEnv,
-          AGENT_BUS_DIGEST_REPOS: repos,
-          AGENT_BUS_GITHUB_TOKEN: 'github_pat_secret',
-        }),
-      ).toThrow(/AGENT_BUS_DIGEST_REPOS must be comma-separated owner\/name repos/);
-      try {
-        loadBrokerConfig({
-          ...validEnv,
-          AGENT_BUS_DIGEST_REPOS: repos,
-          AGENT_BUS_GITHUB_TOKEN: 'github_pat_secret',
-        });
-      } catch (error) {
-        expect(String(error)).not.toContain('github_pat_secret');
-      }
-    },
-  );
+  it.each([
+    'clankers',
+    'octo/clankers/extra',
+    'https://github.com/octo/clankers',
+    'octo/a b',
+    'octo/..',
+    'octo/.',
+    '-octo/clankers',
+    'octo-/clankers',
+    'oc_to/clankers',
+  ])('rejects %j without echoing the token', (repos) => {
+    expect(() =>
+      loadBrokerConfig({
+        ...validEnv,
+        AGENT_BUS_DIGEST_REPOS: repos,
+        AGENT_BUS_GITHUB_TOKEN: 'github_pat_secret',
+      }),
+    ).toThrow(/AGENT_BUS_DIGEST_REPOS must be comma-separated owner\/name repos/);
+    try {
+      loadBrokerConfig({
+        ...validEnv,
+        AGENT_BUS_DIGEST_REPOS: repos,
+        AGENT_BUS_GITHUB_TOKEN: 'github_pat_secret',
+      });
+    } catch (error) {
+      expect(String(error)).not.toContain('github_pat_secret');
+    }
+  });
 });
 
 describe('loadBrokerConfig', () => {

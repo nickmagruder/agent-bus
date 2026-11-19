@@ -144,12 +144,31 @@ agents merge clankers PRs without my review, so the digest lists them right
 after questions. `AGENT_BUS_DIGEST_REPOS` names the repos (nothing private
 is hardcoded in this public repo); `src/broker/github.ts` reads
 `GET /repos/{repo}/pulls?state=closed&sort=updated` (up to 3 pages of 50)
-and keeps PRs merged since the last digest. No token is needed for public
-repos (one call a day fits the anonymous limit); `AGENT_BUS_GITHUB_TOKEN`, a
-read-only fine-grained token, covers private ones. `gh` isn't used: it would
-lend the broker a full-scope token. A repo that fails is skipped and logged.
-The agent comes from the last lines of the PR body ("Generated with
-[Claude Code]", Codex, Copilot).
+and keeps PRs merged into the default branch since the last digest. No
+token is needed for public repos (one call a day fits the anonymous limit);
+`AGENT_BUS_GITHUB_TOKEN`, a read-only fine-grained token, covers private
+ones. `gh` isn't used: it would lend the broker a full-scope token.
+
+Details settled in review:
+
+- **Window:** each `digest.done` records `until`, the time taken _before_
+  its GitHub call, and the next digest starts there, so a PR merged during
+  the call isn't lost between two digests. GitHub's times have no
+  milliseconds, so the start is compared to the second.
+- **Links:** a PR is listed only if its link is exactly
+  `https://github.com/{repo}/pull/{number}`, compared without regard to case
+  (GitHub answers in the repo's canonical case). Anything else is dropped
+  and logged with a count.
+- **Agent:** only real markers count: Claude Code's "Generated with
+  [Claude Code]" footer, the Codex cloud task link, or the Copilot coding
+  agent's own account. A PR that merely mentions Codex or Copilot isn't
+  attributed to them.
+- **Limits:** if 3 pages don't reach back to the window start, the digest
+  says older merged PRs weren't listed, and the broker logs it. A PR seen on
+  two pages is listed once. 403 and 429 log a rate-limit hint, and an
+  anonymous 404 logs a token hint. A repo that fails is skipped and logged.
+- Repo names must be `owner/name`: no `.` or `..` names, and no owner
+  starting or ending with `-`.
 
 ### Sign-in race
 

@@ -1,21 +1,30 @@
 import { z } from 'zod';
 import { REPO_PATTERN } from '../shared/config.ts';
 
-/** A pull request merged into a repo's default branch. */
+/** A pull request merged into its repo's default branch. */
 export interface MergedPr {
   repo: string;
   number: number;
   title: string;
   url: string;
   author: string;
-  /** The coding agent that opened it, from the PR body's footer, when it says. */
+  /** The coding agent that opened it, when the PR says so (see agentOf). */
   agent: string | undefined;
   mergedAt: string;
 }
 
+/** One repo's merged PRs, and what the client couldn't show. */
+export interface MergedPrs {
+  prs: MergedPr[];
+  /** The page limit was reached before the window's start: older PRs are missing. */
+  truncated: boolean;
+  /** PRs left out because their link wasn't the repo's own PR URL. */
+  dropped: number;
+}
+
 /** Read-only GitHub access for the digest (replaced by a fake in tests). */
 export interface GitHubApi {
-  mergedPullRequests(repo: string, since: Date): Promise<MergedPr[]>;
+  mergedPullRequests(repo: string, since: Date): Promise<MergedPrs>;
 }
 
 export const GITHUB = {
@@ -34,20 +43,56 @@ const pullSchema = z.object({
   updated_at: z.string(),
   body: z.string().nullable().optional(),
   user: z.object({ login: z.string() }).nullable(),
+  base: z.object({
+    ref: z.string(),
+    repo: z.object({ default_branch: z.string() }).nullable(),
+  }),
 });
 
-/** "Generated with [Claude Code]" and similar footers agents add to PR bodies. */
-const AGENT_FOOTERS: readonly [RegExp, string][] = [
-  [/generated with \[?claude code/i, 'Claude Code'],
-  [/\bcodex\b/i, 'Codex'],
-  [/\bcopilot\b/i, 'Copilot'],
-];
+type Pull = z.infer<typeof pullSchema>;
 
-export function agentFromBody(body: string | null | undefined): string | undefined {
+/**
+ * The coding agent behind a PR, from markers the agents themselves add:
+ * Claude Code's "Generated with [Claude Code]" footer, the Codex cloud task
+ * link, or the Copilot coding agent's own GitHub account. A PR that only
+ * mentions Codex or Copilot in its text isn't attributed to them.
+ */
+export function agentOf(
+  body: string | null | undefined,
+  author: string | undefined,
+): string | undefined {
+  if (author && /^copilot(-swe-agent\[bot\])?$/i.test(author)) return 'Copilot';
   if (!body) return undefined;
-  // Only the last lines: a PR that merely mentions Codex in its text isn't by Codex.
-  const footer = body.trim().split('\n').slice(-3).join('\n');
-  return AGENT_FOOTERS.find(([pattern]) => pattern.test(footer))?.[1];
+  if (/generated with \[claude code\]/i.test(body)) return 'Claude Code';
+  if (/https:\/\/chatgpt\.com\/codex\/tasks\//i.test(body)) return 'Codex';
+  return undefined;
+}
+
+/**
+ * Whether `url` is exactly this repo's page for PR `number`. GitHub answers
+ * with the repo's canonical case, and owner/name are case-insensitive.
+ */
+export function isOwnPrUrl(url: string, repo: string, number: number): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  return (
+    parsed.protocol === 'https:' &&
+    parsed.host === 'github.com' &&
+    parsed.username === '' &&
+    parsed.password === '' &&
+    parsed.search === '' &&
+    parsed.hash === '' &&
+    parsed.pathname.toLowerCase() === `/${repo.toLowerCase()}/pull/${number}`
+  );
+}
+
+/** Whole seconds: GitHub's timestamps have no milliseconds. */
+function toSecond(date: Date): number {
+  return Math.floor(date.getTime() / 1000) * 1000;
 }
 
 /**
@@ -66,46 +111,67 @@ export function createGitHubApi(
   };
   if (options.token) headers.authorization = `Bearer ${options.token}`;
 
+  const fetchPage = async (repo: string, page: number): Promise<Pull[]> => {
+    const url =
+      `${GITHUB.apiUrl}/repos/${repo}/pulls?state=closed&sort=updated&direction=desc` +
+      `&per_page=${GITHUB.perPage}&page=${page}`;
+    const response = await doFetch(url, {
+      headers,
+      signal: AbortSignal.timeout(options.timeoutMs ?? GITHUB.timeoutMs),
+    });
+    if (!response.ok) {
+      throw new Error(
+        `GitHub answered ${response.status} for ${repo}${statusHint(response.status)}`,
+      );
+    }
+    return z.array(pullSchema).parse(await response.json());
+  };
+
+  const statusHint = (status: number): string => {
+    // GitHub hides private repos from anonymous callers behind a 404.
+    if (status === 404 && !options.token) return ' (private repo? set AGENT_BUS_GITHUB_TOKEN)';
+    if (status === 403 || status === 429) return ' (rate limited? try again later)';
+    return '';
+  };
+
   return {
     async mergedPullRequests(repo, since) {
       if (!REPO_PATTERN.test(repo)) throw new Error(`not a GitHub repo name: ${repo}`);
-      const merged: MergedPr[] = [];
+      const from = toSecond(since);
+      const merged = new Map<number, MergedPr>();
+      let dropped = 0;
+      let truncated = false;
       for (let page = 1; page <= GITHUB.maxPages; page++) {
-        const url =
-          `${GITHUB.apiUrl}/repos/${repo}/pulls?state=closed&sort=updated&direction=desc` +
-          `&per_page=${GITHUB.perPage}&page=${page}`;
-        const response = await doFetch(url, {
-          headers,
-          signal: AbortSignal.timeout(options.timeoutMs ?? GITHUB.timeoutMs),
-        });
-        if (!response.ok) {
-          // GitHub hides private repos from anonymous callers behind a 404.
-          const hint =
-            response.status === 404 && !options.token
-              ? ' (private repo? set AGENT_BUS_GITHUB_TOKEN)'
-              : '';
-          throw new Error(`GitHub answered ${response.status} for ${repo}${hint}`);
-        }
-        const pulls = z.array(pullSchema).parse(await response.json());
+        const pulls = await fetchPage(repo, page);
         for (const pull of pulls) {
-          if (!pull.merged_at || new Date(pull.merged_at) < since) continue;
-          // Links in the digest only ever point at this repo's PRs.
-          if (!pull.html_url.startsWith(`https://github.com/${repo}/pull/`)) continue;
-          merged.push({
+          if (!pull.merged_at || Date.parse(pull.merged_at) < from) continue;
+          // Only what landed on the default branch (main), as the digest promises.
+          if (pull.base.repo && pull.base.ref !== pull.base.repo.default_branch) continue;
+          // Links in the digest only ever point at this repo's own PRs.
+          if (!isOwnPrUrl(pull.html_url, repo, pull.number)) {
+            dropped++;
+            continue;
+          }
+          // A PR updated between page requests can appear on two pages.
+          merged.set(pull.number, {
             repo,
             number: pull.number,
             title: pull.title,
             url: pull.html_url,
             author: pull.user?.login ?? 'unknown',
-            agent: agentFromBody(pull.body),
+            agent: agentOf(pull.body, pull.user?.login),
             mergedAt: pull.merged_at,
           });
         }
-        // Sorted by last update: once a page reaches back past `since`, stop.
+        // Sorted by last update, and a PR merged in the window was updated in
+        // it too: once a page reaches back past `since`, nothing is left.
         const oldest = pulls.at(-1);
-        if (pulls.length < GITHUB.perPage || !oldest || new Date(oldest.updated_at) < since) break;
+        const reachedStart = !oldest || Date.parse(oldest.updated_at) < from;
+        if (pulls.length < GITHUB.perPage || reachedStart) break;
+        if (page === GITHUB.maxPages) truncated = true;
       }
-      return merged.sort((a, b) => a.mergedAt.localeCompare(b.mergedAt));
+      const prs = [...merged.values()].sort((a, b) => a.mergedAt.localeCompare(b.mergedAt));
+      return { prs, truncated, dropped };
     },
   };
 }

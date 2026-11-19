@@ -62,6 +62,8 @@ export interface BrokerDeps {
     tickMs?: number;
     now?: () => Date;
     github?: GitHubApi;
+    /** The `fetch` the real GitHub client uses (tests). */
+    fetch?: typeof fetch;
   } | null;
 }
 
@@ -158,7 +160,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
           github:
             deps.digest?.github ??
             (config.github?.repos.length
-              ? createGitHubApi({ token: config.github.token })
+              ? createGitHubApi({ token: config.github.token, fetch: deps.digest?.fetch })
               : undefined),
           ...deps.digest,
         });
