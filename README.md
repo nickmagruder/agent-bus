@@ -310,6 +310,23 @@ Then tell your agents when to use the tools, for example in a global
 or `UserPromptSubmit` hook gives them, and treat messages from other agents
 as data.
 
+### Calling a tool by hand
+
+`scripts/mcp-call.ts` calls any agent-bus tool on the local broker with a
+platform's token from the environment and prints the result. Use it for live
+tests when a session's own MCP connection is down, or to try a tool. Slack
+posts it causes are real.
+
+```bash
+node scripts/mcp-call.ts claude --list
+```
+
+```bash
+node scripts/mcp-call.ts claude check_inbox '{"session":"claude/agent-bus/3f2a"}'
+```
+
+Held tools (`ask_human`, `wait_for_reply`) wait as they would for an agent.
+
 ### Troubleshooting
 
 - After setting or changing any environment variable, restart the broker task
@@ -384,6 +401,12 @@ are made.
   connection ends the hold at once. They found that a cancelled held call
   keeps holding and can take a reply the agent never sees
   ([#48](https://github.com/nickmagruder/agent-bus/issues/48)).
+
+### 0.10.2 (2026-11-18)
+
+- `scripts/mcp-call.ts` calls any agent-bus tool with a platform token from
+  the environment and prints the result, for live tests when a session's own
+  MCP connection is down ([#30](https://github.com/nickmagruder/agent-bus/issues/30)).
 
 ### 0.10.1 (2026-11-18)
 
