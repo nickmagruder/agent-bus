@@ -53,6 +53,14 @@ Replies are returned as `From Nick (verified Slack user)`, with the time and
 which question they answer. Only text I typed in Slack is ever labelled as
 mine.
 
+Fixed in 0.12.2 ([#64](https://github.com/nickmagruder/agent-bus/issues/64)):
+Codex and VS Code Copilot pass only `structuredContent` to the model when a
+result has it, and drop the text, so on those apps the "from Nick" wording
+never reached the model. Every message and question outcome now carries
+`from` and `trust` in the structured result (`nick` / `verified-human` for
+what I typed, `agent-bus` for the broker's own statuses), with a `note` on
+how to read them, and each result's guidance (`next`) is there too.
+
 ### Slack inbound
 
 - Bolt handlers for `message` events (session threads and the DM) and

@@ -139,6 +139,10 @@ broker enforces its rules itself rather than trusting agent instructions:
 - **Minimal data leaves the machine.** Hooks send only the fields in
   [`src/shared/hook-protocol.ts`](src/shared/hook-protocol.ts), with size
   limits.
+- **Who wrote it travels with it.** Every message and question outcome
+  carries `from` and `trust` in the structured result, not only in the text,
+  because Codex and VS Code Copilot show the model only the structured part.
+  Only what I type in Slack is `trust: verified-human`.
 - **Escaped output.** Agent text, and PR titles from GitHub, can't trigger
   `@channel` or disguise links.
 - **One optional outbound call besides Slack.** With `AGENT_BUS_DIGEST_REPOS`
@@ -407,11 +411,23 @@ are made.
 
 ## Changelog
 
-### 0.12.2 (2026-11-19)
+### 0.12.3 (2026-11-19)
 
 - `docs/phase-3.md`: the Phase 3 plan (cross-platform tasks and handoffs):
   agent cards, tasks in A2A shapes, delivery through the inbox, Slack task
-  threads, safety rules, seven open decisions and the work breakdown.
+  threads, safety rules, the seven decisions (settled, then refined by a
+  grill-me review: 24 more decisions, D3 and D7 amended) and the work
+  breakdown (#56-#63, #31, #64-#66).
+
+### 0.12.2 (2026-11-19)
+
+- **Trust labels reach every app** ([#64](https://github.com/nickmagruder/agent-bus/issues/64)):
+  Codex and VS Code Copilot show the model only a tool result's
+  `structuredContent`, so the "from Nick, verified by agent-bus" wording in
+  the text never reached them. Messages and question outcomes now carry
+  `from` / `trust` there (`nick` / `verified-human`, or `agent-bus`), with a
+  `note` explaining them, and the results' guidance (`next`: wait again, go
+  with your default, pass your session ID) is there too.
 
 ### 0.12.1 (2026-11-19)
 

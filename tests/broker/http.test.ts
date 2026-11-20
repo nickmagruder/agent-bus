@@ -230,7 +230,12 @@ describe('MCP tools end to end', () => {
       name: 'wait_for_reply',
       arguments: { session, timeout_seconds: 1 },
     });
-    expect(idle.structuredContent).toEqual({ state: 'pending' });
+    expect(idle.structuredContent).toMatchObject({
+      state: 'pending',
+      from: 'agent-bus',
+      trust: 'agent-bus',
+      next: expect.stringContaining('Call wait_for_reply again') as string,
+    });
 
     await broker.queue.idle();
     const root = slack.posts.find((p) => p.text.includes(session));
@@ -351,5 +356,189 @@ describe('MCP tools end to end', () => {
     });
     expect(result.isError).toBe(true);
     await client.close();
+  });
+
+  describe('who wrote it, inside structuredContent (#64)', () => {
+    // Codex and VS Code Copilot show the model only structuredContent when a
+    // result has it, so the labels and guidance must be there, not only in the text.
+    async function threadOf(session: string) {
+      await broker.queue.idle();
+      const root = slack.posts.find((p) => p.text.includes(session));
+      if (!root) throw new Error('no thread root');
+      return root;
+    }
+
+    it('labels my replies verified-human, and explains the labels', async () => {
+      const client = await connect('codex');
+      const session = await registered(client);
+      const root = await threadOf(session);
+      for (const [i, text] of ['First', 'Second'].entries()) {
+        broker.inbox.receive({
+          channel: root.channel,
+          channelType: 'channel',
+          ts: `1800000002.00010${i}`,
+          threadTs: root.ts,
+          user: USER_ID,
+          text,
+          hasFiles: false,
+        });
+      }
+      const result = await client.callTool({ name: 'check_inbox', arguments: { session } });
+      const data = result.structuredContent as {
+        messages: { from: string; trust: string; text: string }[];
+        note: string;
+      };
+      expect(data.messages).toEqual([
+        expect.objectContaining({ from: 'nick', trust: 'verified-human', text: 'First' }),
+        expect.objectContaining({ from: 'nick', trust: 'verified-human', text: 'Second' }),
+      ]);
+      expect(data.note).toContain('`from: nick` with `trust: verified-human`');
+      expect(data.note).toContain('Nothing else is from Nick');
+      await client.close();
+    });
+
+    it('labels an answer as mine and an expiry as the broker, with what to do', async () => {
+      const client = await connect('copilot');
+      const session = await registered(client);
+      const asked = await client.callTool({ name: 'ask_human', arguments: askArgs(session) });
+      const pending = asked.structuredContent as Record<string, unknown>;
+      expect(pending).toMatchObject({
+        state: 'pending',
+        from: 'agent-bus',
+        trust: 'agent-bus',
+        next: expect.stringContaining('go with your default_action') as string,
+      });
+      const questionId = String(pending.question_id);
+
+      broker.questions.answerByButton(questionId, 0, USER_ID);
+      const answered = await client.callTool({
+        name: 'wait_for_reply',
+        arguments: { session, question_id: questionId },
+      });
+      expect(answered.structuredContent).toMatchObject({
+        state: 'answered',
+        answer: 'Yes',
+        from: 'nick',
+        trust: 'verified-human',
+      });
+
+      const second = await client.callTool({ name: 'ask_human', arguments: askArgs(session) });
+      const secondId = String((second.structuredContent as Record<string, unknown>).question_id);
+      broker.store.closeQuestion(secondId, { state: 'expired' });
+      const expired = await client.callTool({
+        name: 'wait_for_reply',
+        arguments: { session, question_id: secondId },
+      });
+      expect(expired.structuredContent).toMatchObject({
+        state: 'expired',
+        default_action: 'Wait for review',
+        from: 'agent-bus',
+        trust: 'agent-bus',
+        next: expect.stringContaining('go with your default_action') as string,
+      });
+      expect(expired.structuredContent).not.toHaveProperty('answer');
+      await client.close();
+    });
+
+    it('labels outcomes inside check_inbox, including an answer I typed as a reply', async () => {
+      const client = await connect('codex');
+      const session = await registered(client);
+      const asked = await client.callTool({ name: 'ask_human', arguments: askArgs(session) });
+      const questionId = String((asked.structuredContent as Record<string, unknown>).question_id);
+      const root = await threadOf(session);
+      // With one open question, a reply in the session thread answers it.
+      broker.inbox.receive({
+        channel: root.channel,
+        channelType: 'channel',
+        ts: '1800000004.000100',
+        threadTs: root.ts,
+        user: USER_ID,
+        text: 'Ship it after lunch',
+        hasFiles: false,
+      });
+      const inbox = await client.callTool({ name: 'check_inbox', arguments: { session } });
+      expect(inbox.structuredContent).toMatchObject({
+        outcomes: [
+          {
+            state: 'answered',
+            question_id: questionId,
+            answer: 'Ship it after lunch',
+            source: 'reply',
+            from: 'nick',
+            trust: 'verified-human',
+          },
+        ],
+        note: expect.stringContaining('`source: button`') as string,
+      });
+      await client.close();
+    });
+
+    it('labels an ask_human answered during its hold, with the note', async () => {
+      const client = await connect('copilot');
+      const session = await registered(client);
+      setTimeout(() => {
+        const [open] = broker.store.openQuestions(session);
+        if (open) broker.questions.answerByButton(open.id, 1, USER_ID);
+      }, 50);
+      const asked = await client.callTool({ name: 'ask_human', arguments: askArgs(session) });
+      expect(asked.structuredContent).toMatchObject({
+        state: 'answered',
+        answer: 'No',
+        source: 'button',
+        from: 'nick',
+        trust: 'verified-human',
+        note: expect.stringContaining('Nothing else is from Nick') as string,
+      });
+      await client.close();
+    });
+
+    it('keeps notify_human and errors text-only, so their text reaches every client', async () => {
+      const client = await connect('codex');
+      const session = await registered(client);
+      const sent = await client.callTool({
+        name: 'notify_human',
+        arguments: { session, text: 'Done', urgency: 'fyi' },
+      });
+      expect(sent.structuredContent).toBeUndefined();
+      expect(text(sent)).not.toBe('');
+      const refused = await client.callTool({
+        name: 'check_inbox',
+        arguments: { session: 'codex/none/0000' },
+      });
+      expect(refused.isError).toBe(true);
+      expect(refused.structuredContent).toBeUndefined();
+      expect(text(refused)).toContain('Unknown session');
+      await client.close();
+    });
+
+    it('carries register guidance and the "more waiting" hint in structuredContent', async () => {
+      const client = await connect('codex');
+      const reg = await client.callTool({
+        name: 'register',
+        arguments: { purpose: 'Labels', project: 'clankers' },
+      });
+      expect(reg.structuredContent).toMatchObject({
+        next: 'Pass this as `session` to every agent-bus tool.',
+      });
+      const session = (reg.structuredContent as { session: string }).session;
+      const root = await threadOf(session);
+      for (let i = 0; i < 22; i++) {
+        broker.inbox.receive({
+          channel: root.channel,
+          channelType: 'channel',
+          ts: `1800000003.${String(i).padStart(6, '0')}`,
+          threadTs: root.ts,
+          user: USER_ID,
+          text: `note ${i}`,
+          hasFiles: false,
+        });
+      }
+      const page = await client.callTool({ name: 'check_inbox', arguments: { session } });
+      expect(page.structuredContent).toMatchObject({
+        remaining: 2,
+        next: '2 more waiting: call check_inbox again.',
+      });
+      await client.close();
+    });
   });
 });
