@@ -1,7 +1,8 @@
 # agent-bus design
 
-Status (2026-11-19): Phases 0 and 1 complete; Phase 2 built, awaiting its
-live check; Phase 3 being planned. Each phase's plan, decisions and live
+Status (2026-11-19): Phases 0 and 1 complete; Phase 2 built and checked live
+on all three apps, with a foreign reply and the digest still to check (#25);
+Phase 3 planned. Each phase's plan, decisions and live
 results live in its own doc: [Phase 0](spikes/phase-0.md),
 [Phase 1](phase-1.md), [Phase 2](phase-2.md), [Phase 3](phase-3.md).
 

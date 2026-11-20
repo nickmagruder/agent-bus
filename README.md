@@ -412,6 +412,14 @@ are made.
 
 ## Changelog
 
+### 0.12.5 (2026-11-19)
+
+- `docs/phase-2.md`: live results on Claude Code, Codex and Copilot
+  ([#25](https://github.com/nickmagruder/agent-bus/issues/25)). Copilot honours progress notifications past
+  its 180 s timeout; Codex ends every call at 300 s, and a reply sent after
+  that still arrives. The hold limit stays at 150 s for every app. Found
+  [#71](https://github.com/nickmagruder/agent-bus/issues/71) (the Stop hook's heading for an expiry alone).
+
 ### 0.12.4 (2026-11-19)
 
 - **`AGENT_BUS_HOLD_SECONDS`** ([#68](https://github.com/nickmagruder/agent-bus/issues/68)): an optional
