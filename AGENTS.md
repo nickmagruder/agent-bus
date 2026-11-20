@@ -105,3 +105,4 @@ into tracked files.
 - `docs/spikes/phase-0.md`
 - `docs/phase-1.md`: Phase 1 plan, decisions and checklist
 - `docs/phase-2.md`: Phase 2 plan (answering from Slack), decisions and checklist
+- `docs/phase-3.md`: Phase 3 plan (cross-platform tasks and handoffs), open decisions and work breakdown

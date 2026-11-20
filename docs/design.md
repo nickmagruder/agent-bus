@@ -1,8 +1,9 @@
 # agent-bus design
 
-Status (2026-11-18): Phases 0 and 1 complete; Phase 2 in progress. Each
-phase's plan, decisions and live results live in its own doc:
-[Phase 0](spikes/phase-0.md), [Phase 1](phase-1.md), [Phase 2](phase-2.md).
+Status (2026-11-19): Phases 0 and 1 complete; Phase 2 built, awaiting its
+live check; Phase 3 being planned. Each phase's plan, decisions and live
+results live in its own doc: [Phase 0](spikes/phase-0.md),
+[Phase 1](phase-1.md), [Phase 2](phase-2.md), [Phase 3](phase-3.md).
 
 This document is the overall design: goals, what the platforms allow, the
 architecture, safety rules and the phase roadmap. It started as a plan in my
@@ -106,20 +107,22 @@ Key choices:
 
 ### MCP tools
 
-| Tool                                        | Status  | Purpose                                                                |
-| ------------------------------------------- | ------- | ---------------------------------------------------------------------- |
-| `register(purpose, project?, branch?)`      | Phase 1 | Announce the session; returns its ID                                   |
-| `notify_human(session, text, urgency)`      | Phase 1 | `urgent` → DM, `normal` → session thread, `fyi` → digest; doesn't wait |
-| `check_inbox(session)`                      | Phase 2 | My Slack replies to the session and its questions' outcomes            |
-| `ask_human(session, question, options?, …)` | Phase 2 | DM with buttons; waits up to 150 s, then returns `pending`             |
-| `wait_for_reply(session, question_id?)`     | Phase 2 | Waits again for one question or anything new                           |
-| `create_task`, `claim_task`, `update_task`  | Phase 3 | Structured handoffs between agents, claimed atomically                 |
-| `list_agents`, `list_tasks`, `send_message` | Phase 3 | Who's online, what's open, discussion on a task                        |
+| Tool                                           | Status  | Purpose                                                                |
+| ---------------------------------------------- | ------- | ---------------------------------------------------------------------- |
+| `register(purpose, project?, branch?)`         | Phase 1 | Announce the session; returns its ID                                   |
+| `notify_human(session, text, urgency)`         | Phase 1 | `urgent` → DM, `normal` → session thread, `fyi` → digest; doesn't wait |
+| `check_inbox(session)`                         | Phase 2 | My Slack replies to the session and its questions' outcomes            |
+| `ask_human(session, question, options?, …)`    | Phase 2 | DM with buttons; waits up to 150 s, then returns `pending`             |
+| `wait_for_reply(session, question_id?, task?)` | Phase 2 | Waits again for one question, a task (Phase 3), or anything new        |
+| `create_task`, `claim_task`, `update_task`     | Phase 3 | Structured handoffs between agents, claimed atomically                 |
+| `list_agents`, `list_tasks`, `send_message`    | Phase 3 | Who's online, what's open, discussion on a task                        |
 
 Phase 3 records follow [A2A](https://a2a-protocol.org/)'s shapes (an agent card
 per session; tasks moving `submitted` → `working` → `input-required` →
-`completed` / `failed` / `canceled`) while the transport stays MCP, leaving room
-for an A2A endpoint later. `input-required` maps directly onto "needs a human".
+`completed` / `failed` / `canceled`, or `rejected`) while the transport stays
+MCP, leaving room for an A2A endpoint later. They use A2A v1.0.0's names,
+including `contextId` and the result as an artifact. `input-required` maps
+directly onto "needs a human".
 
 ## Safety rules
 
@@ -130,7 +133,12 @@ Enforced in the broker, not left to agent instructions:
   token even on localhost. Built on `@modelcontextprotocol/sdk` ≥ 1.24.
 - **Identity comes from the connection, not the message.** Each platform has
   its own token and the broker stamps the sender; an agent can't claim to be
-  another agent or me.
+  me or another platform's agent. Within one platform, sessions are told
+  apart by a per-session key, required by Phase 3 tools first (#65, #66).
+- **Trust labels travel in the structured result.** Codex and VS Code
+  Copilot show the model only `structuredContent` when it's present, so who
+  a message is from (`from`, `trust`) lives there, not only in the text
+  (#64).
 - **Sender gating:** only my Slack user ID can answer, send to a session or
   press buttons. Everything else is dropped and audited (without its text).
 - **Hooks don't decide.** They never return allow/deny until Phase 4, and
@@ -155,14 +163,14 @@ Enforced in the broker, not left to agent instructions:
 
 ## Phases
 
-| Phase | Scope                                                                                                      | Status      |
-| ----- | ---------------------------------------------------------------------------------------------------------- | ----------- |
-| 0     | Spikes: MCP, hooks and timeouts on each desktop app                                                        | Done        |
-| 1     | Outbound pings: broker, `register`, `notify_human`, hook pings, start at login; verified on all three apps | Done        |
-| 2     | I answer from Slack: inbox, `ask_human` with buttons, reminders and expiry, Stop-hook inbox check, digest  | In progress |
-| 3     | Cross-platform tasks and handoffs: agent cards, task board, provenance and signing, hop and rate limits    | Planned     |
-| 4     | Remote approvals for lower-risk actions via `PermissionRequest`; risky actions stay app-only               | Planned     |
-| 5     | CLI agents: Claude Code channels for true push, Codex/Copilot equivalents, optional A2A, OpenTelemetry     | Later       |
+| Phase | Scope                                                                                                                         | Status      |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| 0     | Spikes: MCP, hooks and timeouts on each desktop app                                                                           | Done        |
+| 1     | Outbound pings: broker, `register`, `notify_human`, hook pings, start at login; verified on all three apps                    | Done        |
+| 2     | I answer from Slack: inbox, `ask_human` with buttons, reminders and expiry, Stop-hook inbox check, digest                     | In progress |
+| 3     | Cross-platform tasks and handoffs: agent cards, task board, provenance (no signing, D4), per-session key, hop and rate limits | Planned     |
+| 4     | Remote approvals for lower-risk actions via `PermissionRequest`; risky actions stay app-only                                  | Planned     |
+| 5     | CLI agents: Claude Code channels for true push, Codex/Copilot equivalents, optional A2A, OpenTelemetry                        | Later       |
 
 ## Decisions
 
@@ -180,7 +188,8 @@ Enforced in the broker, not left to agent instructions:
 - **No push into desktop apps.** An idle session won't see a message until it
   calls a tool or a hook fires.
 - **Copilot desktop has no hooks**, so no automatic pings for it; it still
-  works through the MCP tools its agent calls.
+  works through the MCP tools its agent calls. Its session IDs aren't stable
+  across restarts, so Phase 3 gives it tasks only as a project pool.
 - **Blocking tools vs timeouts:** `ask_human` returns `pending` well before
   each app's tool timeout.
 - **Prompt injection across agents:** guardrails in prompts alone leave most

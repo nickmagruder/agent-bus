@@ -12,7 +12,7 @@ import { outcomeText, QUESTION_LIMITS, type Notifier, type Questions } from './q
 import { BusError, URGENCIES, type BusService } from './service.ts';
 import type { InboxRecord, QuestionRecord } from './store.ts';
 
-export const SERVER_INFO = { name: 'agent-bus', version: '0.12.2' } as const;
+export const SERVER_INFO = { name: 'agent-bus', version: '0.12.3' } as const;
 
 export interface McpDeps {
   service: BusService;
