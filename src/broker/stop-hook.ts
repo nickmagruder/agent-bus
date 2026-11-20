@@ -101,10 +101,36 @@ export class StopDelivery implements StopOffers {
   }
 }
 
+/**
+ * The block reason: a heading, then what's handed over. The heading says
+ * "Nick replied" only when something in it is from Nick (a message or an
+ * answered question); an expiry is agent-bus's own status, not his words.
+ */
 export function stopReason(take: InboxTake): string {
-  return (
-    'agent-bus: Nick replied in Slack before you stopped. Read his reply and act on it ' +
-    '(answer him with notify_human if he asked something), then finish your turn.\n\n' +
-    inboxText(take.messages, take.outcomes, take.remaining)
-  );
+  return `${stopHeading(take)}\n\n${inboxText(take.messages, take.outcomes, take.remaining)}`;
+}
+
+function stopHeading(take: InboxTake): string {
+  const fromNick = take.messages.length > 0 || take.outcomes.some((q) => q.state === 'answered');
+  const expired = take.outcomes.filter((q) => q.state === 'expired').length;
+  const questions =
+    expired === 1 ? 'a question you asked' : `${String(expired)} questions you asked`;
+  const reply = 'Read his reply and act on it (answer him with notify_human if he asked something)';
+  const fallBack = expired === 1 ? 'for that question' : 'for those questions';
+  if (fromNick && expired > 0) {
+    return (
+      `agent-bus: Nick replied in Slack before you stopped, and ${questions} expired unanswered. ` +
+      `${reply}; ${fallBack}, go with your stated default. Then finish your turn.`
+    );
+  }
+  if (fromNick)
+    return `agent-bus: Nick replied in Slack before you stopped. ${reply}, then finish your turn.`;
+  if (expired > 0) {
+    return (
+      `agent-bus has an update (not a message from Nick): ${questions} expired with no answer from Nick. ` +
+      'Go with your stated default, then finish your turn.'
+    );
+  }
+  // Defence only: check() never blocks on an empty take, and open questions aren't taken.
+  return 'agent-bus has an update (not a message from Nick). Read it, then finish your turn.';
 }

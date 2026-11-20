@@ -429,5 +429,5 @@ Run from Nick's phone through each app's own MCP connection
 - **Top-level DM hint:** the first top-level DM got it; a second a moment
   later didn't (hourly limit).
 - **Found:** the Stop hook hands over an expiry alone under "Nick replied in
-  Slack" ([#71](https://github.com/nickmagruder/agent-bus/issues/71)).
+  Slack" ([#71](https://github.com/nickmagruder/agent-bus/issues/71)); fixed in 0.12.6.
 - Still to check: a foreign user's or bot's reply, and the daily digest.

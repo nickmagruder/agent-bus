@@ -1,6 +1,6 @@
 {
   "name": "agent-bus",
-  "version": "0.12.5",
+  "version": "0.12.6",
   "private": true,
   "license": "MIT",
   "description": "Local broker connecting Claude Code, Codex and GitHub Copilot sessions to Slack and to each other.",
