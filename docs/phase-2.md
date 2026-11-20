@@ -18,7 +18,9 @@ Phase 1: [phase-1.md](phase-1.md).
   (PR 1 registers the `message` handler).
 - `startHeartbeat()` sends `notifications/progress` (or a log message) every
   60 s. Confirmed to reset Claude Code's 300 s idle timer; **untested on
-  Codex (300 s) and Copilot (180 s)**.
+  Codex (300 s) and Copilot (180 s)**. Every hold ends at 150 s, so no live
+  call outlasts those timeouts; `AGENT_BUS_HOLD_SECONDS`
+  ([#68](https://github.com/nickmagruder/agent-bus/issues/68), 30-900 s) raises the limit for the #25 check.
 - `/mcp` is stateless streamable HTTP: one server per request, so a held
   tool call is just an open SSE response. A broker stop answers it with
   `pending` first (0.10.4, #48).

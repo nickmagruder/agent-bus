@@ -6,6 +6,13 @@ import { PLATFORMS, type Platform } from './platform.ts';
 export const DEFAULT_PORT = 47823;
 
 /**
+ * `AGENT_BUS_HOLD_SECONDS` bounds: for live checks that a client's progress
+ * handling keeps a call alive past its own timeout (Codex 300 s, Copilot
+ * 180 s), not for everyday use.
+ */
+export const HOLD_SECONDS_RANGE = { min: 30, max: 900 } as const;
+
+/**
  * A GitHub repo as `owner/name`: owners are letters, digits and inner
  * hyphens; names are letters, digits, `.`, `_`, `-`, but never `.` or `..`.
  */
@@ -50,6 +57,12 @@ const envSchema = z
     AGENT_BUS_DATA_DIR: z.string().min(1).optional(),
     AGENT_BUS_DIGEST_REPOS: repoList,
     AGENT_BUS_GITHUB_TOKEN: z.string().min(1).optional(),
+    AGENT_BUS_HOLD_SECONDS: z.coerce
+      .number()
+      .int()
+      .min(HOLD_SECONDS_RANGE.min)
+      .max(HOLD_SECONDS_RANGE.max)
+      .optional(),
     LOCALAPPDATA: z.string().optional(),
   })
   .refine(
@@ -68,6 +81,8 @@ export interface BrokerConfig {
   slack: { botToken: string; appToken: string; userId: string };
   /** Repos whose merged PRs the daily digest lists; a read-only token for private ones. */
   github?: { repos: string[]; token?: string | undefined };
+  /** ask_human / wait_for_reply hold limit; unset keeps the 150 s default. */
+  holdSeconds?: number | undefined;
 }
 
 export function defaultDataDir(localAppData: string | undefined): string {
@@ -91,5 +106,6 @@ export function loadBrokerConfig(env: NodeJS.ProcessEnv = process.env): BrokerCo
     },
     slack: { botToken: e.SLACK_BOT_TOKEN, appToken: e.SLACK_APP_TOKEN, userId: e.SLACK_USER_ID },
     github: { repos: e.AGENT_BUS_DIGEST_REPOS, token: e.AGENT_BUS_GITHUB_TOKEN },
+    holdSeconds: e.AGENT_BUS_HOLD_SECONDS,
   };
 }

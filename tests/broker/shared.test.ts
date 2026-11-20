@@ -80,6 +80,19 @@ describe('loadBrokerConfig', () => {
     expect(config.dataDir).toBe('x');
   });
 
+  it('leaves the hold limit unset by default and reads AGENT_BUS_HOLD_SECONDS (#68)', () => {
+    expect(loadBrokerConfig(validEnv).holdSeconds).toBeUndefined();
+    expect(loadBrokerConfig({ ...validEnv, AGENT_BUS_HOLD_SECONDS: '360' }).holdSeconds).toBe(360);
+    expect(loadBrokerConfig({ ...validEnv, AGENT_BUS_HOLD_SECONDS: '30' }).holdSeconds).toBe(30);
+    expect(loadBrokerConfig({ ...validEnv, AGENT_BUS_HOLD_SECONDS: '900' }).holdSeconds).toBe(900);
+  });
+
+  it.each(['29', '901', '0', '-5', '1.5', 'abc'])('rejects AGENT_BUS_HOLD_SECONDS=%s', (value) => {
+    expect(() => loadBrokerConfig({ ...validEnv, AGENT_BUS_HOLD_SECONDS: value })).toThrow(
+      'AGENT_BUS_HOLD_SECONDS',
+    );
+  });
+
   it.each([
     ['SLACK_BOT_TOKEN', 'xapp-wrong'],
     ['SLACK_APP_TOKEN', 'xoxb-wrong'],

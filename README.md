@@ -202,6 +202,7 @@ User environment variables, never files:
 | `AGENT_BUS_DATA_DIR`      | Optional; default `%LOCALAPPDATA%\agent-bus`                                                                   |
 | `AGENT_BUS_DIGEST_REPOS`  | Optional; comma-separated `owner/name` repos whose merged PRs the daily digest lists                           |
 | `AGENT_BUS_GITHUB_TOKEN`  | Optional; read-only token (fine-grained: Pull requests: read) for private digest repos. Public repos need none |
+| `AGENT_BUS_HOLD_SECONDS`  | Optional, 30-900; how long `ask_human`/`wait_for_reply` hold a call (default 150). For live checks only        |
 
 The hook CLI reads `AGENT_BUS_TOKEN_<PLATFORM>` and `AGENT_BUS_PORT` too.
 
@@ -410,6 +411,14 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.12.4 (2026-11-19)
+
+- **`AGENT_BUS_HOLD_SECONDS`** ([#68](https://github.com/nickmagruder/agent-bus/issues/68)): an optional
+  setting (30-900 s) that raises the `ask_human`/`wait_for_reply` hold limit,
+  so the live check ([#25](https://github.com/nickmagruder/agent-bus/issues/25)) can show whether progress
+  notifications keep a call alive past Codex's 300 s and Copilot's 180 s
+  timeouts. Unset keeps 150 s; the broker logs the limit when it's set.
 
 ### 0.12.3 (2026-11-19)
 
