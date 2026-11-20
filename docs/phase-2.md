@@ -228,15 +228,15 @@ Context from `UserPromptSubmit` is not verified live on either app yet
 
 ## Decisions
 
-| Topic                                         | Decision                                                                                                                                                                                                                  |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Hold limit for `ask_human` / `wait_for_reply` | **150 s on every app** (default; `AGENT_BUS_HOLD_SECONDS` for live checks), then `pending`; the agent calls `wait_for_reply` again. Raise per platform once Codex and Copilot are shown to honour progress notifications. |
-| Where questions are posted                    | **DM** with the buttons (sound, phone), plus a one-line pointer in the session thread. A reply in the DM message's thread or in the session thread answers it.                                                            |
-| Reminder and expiry defaults                  | **Remind at 15 min, expire at 60 min**; an agent may pass its own timeout (capped).                                                                                                                                       |
-| Digest time                                   | **08:00 local** in `#agents`, covering the previous day; one catch-up at broker start if missed.                                                                                                                          |
-| Sign-in race                                  | **`UserPromptSubmit` hook** injects the bus ID on the first prompt when `SessionStart` missed it; the MCP reconnect stays manual.                                                                                         |
-| Hooks that block                              | **`Stop` may block** (`decision: block`) to deliver my Slack replies, with tests for every path. `PermissionRequest` still never decides (Phase 4).                                                                       |
-| Delivery                                      | Feature branch with a few PRs (below), plus a clankers PR. Commit and open PRs only when asked.                                                                                                                           |
+| Topic                                         | Decision                                                                                                                                                                                                                                                                                         |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Hold limit for `ask_human` / `wait_for_reply` | **150 s on every app** (default; `AGENT_BUS_HOLD_SECONDS` for live checks), then `pending`; the agent calls `wait_for_reply` again. Raise per platform once Codex and Copilot are shown to honour progress notifications. _2026-11-19: Codex doesn't (300 s hard), Copilot does; kept at 150 s._ |
+| Where questions are posted                    | **DM** with the buttons (sound, phone), plus a one-line pointer in the session thread. A reply in the DM message's thread or in the session thread answers it.                                                                                                                                   |
+| Reminder and expiry defaults                  | **Remind at 15 min, expire at 60 min**; an agent may pass its own timeout (capped).                                                                                                                                                                                                              |
+| Digest time                                   | **08:00 local** in `#agents`, covering the previous day; one catch-up at broker start if missed.                                                                                                                                                                                                 |
+| Sign-in race                                  | **`UserPromptSubmit` hook** injects the bus ID on the first prompt when `SessionStart` missed it; the MCP reconnect stays manual.                                                                                                                                                                |
+| Hooks that block                              | **`Stop` may block** (`decision: block`) to deliver my Slack replies, with tests for every path. `PermissionRequest` still never decides (Phase 4).                                                                                                                                              |
+| Delivery                                      | Feature branch with a few PRs (below), plus a clankers PR. Commit and open PRs only when asked.                                                                                                                                                                                                  |
 
 ## Work
 
@@ -396,6 +396,38 @@ Findings:
 - The reminder DM is posted under the bot's own name and icon, not the
   agent's (`style()` isn't applied to it); cosmetic. Fixed in 0.10.1
   ([#29](https://github.com/nickmagruder/agent-bus/issues/29)).
-- Not yet covered live: Codex and Copilot (heartbeats past 300 s / 180 s),
-  the Claude app's own MCP client, a foreign user's or bot's reply, the
-  top-level DM hint.
+- Not yet covered live (as of this run): Codex and Copilot (heartbeats past
+  300 s / 180 s), the Claude app's own MCP client, a foreign user's or bot's
+  reply, the top-level DM hint. All but the foreign reply were covered on
+  2026-11-19 (below).
+
+### Broker 0.12.3-0.12.4 in each app (2026-11-19)
+
+Run from Nick's phone through each app's own MCP connection
+([#25](https://github.com/nickmagruder/agent-bus/issues/25), results in its comments). Every result carried
+`from`/`trust` in `structuredContent`; Codex and Copilot show only that, so
+[#64](https://github.com/nickmagruder/agent-bus/issues/64) works on both.
+
+| Check                                      | Claude Code          | Codex                                                 | Copilot                |
+| ------------------------------------------ | -------------------- | ----------------------------------------------------- | ---------------------- |
+| `register`                                 | ✅                   | ✅                                                    | ✅                     |
+| `ask_human` by button                      | ✅                   | ✅                                                    | ✅                     |
+| `ask_human` by reply                       | ✅                   | ✅                                                    | ✅ (long call)         |
+| Left to expire (`pending`, then `expired`) | ✅                   | ✅                                                    | not run                |
+| Session-thread message                     | ✅ via the Stop hook | ✅ via the Stop hook; a later `check_inbox` was empty | ✅ via `check_inbox`   |
+| Call past the client's timeout             | already confirmed    | ❌ ends at exactly 300 s                              | ✅ 223.6 s, past 180 s |
+
+- **Long calls** used `AGENT_BUS_HOLD_SECONDS=360`
+  ([#68](https://github.com/nickmagruder/agent-bus/issues/68)). Copilot honours progress notifications;
+  Codex doesn't, whatever the broker sends.
+- **No reply lost on Codex:** a reply 5:24 into a call that Codex had dropped
+  at 300 s was recorded but not delivered to the dead call; the next
+  `check_inbox` returned it. Codex ends the request at its timeout, so the
+  hold ends with it.
+- **Hold limit decision:** stays at 150 s for every app. Copilot could hold
+  longer, but the limit is one setting and Codex can't pass 300 s.
+- **Top-level DM hint:** the first top-level DM got it; a second a moment
+  later didn't (hourly limit).
+- **Found:** the Stop hook hands over an expiry alone under "Nick replied in
+  Slack" ([#71](https://github.com/nickmagruder/agent-bus/issues/71)).
+- Still to check: a foreign user's or bot's reply, and the daily digest.
