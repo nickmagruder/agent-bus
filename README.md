@@ -412,6 +412,14 @@ are made.
 
 ## Changelog
 
+### 0.12.6 (2026-11-20)
+
+- **Stop-hook heading** ([#71](https://github.com/nickmagruder/agent-bus/issues/71)): "Nick replied in
+  Slack" only when the hand-over holds a message or answer from Nick. An
+  expiry alone now reads as an agent-bus update (not a message from Nick)
+  telling the agent to go with its stated default; a reply plus an expiry
+  says both.
+
 ### 0.12.5 (2026-11-19)
 
 - `docs/phase-2.md`: live results on Claude Code, Codex and Copilot
