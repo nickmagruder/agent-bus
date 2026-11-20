@@ -21,6 +21,14 @@ Phase 1: [phase-1.md](phase-1.md).
   Codex (300 s) and Copilot (180 s)**. Every hold ends at 150 s, so no live
   call outlasts those timeouts; `AGENT_BUS_HOLD_SECONDS`
   ([#68](https://github.com/nickmagruder/agent-bus/issues/68), 30-900 s) raises the limit for the #25 check.
+  **Risk while it's raised:** if a client stops waiting at its own timeout
+  without sending `notifications/cancelled` or closing the stream, the broker
+  keeps holding, and a reply that lands in that gap is taken and lost (the
+  500 ms undo only covers a cancel that races an answer). So the #25 check
+  also lets the client time out, replies in Slack after that (about 200 s on
+  Copilot, 320 s on Codex) and confirms the next `wait_for_reply` or
+  `check_inbox` gets it. A lost reply decides against raising the limit for
+  that platform. Unset the variable after the check.
 - `/mcp` is stateless streamable HTTP: one server per request, so a held
   tool call is just an open SSE response. A broker stop answers it with
   `pending` first (0.10.4, #48).
@@ -220,15 +228,15 @@ Context from `UserPromptSubmit` is not verified live on either app yet
 
 ## Decisions
 
-| Topic                                         | Decision                                                                                                                                                              |
-| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Hold limit for `ask_human` / `wait_for_reply` | **150 s on every app**, then `pending`; the agent calls `wait_for_reply` again. Raise per platform once Codex and Copilot are shown to honour progress notifications. |
-| Where questions are posted                    | **DM** with the buttons (sound, phone), plus a one-line pointer in the session thread. A reply in the DM message's thread or in the session thread answers it.        |
-| Reminder and expiry defaults                  | **Remind at 15 min, expire at 60 min**; an agent may pass its own timeout (capped).                                                                                   |
-| Digest time                                   | **08:00 local** in `#agents`, covering the previous day; one catch-up at broker start if missed.                                                                      |
-| Sign-in race                                  | **`UserPromptSubmit` hook** injects the bus ID on the first prompt when `SessionStart` missed it; the MCP reconnect stays manual.                                     |
-| Hooks that block                              | **`Stop` may block** (`decision: block`) to deliver my Slack replies, with tests for every path. `PermissionRequest` still never decides (Phase 4).                   |
-| Delivery                                      | Feature branch with a few PRs (below), plus a clankers PR. Commit and open PRs only when asked.                                                                       |
+| Topic                                         | Decision                                                                                                                                                                                                                  |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hold limit for `ask_human` / `wait_for_reply` | **150 s on every app** (default; `AGENT_BUS_HOLD_SECONDS` for live checks), then `pending`; the agent calls `wait_for_reply` again. Raise per platform once Codex and Copilot are shown to honour progress notifications. |
+| Where questions are posted                    | **DM** with the buttons (sound, phone), plus a one-line pointer in the session thread. A reply in the DM message's thread or in the session thread answers it.                                                            |
+| Reminder and expiry defaults                  | **Remind at 15 min, expire at 60 min**; an agent may pass its own timeout (capped).                                                                                                                                       |
+| Digest time                                   | **08:00 local** in `#agents`, covering the previous day; one catch-up at broker start if missed.                                                                                                                          |
+| Sign-in race                                  | **`UserPromptSubmit` hook** injects the bus ID on the first prompt when `SessionStart` missed it; the MCP reconnect stays manual.                                                                                         |
+| Hooks that block                              | **`Stop` may block** (`decision: block`) to deliver my Slack replies, with tests for every path. `PermissionRequest` still never decides (Phase 4).                                                                       |
+| Delivery                                      | Feature branch with a few PRs (below), plus a clankers PR. Commit and open PRs only when asked.                                                                                                                           |
 
 ## Work
 

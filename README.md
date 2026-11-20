@@ -71,13 +71,13 @@ and decisions) is in [docs/design.md](docs/design.md).
 
 ### MCP tools
 
-| Tool                                                                       | What it does                                                                                                                                                                                     |
-| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `register(purpose, project?, branch?, session?)`                           | Announces a session in `#proj-<project>` (or `#agents`) and returns its ID (`platform/project/xxxx`)                                                                                             |
-| `notify_human(session, text, urgency)`                                     | `urgent` → DM to me, `normal` → the session's thread, `fyi` → the daily digest in `#agents` (08:00 local). Per-session and per-platform hourly caps stop loops                                   |
-| `check_inbox(session)`                                                     | Returns my Slack replies to the session and the outcomes of its questions                                                                                                                        |
-| `ask_human(session, question, options?, default_action, timeout_minutes?)` | DMs me the question with buttons for up to five options (a reply in its thread works too) and waits up to 150 s, then returns `pending` with a question ID. A pointer goes in the session thread |
-| `wait_for_reply(session, question_id?)`                                    | Waits again, for one question or for anything new                                                                                                                                                |
+| Tool                                                                       | What it does                                                                                                                                                                                               |
+| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `register(purpose, project?, branch?, session?)`                           | Announces a session in `#proj-<project>` (or `#agents`) and returns its ID (`platform/project/xxxx`)                                                                                                       |
+| `notify_human(session, text, urgency)`                                     | `urgent` → DM to me, `normal` → the session's thread, `fyi` → the daily digest in `#agents` (08:00 local). Per-session and per-platform hourly caps stop loops                                             |
+| `check_inbox(session)`                                                     | Returns my Slack replies to the session and the outcomes of its questions                                                                                                                                  |
+| `ask_human(session, question, options?, default_action, timeout_minutes?)` | DMs me the question with buttons for up to five options (a reply in its thread works too) and waits up to 150 s (default), then returns `pending` with a question ID. A pointer goes in the session thread |
+| `wait_for_reply(session, question_id?)`                                    | Waits again, for one question or for anything new                                                                                                                                                          |
 
 Questions get one reminder at 15 minutes. At the timeout (default 60) the
 question expires and the agent takes its own `default_action`. The first
@@ -190,19 +190,19 @@ npm install   # also installs the git hooks (husky)
 
 User environment variables, never files:
 
-| Variable                  | Purpose                                                                                                        |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `AGENT_BUS_TOKEN_CLAUDE`  | Bearer token for Claude Code (≥ 32 chars, unique per platform)                                                 |
-| `AGENT_BUS_TOKEN_CODEX`   | Bearer token for Codex                                                                                         |
-| `AGENT_BUS_TOKEN_COPILOT` | Bearer token for Copilot                                                                                       |
-| `SLACK_BOT_TOKEN`         | `xoxb-` bot token                                                                                              |
-| `SLACK_APP_TOKEN`         | `xapp-` Socket Mode token                                                                                      |
-| `SLACK_USER_ID`           | Your Slack member ID (urgent DMs go here; only you can answer)                                                 |
-| `AGENT_BUS_PORT`          | Optional; default `47823`                                                                                      |
-| `AGENT_BUS_DATA_DIR`      | Optional; default `%LOCALAPPDATA%\agent-bus`                                                                   |
-| `AGENT_BUS_DIGEST_REPOS`  | Optional; comma-separated `owner/name` repos whose merged PRs the daily digest lists                           |
-| `AGENT_BUS_GITHUB_TOKEN`  | Optional; read-only token (fine-grained: Pull requests: read) for private digest repos. Public repos need none |
-| `AGENT_BUS_HOLD_SECONDS`  | Optional, 30-900; how long `ask_human`/`wait_for_reply` hold a call (default 150). For live checks only        |
+| Variable                  | Purpose                                                                                                                                           |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AGENT_BUS_TOKEN_CLAUDE`  | Bearer token for Claude Code (≥ 32 chars, unique per platform)                                                                                    |
+| `AGENT_BUS_TOKEN_CODEX`   | Bearer token for Codex                                                                                                                            |
+| `AGENT_BUS_TOKEN_COPILOT` | Bearer token for Copilot                                                                                                                          |
+| `SLACK_BOT_TOKEN`         | `xoxb-` bot token                                                                                                                                 |
+| `SLACK_APP_TOKEN`         | `xapp-` Socket Mode token                                                                                                                         |
+| `SLACK_USER_ID`           | Your Slack member ID (urgent DMs go here; only you can answer)                                                                                    |
+| `AGENT_BUS_PORT`          | Optional; default `47823`                                                                                                                         |
+| `AGENT_BUS_DATA_DIR`      | Optional; default `%LOCALAPPDATA%\agent-bus`                                                                                                      |
+| `AGENT_BUS_DIGEST_REPOS`  | Optional; comma-separated `owner/name` repos whose merged PRs the daily digest lists                                                              |
+| `AGENT_BUS_GITHUB_TOKEN`  | Optional; read-only token (fine-grained: Pull requests: read) for private digest repos. Public repos need none                                    |
+| `AGENT_BUS_HOLD_SECONDS`  | Optional, 30-900; how long `ask_human`/`wait_for_reply` hold a call (default 150). Live checks only: above a client's timeout a reply can be lost |
 
 The hook CLI reads `AGENT_BUS_TOKEN_<PLATFORM>` and `AGENT_BUS_PORT` too.
 
