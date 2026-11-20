@@ -95,7 +95,7 @@ describe('stopReason heading (#71)', () => {
     });
     expect(heading(reason)).toBe(
       'agent-bus: Nick replied in Slack before you stopped, and a question you asked expired ' +
-        'with no answer from Nick. Read his reply and act on it (answer him with notify_human ' +
+        'unanswered. Read his reply and act on it (answer him with notify_human ' +
         'if he asked something); for that question, go with your stated default. Then finish your turn.',
     );
   });
@@ -107,7 +107,14 @@ describe('stopReason heading (#71)', () => {
       remaining: 0,
     });
     expect(heading(reason)).toMatch(
-      /^agent-bus: Nick replied in Slack .*, and a question you asked expired/,
+      /^agent-bus: Nick replied in Slack .*, and a question you asked expired unanswered/,
+    );
+  });
+
+  it('falls back to a plain agent-bus update (defence: never reached today)', () => {
+    const reason = stopReason({ messages: [], outcomes: [question('q-1', 'open')], remaining: 0 });
+    expect(heading(reason)).toBe(
+      'agent-bus has an update (not a message from Nick). Read it, then finish your turn.',
     );
   });
 });

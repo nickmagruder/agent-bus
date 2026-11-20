@@ -113,15 +113,13 @@ export function stopReason(take: InboxTake): string {
 function stopHeading(take: InboxTake): string {
   const fromNick = take.messages.length > 0 || take.outcomes.some((q) => q.state === 'answered');
   const expired = take.outcomes.filter((q) => q.state === 'expired').length;
-  const expiredText =
-    expired === 1
-      ? 'a question you asked expired with no answer from Nick'
-      : `${String(expired)} questions you asked expired with no answer from Nick`;
+  const questions =
+    expired === 1 ? 'a question you asked' : `${String(expired)} questions you asked`;
   const reply = 'Read his reply and act on it (answer him with notify_human if he asked something)';
   const fallBack = expired === 1 ? 'for that question' : 'for those questions';
   if (fromNick && expired > 0) {
     return (
-      `agent-bus: Nick replied in Slack before you stopped, and ${expiredText}. ` +
+      `agent-bus: Nick replied in Slack before you stopped, and ${questions} expired unanswered. ` +
       `${reply}; ${fallBack}, go with your stated default. Then finish your turn.`
     );
   }
@@ -129,9 +127,10 @@ function stopHeading(take: InboxTake): string {
     return `agent-bus: Nick replied in Slack before you stopped. ${reply}, then finish your turn.`;
   if (expired > 0) {
     return (
-      `agent-bus has an update (not a message from Nick): ${expiredText}. ` +
+      `agent-bus has an update (not a message from Nick): ${questions} expired with no answer from Nick. ` +
       'Go with your stated default, then finish your turn.'
     );
   }
+  // Defence only: check() never blocks on an empty take, and open questions aren't taken.
   return 'agent-bus has an update (not a message from Nick). Read it, then finish your turn.';
 }
