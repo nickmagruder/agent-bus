@@ -74,6 +74,11 @@ export interface BrokerDeps {
 
 export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): Promise<Broker> {
   const log = deps.log ?? createLogger();
+  const holdMs =
+    deps.holdMs ?? (config.holdSeconds === undefined ? undefined : config.holdSeconds * 1000);
+  if (config.holdSeconds !== undefined) {
+    log('info', 'hold limit set by AGENT_BUS_HOLD_SECONDS', { seconds: config.holdSeconds });
+  }
   const store = new Store(path.join(config.dataDir, 'bus.db'));
   const slackApi = deps.slackApi ?? createWebSlackApi(config.slack.botToken);
   const directory = new ChannelDirectory(slackApi, config.slack.userId);
@@ -133,7 +138,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
       inbox,
       questions,
       notifier,
-      holdMs: deps.holdMs,
+      holdMs,
       heldCalls,
       log,
       health: () => ({ slack: connection?.state ?? 'disabled' }),
