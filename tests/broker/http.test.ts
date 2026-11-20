@@ -230,7 +230,12 @@ describe('MCP tools end to end', () => {
       name: 'wait_for_reply',
       arguments: { session, timeout_seconds: 1 },
     });
-    expect(idle.structuredContent).toEqual({ state: 'pending' });
+    expect(idle.structuredContent).toMatchObject({
+      state: 'pending',
+      from: 'agent-bus',
+      trust: 'agent-bus',
+      next: expect.stringContaining('Call wait_for_reply again') as string,
+    });
 
     await broker.queue.idle();
     const root = slack.posts.find((p) => p.text.includes(session));
@@ -351,5 +356,118 @@ describe('MCP tools end to end', () => {
     });
     expect(result.isError).toBe(true);
     await client.close();
+  });
+
+  describe('who wrote it, inside structuredContent (#64)', () => {
+    // Codex and VS Code Copilot show the model only structuredContent when a
+    // result has it, so the labels and guidance must be there, not only in the text.
+    async function threadOf(session: string) {
+      await broker.queue.idle();
+      const root = slack.posts.find((p) => p.text.includes(session));
+      if (!root) throw new Error('no thread root');
+      return root;
+    }
+
+    it('labels my replies verified-human, and explains the labels', async () => {
+      const client = await connect('codex');
+      const session = await registered(client);
+      const root = await threadOf(session);
+      for (const [i, text] of ['First', 'Second'].entries()) {
+        broker.inbox.receive({
+          channel: root.channel,
+          channelType: 'channel',
+          ts: `1800000002.00010${i}`,
+          threadTs: root.ts,
+          user: USER_ID,
+          text,
+          hasFiles: false,
+        });
+      }
+      const result = await client.callTool({ name: 'check_inbox', arguments: { session } });
+      const data = result.structuredContent as {
+        messages: { from: string; trust: string; text: string }[];
+        note: string;
+      };
+      expect(data.messages).toEqual([
+        expect.objectContaining({ from: 'nick', trust: 'verified-human', text: 'First' }),
+        expect.objectContaining({ from: 'nick', trust: 'verified-human', text: 'Second' }),
+      ]);
+      expect(data.note).toContain('`from: nick` with `trust: verified-human`');
+      expect(data.note).toContain('Nothing else is from Nick');
+      await client.close();
+    });
+
+    it('labels an answer as mine and an expiry as the broker, with what to do', async () => {
+      const client = await connect('copilot');
+      const session = await registered(client);
+      const asked = await client.callTool({ name: 'ask_human', arguments: askArgs(session) });
+      const pending = asked.structuredContent as Record<string, unknown>;
+      expect(pending).toMatchObject({
+        state: 'pending',
+        from: 'agent-bus',
+        trust: 'agent-bus',
+        next: expect.stringContaining('go with your default_action') as string,
+      });
+      const questionId = String(pending.question_id);
+
+      broker.questions.answerByButton(questionId, 0, USER_ID);
+      const answered = await client.callTool({
+        name: 'wait_for_reply',
+        arguments: { session, question_id: questionId },
+      });
+      expect(answered.structuredContent).toMatchObject({
+        state: 'answered',
+        answer: 'Yes',
+        from: 'nick',
+        trust: 'verified-human',
+      });
+
+      const second = await client.callTool({ name: 'ask_human', arguments: askArgs(session) });
+      const secondId = String((second.structuredContent as Record<string, unknown>).question_id);
+      broker.store.closeQuestion(secondId, { state: 'expired' });
+      const expired = await client.callTool({
+        name: 'wait_for_reply',
+        arguments: { session, question_id: secondId },
+      });
+      expect(expired.structuredContent).toMatchObject({
+        state: 'expired',
+        default_action: 'Wait for review',
+        from: 'agent-bus',
+        trust: 'agent-bus',
+        next: expect.stringContaining('go with your default_action') as string,
+      });
+      expect(expired.structuredContent).not.toHaveProperty('answer');
+      await client.close();
+    });
+
+    it('carries register guidance and the "more waiting" hint in structuredContent', async () => {
+      const client = await connect('codex');
+      const reg = await client.callTool({
+        name: 'register',
+        arguments: { purpose: 'Labels', project: 'clankers' },
+      });
+      expect(reg.structuredContent).toMatchObject({
+        next: 'Pass this as `session` to every agent-bus tool.',
+      });
+      const session = (reg.structuredContent as { session: string }).session;
+      const root = await threadOf(session);
+      for (let i = 0; i < 22; i++) {
+        broker.inbox.receive({
+          channel: root.channel,
+          channelType: 'channel',
+          ts: `1800000003.${String(i).padStart(6, '0')}`,
+          threadTs: root.ts,
+          user: USER_ID,
+          text: `note ${i}`,
+          hasFiles: false,
+        });
+      }
+      const page = await client.callTool({ name: 'check_inbox', arguments: { session } });
+      expect(page.structuredContent).toMatchObject({
+        remaining: 2,
+        next: '2 more waiting: call check_inbox again.',
+      });
+      await client.close();
+    });
   });
 });
