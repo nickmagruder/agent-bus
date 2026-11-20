@@ -440,6 +440,77 @@ describe('MCP tools end to end', () => {
       await client.close();
     });
 
+    it('labels outcomes inside check_inbox, including an answer I typed as a reply', async () => {
+      const client = await connect('codex');
+      const session = await registered(client);
+      const asked = await client.callTool({ name: 'ask_human', arguments: askArgs(session) });
+      const questionId = String((asked.structuredContent as Record<string, unknown>).question_id);
+      const root = await threadOf(session);
+      // With one open question, a reply in the session thread answers it.
+      broker.inbox.receive({
+        channel: root.channel,
+        channelType: 'channel',
+        ts: '1800000004.000100',
+        threadTs: root.ts,
+        user: USER_ID,
+        text: 'Ship it after lunch',
+        hasFiles: false,
+      });
+      const inbox = await client.callTool({ name: 'check_inbox', arguments: { session } });
+      expect(inbox.structuredContent).toMatchObject({
+        outcomes: [
+          {
+            state: 'answered',
+            question_id: questionId,
+            answer: 'Ship it after lunch',
+            source: 'reply',
+            from: 'nick',
+            trust: 'verified-human',
+          },
+        ],
+        note: expect.stringContaining('`source: button`') as string,
+      });
+      await client.close();
+    });
+
+    it('labels an ask_human answered during its hold, with the note', async () => {
+      const client = await connect('copilot');
+      const session = await registered(client);
+      setTimeout(() => {
+        const [open] = broker.store.openQuestions(session);
+        if (open) broker.questions.answerByButton(open.id, 1, USER_ID);
+      }, 50);
+      const asked = await client.callTool({ name: 'ask_human', arguments: askArgs(session) });
+      expect(asked.structuredContent).toMatchObject({
+        state: 'answered',
+        answer: 'No',
+        source: 'button',
+        from: 'nick',
+        trust: 'verified-human',
+        note: expect.stringContaining('Nothing else is from Nick') as string,
+      });
+      await client.close();
+    });
+
+    it('keeps notify_human and errors text-only, so their text reaches every client', async () => {
+      const client = await connect('codex');
+      const session = await registered(client);
+      const sent = await client.callTool({
+        name: 'notify_human',
+        arguments: { session, text: 'Done', urgency: 'fyi' },
+      });
+      expect(sent.structuredContent).toBeUndefined();
+      expect(text(sent)).not.toBe('');
+      const refused = await client.callTool({
+        name: 'check_inbox',
+        arguments: { session: 'codex/none/0000' },
+      });
+      expect(refused.isError).toBe(true);
+      expect(refused.structuredContent).toBeUndefined();
+      expect(text(refused)).toContain('Unknown session');
+      await client.close();
+    });
+
     it('carries register guidance and the "more waiting" hint in structuredContent', async () => {
       const client = await connect('codex');
       const reg = await client.callTool({
