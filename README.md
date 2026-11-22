@@ -439,7 +439,8 @@ are made.
   - The holder adds progress notes (marking it as active), asks its creator
     (`input-required`, with a note), completes with a result of text and up
     to 10 `https:` links, fails with a reason, or gives the task back.
-  - A named target can reject before claiming; only the creator can cancel.
+  - A named target can reject (with a reason) before claiming; only the
+    creator can cancel.
   - Notes, results and links get the size and secret checks; other link
     schemes are refused.
   - Each move queues a fixed notice for the other side (input-required,

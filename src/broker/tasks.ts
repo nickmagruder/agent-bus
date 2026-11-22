@@ -6,8 +6,8 @@ import { TaskStore, type TaskRecord, type TaskResult } from './task-store.ts';
 import { canMoveTask, type TaskState } from '../shared/task-states.ts';
 
 /**
- * Phase 3 task rules (#59, part 1: create and list). Decisions D1, D2, D5,
- * D7 and grilling Q4, Q13, Q17, Q18, Q20 in docs/phase-3.md. Every call needs
+ * Phase 3 task rules (#59): create, list, claim and update. Decisions D1,
+ * D2, D5, D7 and grilling Q4, Q13, Q14, Q17, Q18, Q20, Q21 in docs/phase-3.md. Every call needs
  * the caller's session key; sender, time and parent come from the broker,
  * never from arguments (D4, T3). Refusals are audited without the text.
  */
@@ -158,18 +158,18 @@ export class TaskService {
     const target = this.resolveTarget(caller, input.to, refuse);
 
     const parent = this.parentFor(caller, input.forTask, refuse);
-    for (const task of parent ? [parent] : []) {
-      if (task.hops + 1 > TASK_LIMITS.maxHops) {
+    if (parent) {
+      if (parent.hops + 1 > TASK_LIMITS.maxHops) {
         refuse(
           'hop_limit',
-          `You're working on ${task.id}, which is already a sub-task: a task may spawn only one ` +
+          `You're working on ${parent.id}, which is already a sub-task: a task may spawn only one ` +
             'level of sub-task. Finish it, or set it to input-required and ask its creator.',
         );
       }
-      if (this.loopsBack(task, target)) {
+      if (this.loopsBack(parent, target)) {
         refuse(
           'task_loop',
-          `That would hand work back to a session earlier in ${task.id}'s chain. ` +
+          `That would hand work back to a session earlier in ${parent.id}'s chain. ` +
             'Use update_task with state input-required to ask its creator instead.',
         );
       }
@@ -268,7 +268,10 @@ export class TaskService {
     const refuse = this.refuser(caller, 'update_task');
     const note = input.note;
     if (note !== undefined) this.checkText(note, refuse);
-    if (input.result) this.checkResult(input.result, refuse);
+    if (input.result && input.state !== 'completed') {
+      return refuse('bad_result', 'A result goes only with state completed.');
+    }
+    const result = input.result ? this.checkResult(input.result, refuse) : undefined;
     const isHolder = task.holder === caller.id;
     const notHolder = (): never =>
       refuse('not_allowed', `Only the session working on ${task.id} can do that.`);
@@ -293,6 +296,7 @@ export class TaskService {
       if (task.targetSession !== caller.id) {
         return refuse('not_allowed', `Only the session ${task.id} was sent to can reject it.`);
       }
+      if (!note) return refuse('bad_state', 'Say why in a note when you reject a task.');
       from = 'submitted';
     } else {
       if (!isHolder || !held) return notHolder();
@@ -300,7 +304,7 @@ export class TaskService {
       if ((to === 'input-required' || to === 'failed') && !note) {
         return refuse('bad_state', `Say why in a note when you set ${to}.`);
       }
-      if (to === 'completed' && !input.result) {
+      if (to === 'completed' && !result) {
         return refuse('bad_result', 'Give a result when you complete a task.');
       }
     }
@@ -308,29 +312,33 @@ export class TaskService {
       return refuse('bad_state', `${task.id} is ${task.state}; it can't move to ${to}.`);
     }
 
-    const moved = this.tasks.moveTask(task.id, {
-      from,
-      to,
-      by: caller.id,
-      ...(held ? { expectedHolder: task.holder ?? '' } : {}),
-      ...(note !== undefined ? { statusMessage: note } : {}),
-      ...(input.result ? { result: input.result } : {}),
+    // The move and its notice commit together, so a notice is never lost.
+    const moved = this.store.transaction(() => {
+      const after = this.tasks.moveTask(task.id, {
+        from,
+        to,
+        by: caller.id,
+        ...(held ? { expectedHolder: task.holder ?? '' } : {}),
+        ...(note !== undefined ? { statusMessage: note } : {}),
+        ...(result ? { result } : {}),
+      });
+      if (after) this.notify(after, to, task.holder);
+      return after;
     });
-    if (!moved) return lost();
-    this.notify(moved, to, task.holder);
-    return moved;
+    return moved ?? lost();
   }
 
   /**
    * The fixed notices for a move (Q21): the creator hears input-required,
-   * completed, failed and rejected; whoever held or was named for a task
-   * hears it was canceled. Delivery is #60's.
+   * completed, failed and rejected; whoever held it, or the named target of
+   * an approved task, hears it was canceled. Delivery is #60's.
    */
   private notify(task: TaskRecord, to: TaskState, previousHolder: string | null): void {
     if (to === 'input-required' || to === 'completed' || to === 'failed' || to === 'rejected') {
       this.tasks.addNotice(task.createdBy, task.id, to);
     } else if (to === 'canceled') {
-      const target = previousHolder ?? task.targetSession;
+      // A named target hears only of a task it could see (approved, T7).
+      const target = previousHolder ?? (task.approval === 'approved' ? task.targetSession : null);
       if (target) this.tasks.addNotice(target, task.id, 'canceled');
     }
   }
@@ -392,29 +400,53 @@ export class TaskService {
     }
   }
 
-  /** A result is text plus `https:` links (T10, T11, T12). */
+  /**
+   * A result is text plus `https:` links (T10, T11, T12), returned with each
+   * link as the parsed URL's own form. Refused: other schemes, whitespace or
+   * control characters (which URL parsing would silently drop), a user name
+   * or password, an over-long link, or anything token-shaped.
+   */
   private checkResult(
     result: TaskResult,
     refuse: (code: BusErrorCode, message: string) => never,
-  ): void {
+  ): TaskResult {
     this.checkText(result.text, refuse);
     if (result.links.length > TASK_LIMITS.resultLinks) {
       refuse('bad_result', `At most ${TASK_LIMITS.resultLinks} links in a result.`);
     }
-    for (const link of result.links) {
+    const links = result.links.map((link) => {
+      // No whitespace and no control characters (code points up to 0x1f, and 0x7f).
+      const plain =
+        !/\s/.test(link) &&
+        [...link].every((char) => {
+          const code = char.codePointAt(0) ?? 0;
+          return code > 0x1f && code !== 0x7f;
+        });
       let url: URL | undefined;
       try {
         url = new URL(link);
       } catch {
         url = undefined;
       }
-      if (!url || url.protocol !== 'https:' || link.length > TASK_LIMITS.linkMax) {
-        refuse('bad_result', 'Result links must be https: URLs (no other schemes).');
+      if (
+        !plain ||
+        !url ||
+        url.protocol !== 'https:' ||
+        url.username !== '' ||
+        url.password !== '' ||
+        link.length > TASK_LIMITS.linkMax
+      ) {
+        return refuse(
+          'bad_result',
+          'Result links must be plain https: URLs, without spaces or a user name and password.',
+        );
       }
       if (holdsSecret(link)) {
         refuse('secret_in_text', 'A link holds something that looks like a token or key.');
       }
-    }
+      return url.href;
+    });
+    return { text: result.text, links };
   }
 
   private refuser(caller: SessionRecord, action: string) {

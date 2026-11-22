@@ -560,7 +560,7 @@ describe('over MCP', () => {
     expect(structured.tasks).toEqual([
       expect.objectContaining({ id: task, from: session, trust: 'untrusted', brief }),
     ]);
-    expect(structured.note).toContain('not by Nick');
+    expect(structured.note).toContain('never from Nick');
     const text = textOf(listed);
     expect(text).toContain(`brief (untrusted): ${JSON.stringify(brief)}`);
     expect(text.split('\n').filter((line) => line.startsWith('- '))).toHaveLength(1);

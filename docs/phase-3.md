@@ -384,6 +384,27 @@ secret checks (T10, T11). Each move queues a fixed notice in `task_inbox`
 canceled to the holder or named target; #60 delivers them. Refusals are
 audited without their text.
 
+After the [#87](https://github.com/nickmagruder/agent-bus/pull/87) review:
+
+- **A move and its notice commit together**, so a notice is never lost.
+- **A cancel before approval tells no one:** the named target never saw
+  the task (T7); after approval it is told.
+- **A result goes only with `completed`**; `rejected` needs a note, like
+  `failed` and `input-required`.
+- **Links** must be plain `https:` URLs: no whitespace or control
+  characters (URL parsing would drop them silently), no user name or
+  password; each is stored in its parsed form. A link can still carry data
+  in its path or query; host allow-lists would break PR and branch links,
+  so the creator treats links as untrusted like the rest (T8).
+- **The labels note** says title and brief come from the creator, the note
+  and result from the holder (or the creator, for a cancel).
+- Not added: a creator notice when the holder gives a task back. Q21 lists
+  none, and a new notice would need a migration.
+- By design: while a session holds a task, anything it creates is a
+  sub-task of a held one (Q4); it can't open an unrelated top-level task.
+- #59's "`input-required` pings the creator" is the queued notice here; the
+  agent sees it once #60 delivers notices.
+
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 
 Read from the A2A v1.0.0 specification and its "What's new in v1" and

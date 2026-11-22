@@ -186,6 +186,10 @@ describe('update_task', () => {
     ['a data: link', ['data:text/html,hi']],
     ['an http: link', ['http://example.com']],
     ['not a URL', ['see the PR']],
+    ['a user name and password', ['https://user:pass@example.com/x']],
+    ['a newline inside', ['https://example.com/a\nb']],
+    ['a tab inside', ['https://example.com/a\tb']],
+    ['a space inside', ['https://example.com/a b']],
     [
       'too many links',
       Array.from({ length: TASK_LIMITS.resultLinks + 1 }, (_, i) => `https://e.com/${i}`),
@@ -285,6 +289,92 @@ describe('update_task', () => {
     });
     expect(update(claude, task, { state: 'canceled' }).state).toBe('canceled');
     expect(store.db.prepare('SELECT COUNT(*) AS n FROM task_inbox').get()).toEqual({ n: 0 });
+  });
+
+  it('stores each link in its parsed form', () => {
+    const { codex, task } = held();
+    const done = update(codex, task, {
+      state: 'completed',
+      result: { text: 'Done', links: ['HTTPS://Example.COM/a/../pull/1'] },
+    });
+    expect(done.result?.links).toEqual(['https://example.com/pull/1']);
+  });
+
+  it('takes a result only with state completed (review of #87)', () => {
+    const { claude, codex, task } = held();
+    const result = { text: 'Done', links: [] };
+    expectBusError(() => update(codex, task, { note: 'n', result }), 'bad_result');
+    expectBusError(() => update(codex, task, { state: 'failed', note: 'n', result }), 'bad_result');
+    expectBusError(() => update(claude, task, { state: 'canceled', result }), 'bad_result');
+    expect(records.getTask(task.id)).toMatchObject({ state: 'working', result: null });
+  });
+
+  it('needs a note to reject', () => {
+    const claude = agent('claude');
+    const codex = agent('codex');
+    const task = approvedTask(claude, { session: codex.id });
+    expectBusError(() => update(codex, task, { state: 'rejected' }), 'bad_state');
+    expect(records.getTask(task.id)?.state).toBe('submitted');
+  });
+
+  it("doesn't tell a named target of a cancel before approval: it never saw the task", () => {
+    const claude = agent('claude');
+    const codex = agent('codex');
+    const task = tasks.createTask({
+      platform: 'claude',
+      session: claude.id,
+      key: claude.key,
+      title: 't',
+      brief: 'b',
+      to: { session: codex.id },
+    });
+    update(claude, task, { state: 'canceled' });
+    expect(records.notices(codex.id)).toEqual([]);
+    // Once approved (but unclaimed), the named target is told.
+    const approved = approvedTask(claude, { session: codex.id });
+    update(claude, approved, { state: 'canceled' });
+    expect(records.notices(codex.id)).toEqual([{ taskId: approved.id, notice: 'canceled' }]);
+  });
+
+  it('commits a move and its notice together', () => {
+    const { claude, codex, task } = held();
+    // Make the notice write fail: the move must roll back with it.
+    store.db.exec(
+      "CREATE TRIGGER fail_notice BEFORE INSERT ON task_inbox BEGIN SELECT RAISE(ABORT, 'boom'); END",
+    );
+    expect(() => update(codex, task, { state: 'failed', note: 'Broke' })).toThrow('boom');
+    expect(records.getTask(task.id)?.state).toBe('working');
+    store.db.exec('DROP TRIGGER fail_notice');
+    expect(update(codex, task, { state: 'failed', note: 'Broke' }).state).toBe('failed');
+    expect(records.notices(claude.id)).toEqual([{ taskId: task.id, notice: 'failed' }]);
+  });
+
+  it('moves between working and input-required, and fails from either', () => {
+    const { codex, task } = held();
+    update(codex, task, { state: 'input-required', note: 'Q?' });
+    expectBusError(
+      () => update(codex, task, { state: 'completed', result: { text: 'x', links: [] } }),
+      'bad_state',
+    );
+    expect(update(codex, task, { state: 'working' }).state).toBe('working');
+    update(codex, task, { state: 'input-required', note: 'Q2?' });
+    expect(update(codex, task, { state: 'failed', note: 'No answer' }).state).toBe('failed');
+  });
+
+  it('gives a task back from input-required too', () => {
+    const { codex, task } = held();
+    update(codex, task, { state: 'input-required', note: 'Q?' });
+    expect(update(codex, task, { state: 'submitted' })).toMatchObject({
+      state: 'submitted',
+      holder: null,
+    });
+  });
+
+  it("can't claim a task that has finished", () => {
+    const { codex, task } = held();
+    update(codex, task, { state: 'completed', result: { text: 'Done', links: [] } });
+    const error = expectBusError(() => claim(codex, task), 'task_taken');
+    expect(error.message).toContain(codex.id);
   });
 
   it("answers a task the caller can't see like an unknown one (T7)", () => {
