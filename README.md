@@ -416,7 +416,7 @@ are made.
 
 - `docs/phase-3.md`: Phase 3 research results
   ([#56](https://github.com/nickmagruder/agent-bus/issues/56)). The A2A v1.0.0 shapes the records will follow, a
-  separate labelled list per sender in `structuredContent`, and nine
+  separate labelled list per sender in `structuredContent`, and 13
   injection test cases posted on the tasks issues. Leaves one decision open:
   how task states are spelled (D8).
 
