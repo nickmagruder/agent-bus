@@ -145,7 +145,9 @@ describe('MCP tools end to end', () => {
     expect(tools.map((t) => t.name).sort()).toEqual([
       'ask_human',
       'check_inbox',
+      'create_task',
       'list_agents',
+      'list_tasks',
       'notify_human',
       'register',
       'wait_for_reply',

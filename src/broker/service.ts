@@ -110,7 +110,17 @@ export type BusErrorCode =
   | 'bad_key'
   | 'rate_limited'
   | 'too_many_questions'
-  | 'unknown_question';
+  | 'unknown_question'
+  // Phase 3 tasks (#59)
+  | 'unknown_task'
+  | 'unknown_target'
+  | 'invalid_target'
+  | 'same_platform'
+  | 'hop_limit'
+  | 'task_loop'
+  | 'too_many_tasks'
+  | 'too_long'
+  | 'secret_in_text';
 
 export interface AskInput {
   platform: Platform;

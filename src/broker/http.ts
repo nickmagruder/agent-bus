@@ -9,6 +9,7 @@ import { createBusMcpServer, type McpDeps } from './mcp.ts';
 import { StopDelivery } from './stop-hook.ts';
 import type { BusService } from './service.ts';
 import type { Store } from './store.ts';
+import { TaskService } from './tasks.ts';
 
 const MAX_BODY_BYTES = 1_000_000;
 
@@ -30,7 +31,10 @@ export interface RunningHttpServer {
 
 /** Starts the broker's HTTP server on 127.0.0.1. Port 0 picks a free port (tests). */
 export async function startHttpServer(options: HttpOptions): Promise<RunningHttpServer> {
-  const live = { ...options };
+  const live = {
+    ...options,
+    tasks: options.tasks ?? new TaskService(options.store, options.service),
+  };
   const server = createServer((req, res) => {
     handle(req, res, live).catch((error: unknown) => {
       live.log('error', 'request failed', { url: req.url, error: errorMessage(error) });

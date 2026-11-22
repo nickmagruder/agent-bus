@@ -362,6 +362,68 @@ export class TaskStore {
     });
   }
 
+  /** Tasks a session holds and is still working on (working or input-required), newest first. */
+  heldTasks(sessionId: string): TaskRecord[] {
+    const rows = this.store.db
+      .prepare(
+        `SELECT * FROM tasks WHERE holder = ? AND state IN ('working', 'input-required')
+         ORDER BY updated_at DESC, id`,
+      )
+      .all(sessionId) as Row[];
+    return rows.map(toTask);
+  }
+
+  /** Open (not final) tasks for one target: a named session, or a platform + project pool. */
+  countOpenForTarget(
+    target: { session: string } | { platform: Platform; project: string },
+  ): number {
+    const open = "state NOT IN ('completed', 'failed', 'canceled', 'rejected')";
+    const row =
+      'session' in target
+        ? this.store.db
+            .prepare(`SELECT COUNT(*) AS n FROM tasks WHERE target_session = ? AND ${open}`)
+            .get(target.session)
+        : this.store.db
+            .prepare(
+              `SELECT COUNT(*) AS n FROM tasks WHERE target_session IS NULL
+               AND target_platform = ? AND target_project = ? AND ${open}`,
+            )
+            .get(target.platform, target.project);
+    return Number((row as Row).n);
+  }
+
+  /** Tasks created by sessions of one platform that still wait for my approval. */
+  countAwaitingApproval(creatorPlatform: Platform): number {
+    const row = this.store.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM tasks JOIN sessions ON sessions.id = tasks.created_by
+         WHERE sessions.platform = ? AND tasks.approval = 'pending' AND tasks.state = 'submitted'`,
+      )
+      .get(creatorPlatform) as Row;
+    return Number(row.n);
+  }
+
+  /**
+   * The tasks a session may see, most recently changed first (#59, T7): ones
+   * it created or holds; approved ones named for it; and approved, unclaimed
+   * ones in its pool (its platform and project). Nothing else.
+   */
+  visibleTasks(
+    session: { id: string; platform: Platform; project: string },
+    limit: number,
+  ): TaskRecord[] {
+    const rows = this.store.db
+      .prepare(
+        `SELECT * FROM tasks WHERE created_by = ? OR holder = ?
+           OR (approval = 'approved' AND (target_session = ?
+             OR (target_session IS NULL AND target_platform = ? AND target_project = ?
+                 AND state = 'submitted')))
+         ORDER BY updated_at DESC, id LIMIT ?`,
+      )
+      .all(session.id, session.id, session.id, session.platform, session.project, limit) as Row[];
+    return rows.map(toTask);
+  }
+
   /** A task's messages, oldest first. */
   taskMessages(taskId: string): TaskMessageRecord[] {
     const rows = this.store.db

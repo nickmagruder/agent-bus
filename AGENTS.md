@@ -74,7 +74,7 @@ into tracked files.
 - `docs/phase-1.md`: Phase 1 plan, decisions, checklist and build notes
 - `src/broker/main.ts`: broker entry (`npm run broker`); wires store, Slack, queue, HTTP
 - `src/broker/service.ts`: register/notify/hook rules, routing, ownership checks, caps and throttles
-- `src/broker/mcp.ts`: MCP tools (`register`, `notify_human`, `check_inbox`, `ask_human`, `wait_for_reply`, `list_agents`)
+- `src/broker/mcp.ts`: MCP tools (`register`, `notify_human`, `check_inbox`, `ask_human`, `wait_for_reply`, `list_agents`, `create_task`, `list_tasks`)
 - `src/broker/inbox.ts`: my Slack replies → session inboxes (sender gating, routing, reactions, DM hint)
 - `src/broker/slack/inbound.ts`: Bolt `message` listener feeding the inbox; question button handler
 - `src/broker/digest.ts`: daily digest in `#agents` (questions, merged PRs, `fyi` items, sessions seen; catch-up at start)
@@ -93,6 +93,7 @@ into tracked files.
 - `src/shared/guard.ts`: Host/Origin/per-platform bearer checks
 - `src/shared/session-key.ts`: per-session secret keys (mint, hash, constant-time match; #65)
 - `src/broker/task-store.ts`: Phase 3 tasks and task messages (compare-and-swap moves, audited; #57)
+- `src/broker/tasks.ts`: Phase 3 task rules: create and list, targets, hops, loops, caps, secrets, visibility (#59)
 - `src/shared/task-states.ts`: task states, allowed moves and the A2A v1.0 mapping (D8)
 - `src/shared/config.ts`: zod-validated environment
 - `src/shared/slack-text.ts`: escaping and Markdown → Slack mrkdwn for agent text
