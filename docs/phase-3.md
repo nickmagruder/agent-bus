@@ -191,6 +191,31 @@ Not in this phase: approving another agent's permission prompts (never), remote
 approvals of my own prompts (Phase 4), CLI agents and an A2A endpoint
 (Phase 5).
 
+## Build notes
+
+### Session key ([#65](https://github.com/nickmagruder/agent-bus/issues/65), 0.13.0, 2026-11-22)
+
+Decided with Nick before building (all as recommended):
+
+- **Two PRs:** #65 first, then the records (#57) on their own branch.
+- **A new key each time:** the broker stores only the key's hash, so it
+  can't hand the same key out again. Every `SessionStart` (startup, resume,
+  `/clear`, compaction) and every `UserPromptSubmit` re-send mints a new key
+  that replaces the last; a holder of an older key gets `bad_key` telling it
+  to use the newest. A subagent still holding a replaced key is refused the
+  same way.
+- **`register` on an existing session** hands out a new key only when given
+  the current one. Without a key it still updates the purpose (Phase 1–2
+  behaviour until #66) and returns none, so a same-platform session can't
+  take another's key. A session that lost its key registers a new session.
+
+Shape: `abk_` plus 32 random bytes (base64url); SHA-256 in `sessions.key_hash`
+(migration 7), compared in constant time, and kept out of `SessionRecord`.
+`requireKeyedSession` checks session, platform, then key, and audits
+`missing_key` / `bad_key` without the key. The Phase 3 tools call it,
+starting with #58. Known limit: if a hook times out after a new key was
+minted, the agent keeps the old one until the next re-send.
+
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 
 Read from the A2A v1.0.0 specification and its "What's new in v1" and

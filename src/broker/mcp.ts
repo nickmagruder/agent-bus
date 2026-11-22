@@ -12,7 +12,7 @@ import { outcomeText, QUESTION_LIMITS, type Notifier, type Questions } from './q
 import { BusError, URGENCIES, type BusService } from './service.ts';
 import type { InboxRecord, QuestionRecord } from './store.ts';
 
-export const SERVER_INFO = { name: 'agent-bus', version: '0.12.7' } as const;
+export const SERVER_INFO = { name: 'agent-bus', version: '0.13.0' } as const;
 
 export interface McpDeps {
   service: BusService;
@@ -31,6 +31,9 @@ const sessionArg = z
   .describe(
     'Your agent-bus session ID, e.g. "claude/agent-bus/3f2a", from register or startup context.',
   );
+
+/** A session's secret key (#65): `abk_` and 43 base64url characters. */
+const keyArg = z.string().max(64);
 
 /**
  * Who an item came from, in the structured result itself. Codex and VS Code
@@ -94,24 +97,36 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
           .describe('Repository or folder name; decides the Slack channel (#proj-<name>).'),
         branch: z.string().max(100).optional(),
         session: sessionArg.optional(),
+        key: keyArg
+          .optional()
+          .describe(
+            "With `session`: the session's current secret key, to get a new one. Leave out otherwise.",
+          ),
       },
     },
-    async ({ purpose, project, branch, session }) =>
+    async ({ purpose, project, branch, session, key }) =>
       run(() => {
-        const result = service.register({ platform, purpose, project, branch, session });
+        const result = service.register({ platform, purpose, project, branch, session, key });
+        const keyText = result.key
+          ? ` Your secret session key is ${result.key}: pass it as \`key\` to agent-bus tools ` +
+            'that ask for one, and never post, share or write it anywhere else. It replaces any earlier key.'
+          : '';
         return {
           content: [
             {
               type: 'text',
               text:
                 `Registered as ${result.session.id} (Slack #${result.session.channel}). ` +
-                'Pass this as `session` to notify_human.',
+                `Pass this as \`session\` to notify_human.${keyText}`,
             },
           ],
           structuredContent: {
             session: result.session.id,
             channel: result.session.channel,
-            next: 'Pass this as `session` to every agent-bus tool.',
+            ...(result.key ? { key: result.key } : {}),
+            next: result.key
+              ? 'Pass `session` to every agent-bus tool, and `key` to those that ask for it. Keep the key secret.'
+              : 'Pass this as `session` to every agent-bus tool.',
           },
         };
       }),

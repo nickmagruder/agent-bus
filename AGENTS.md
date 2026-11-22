@@ -91,6 +91,7 @@ into tracked files.
 - `src/broker/held-calls.ts`: held `ask_human`/`wait_for_reply` calls, so a cancel (or broker stop) can end them
 - `src/broker/heartbeat.ts`: progress notifications for long tool calls
 - `src/shared/guard.ts`: Host/Origin/per-platform bearer checks
+- `src/shared/session-key.ts`: per-session secret keys (mint, hash, constant-time match; #65)
 - `src/shared/config.ts`: zod-validated environment
 - `src/shared/slack-text.ts`: escaping and Markdown → Slack mrkdwn for agent text
 - `src/broker/log.ts`: JSON-lines logger and daily log files (`--log-to-file`)

@@ -1,5 +1,6 @@
 import { postStyle, type Platform } from '../shared/platform.ts';
 import { newSessionId, NO_PROJECT, projectSlug } from '../shared/session-id.ts';
+import { hashSessionKey, mintSessionKey, sessionKeyMatches } from '../shared/session-key.ts';
 import { escapeSlackText, toSlackMrkdwn } from '../shared/slack-text.ts';
 import { FALLBACK_CHANNEL } from './slack/directory.ts';
 import {
@@ -70,7 +71,13 @@ const HOUR_MS = 60 * 60_000;
 const SNIPPET_CHARS = 300;
 
 export type BusErrorCode =
-  'unknown_session' | 'wrong_platform' | 'rate_limited' | 'too_many_questions' | 'unknown_question';
+  | 'unknown_session'
+  | 'wrong_platform'
+  | 'missing_key'
+  | 'bad_key'
+  | 'rate_limited'
+  | 'too_many_questions'
+  | 'unknown_question';
 
 export interface AskInput {
   platform: Platform;
@@ -100,6 +107,19 @@ export interface RegisterInput {
   branch?: string | undefined;
   /** A bus ID minted earlier (by a hook, or a previous register call). */
   session?: string | undefined;
+  /**
+   * The session's current key. With `session`, a matching key gets a new
+   * one (the old stops working); without it, register still updates the
+   * purpose but hands out no key (#65).
+   */
+  key?: string | undefined;
+}
+
+export interface RegisterResult {
+  session: SessionRecord;
+  created: boolean;
+  /** A new secret key for the session, when one was issued. */
+  key?: string;
 }
 
 export interface NotifyInput {
@@ -354,7 +374,7 @@ export class BusService {
 
   // MCP tools
 
-  register(input: RegisterInput): { session: SessionRecord; created: boolean } {
+  register(input: RegisterInput): RegisterResult {
     if (input.session) return this.reregister(input, input.session);
 
     const created = this.store.countEvents({
@@ -377,10 +397,10 @@ export class BusService {
         source: 'mcp',
       });
       this.announce(record);
-      return record;
+      return { record, key: this.issueKey(record, 'register') };
     });
     this.queue.kick();
-    return { session: this.reload(session.id), created: true };
+    return { session: this.reload(session.record.id), created: true, key: session.key };
   }
 
   notify(input: NotifyInput): { route: Route } {
@@ -492,14 +512,14 @@ export class BusService {
     switch (input.event) {
       case 'SessionStart':
         action = 'context';
-        context = sessionContext(session);
+        context = sessionContext(session, this.issueKey(session, 'hook'));
         break;
       case 'UserPromptSubmit':
         // The sign-in race: SessionStart ran before the broker was up, so the
         // agent never got its bus ID. Hand it over on the first prompt instead.
         if (!this.contextDelivered(session)) {
           action = 'context';
-          context = sessionContext(session);
+          context = sessionContext(session, this.issueKey(session, 'hook'));
         }
         break;
       case 'PermissionRequest':
@@ -927,13 +947,15 @@ export class BusService {
     });
   }
 
-  private reregister(
-    input: RegisterInput,
-    id: string,
-  ): { session: SessionRecord; created: boolean } {
-    const session = this.ownedSession(input.platform, id, 'register');
+  private reregister(input: RegisterInput, id: string): RegisterResult {
+    // A wrong key is refused before anything changes; no key at all is the
+    // Phase 1-2 call (#66 makes it required later).
+    const session =
+      input.key === undefined
+        ? this.ownedSession(input.platform, id, 'register')
+        : this.keyedSession(input.platform, id, input.key, 'register');
     const purposeChanged = input.purpose !== session.purpose;
-    this.store.transaction(() => {
+    const key = this.store.transaction(() => {
       this.store.touchSession(id, {
         purpose: input.purpose,
         ...(input.branch ? { branch: input.branch } : {}),
@@ -951,9 +973,81 @@ export class BusService {
       } else if (purposeChanged) {
         this.postInThread(updated, `*Purpose:* ${toSlackMrkdwn(input.purpose)}`);
       }
+      return input.key === undefined ? undefined : this.issueKey(updated, 'register');
     });
     this.queue.kick();
-    return { session: this.reload(id), created: false };
+    return { session: this.reload(id), created: false, ...(key ? { key } : {}) };
+  }
+
+  /**
+   * A session the caller may act on, proven by its key as well as the
+   * platform token (#65): without the key, any session of the same platform
+   * could act as another. For the Phase 3 task and lease tools; Phase 1-2
+   * tools adopt it in #66. A missing or wrong key is refused and audited,
+   * and the key itself is never written anywhere.
+   */
+  requireKeyedSession(
+    platform: Platform,
+    id: string,
+    key: string | undefined,
+    action: string,
+  ): SessionRecord {
+    const session = this.keyedSession(platform, id, key, action);
+    this.store.touchSession(session.id);
+    return session;
+  }
+
+  private keyedSession(
+    platform: Platform,
+    id: string,
+    key: string | undefined,
+    action: string,
+  ): SessionRecord {
+    const session = this.store.getSession(id);
+    if (!session) {
+      this.deny(platform, null, 'unknown_session', action, id);
+      throw new BusError(
+        'unknown_session',
+        `Unknown session "${id}". Call register without a session to get one.`,
+      );
+    }
+    if (session.platform !== platform) {
+      this.deny(platform, null, 'wrong_platform', action, id);
+      throw new BusError('wrong_platform', `Session "${id}" belongs to another platform.`);
+    }
+    if (!key) {
+      this.deny(platform, null, 'missing_key', action, id);
+      throw new BusError(
+        'missing_key',
+        "This tool needs your session key: pass it as `key`. It's in your startup context; " +
+          'if you lost it, call register without a session to start a new one.',
+      );
+    }
+    const stored = this.store.sessionKeyHash(id);
+    if (!stored || !sessionKeyMatches(key, stored)) {
+      this.deny(platform, null, 'bad_key', action, id);
+      throw new BusError(
+        'bad_key',
+        `That isn't the current key for session "${id}". Use the newest key your context ` +
+          'gave you (each new one replaces the last); if you have none, call register without a session.',
+      );
+    }
+    return this.ownedSession(platform, id, action);
+  }
+
+  /** Gives a session a new key, replacing any earlier one; returns the key (#65). */
+  private issueKey(session: SessionRecord, source: 'register' | 'hook'): string {
+    const key = mintSessionKey();
+    this.store.transaction(() => {
+      this.store.setSessionKeyHash(session.id, hashSessionKey(key));
+      this.store.appendEvent({
+        kind: 'session.key_issued',
+        platform: session.platform,
+        sessionId: session.id,
+        data: { source },
+      });
+    });
+    return key;
   }
 
   /** A session the calling platform may act on (for tools outside this class, e.g. check_inbox). */
@@ -1023,11 +1117,13 @@ export function urgentText(session: SessionRecord, mrkdwn: string): string {
   return `:rotating_light: \`${session.id}\` needs you\n${mrkdwn}`;
 }
 
-export function sessionContext(session: SessionRecord): string {
+export function sessionContext(session: SessionRecord, key: string): string {
   return (
     `agent-bus: this session's bus ID is ${session.id}. ` +
     'Pass it as `session` to the agent-bus MCP tools ' +
-    '(register, notify_human, ask_human, wait_for_reply, check_inbox).'
+    '(register, notify_human, ask_human, wait_for_reply, check_inbox). ' +
+    `Its secret key is ${key}: pass it as \`key\` to agent-bus tools that ask for one. ` +
+    'Never post, share or write the key anywhere else; a newer key replaces this one.'
   );
 }
 
