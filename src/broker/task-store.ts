@@ -26,7 +26,10 @@ export interface TaskRecord {
   /** A2A `contextId`: the root task's ID, shared by a task and its sub-task. */
   contextId: string;
   parentId: string | null;
-  /** 0 for a task, 1 for its sub-task (D5 caps it). */
+  /**
+   * 0 for a task, 1 for its sub-task. The store records any depth; the hop
+   * limit (D5) and loop refusal (Q18) are create_task's rules (#59).
+   */
   hops: number;
   createdBy: string;
   title: string;
@@ -81,8 +84,27 @@ export interface TaskMove {
   by: TaskActor;
   /** The claiming session, for submitted → working. */
   holder?: string;
+  /**
+   * For moves out of working or input-required: the holder the caller read.
+   * Checked in the same statement as the state, so a holder whose task was
+   * released and claimed by another can't close it with a late call (ABA).
+   */
+  expectedHolder?: string;
   statusMessage?: string | null;
   result?: TaskResult | null;
+}
+
+/** States that have a holder: moves out of them check it (TaskMove.expectedHolder). */
+const HELD_STATES: ReadonlySet<TaskState> = new Set(['working', 'input-required']);
+
+/**
+ * What a move does to the holder: a claim sets it, a release (back to
+ * submitted) clears it, anything else keeps it (undefined).
+ */
+function holderAfter(move: TaskMove): string | null | undefined {
+  if (move.to === 'submitted') return null;
+  if (move.from === 'submitted' && move.to === 'working') return move.holder ?? null;
+  return undefined;
 }
 
 export type TaskMessageSender = 'agent' | 'human';
@@ -184,23 +206,24 @@ export class TaskStore {
   /**
    * Moves a task from `from` to `to` if it's still in `from` (compare and
    * swap); returns the updated task, or undefined when another change got
-   * there first. Claiming sets the holder, a release clears it, and a final
-   * state stamps `closedAt`. Throws TaskMoveError for a move that's never
-   * allowed. Audited as `task.state`.
+   * there first. The same statement also checks:
+   * - a claim (submitted → working): the task is approved (D2), and sets the holder;
+   * - a move out of working or input-required: the holder is still
+   *   `expectedHolder`, so a stale holder can't close a re-claimed task.
+   * A release (back to submitted) clears the holder; a final state stamps
+   * `closedAt` and clears the stuck and waiting flags. Throws TaskMoveError
+   * for a move that's never allowed. Audited as `task.state`.
    */
   moveTask(id: string, move: TaskMove): TaskRecord | undefined {
     if (!canMoveTask(move.from, move.to)) throw new TaskMoveError(move.from, move.to);
-    if (move.from === 'submitted' && move.to === 'working' && !move.holder) {
-      throw new Error('Claiming a task needs the holder');
+    const claim = move.from === 'submitted' && move.to === 'working';
+    if (claim && !move.holder) throw new Error('Claiming a task needs the holder');
+    if (HELD_STATES.has(move.from) && !move.expectedHolder) {
+      throw new Error(`Moving a task out of ${move.from} needs the holder it expects`);
     }
     return this.store.transaction(() => {
       const at = this.timestamp();
-      const holder =
-        move.to === 'submitted'
-          ? null
-          : move.from === 'submitted'
-            ? (move.holder ?? null)
-            : undefined;
+      const holder = holderAfter(move);
       const sets = ['state = ?', 'updated_at = ?'];
       const values: (string | null)[] = [move.to, at];
       if (holder !== undefined) {
@@ -219,13 +242,25 @@ export class TaskStore {
         sets.push('closed_at = ?');
         values.push(at);
       }
-      if (move.to === 'submitted' || move.from === 'submitted') {
-        // A release or a claim starts the stuck and waiting clocks over.
+      if (
+        move.to === 'submitted' ||
+        move.from === 'submitted' ||
+        TERMINAL_TASK_STATES.has(move.to)
+      ) {
+        // A claim or release starts the stuck and waiting clocks over; a
+        // closed task is neither.
         sets.push('stuck_at = NULL', 'waiting_at = NULL');
       }
+      const where = ['id = ?', 'state = ?'];
+      const whereValues: string[] = [id, move.from];
+      if (claim) where.push("approval = 'approved'");
+      if (HELD_STATES.has(move.from)) {
+        where.push('holder = ?');
+        whereValues.push(move.expectedHolder ?? '');
+      }
       const changed = this.store.db
-        .prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ? AND state = ?`)
-        .run(...values, id, move.from).changes;
+        .prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE ${where.join(' AND ')}`)
+        .run(...values, ...whereValues).changes;
       if (changed === 0) return undefined;
       this.store.appendEvent({
         kind: 'task.state',
@@ -237,9 +272,11 @@ export class TaskStore {
   }
 
   /**
-   * Moves a pending approval to approved, canceled or expired (compare and
-   * swap on `pending`); undefined when it was already decided. Audited as
-   * `task.approval`.
+   * Decides a pending approval (compare and swap on `pending` and on the task
+   * still being submitted); undefined when it was already decided or the task
+   * moved on. Canceling or expiring the approval cancels the task in the same
+   * transaction, so a refused task can never look claimable. Audited as
+   * `task.approval` (and `task.state` when the task is canceled).
    */
   decideApproval(
     id: string,
@@ -248,27 +285,55 @@ export class TaskStore {
   ): TaskRecord | undefined {
     return this.store.transaction(() => {
       const at = this.timestamp();
+      const approved = to === 'approved';
       const changed = this.store.db
         .prepare(
-          `UPDATE tasks SET approval = ?, approved_at = ?, updated_at = ?
-           WHERE id = ? AND approval = 'pending'`,
+          `UPDATE tasks SET approval = ?, approved_at = ?, updated_at = ?,
+             state = ?, closed_at = ?, stuck_at = NULL, waiting_at = NULL
+           WHERE id = ? AND approval = 'pending' AND state = 'submitted'`,
         )
-        .run(to, to === 'approved' ? at : null, at, id).changes;
+        .run(
+          to,
+          approved ? at : null,
+          at,
+          approved ? 'submitted' : 'canceled',
+          approved ? null : at,
+          id,
+        ).changes;
       if (changed === 0) return undefined;
+      const sessionId = isSession(by) ? by : null;
       this.store.appendEvent({
         kind: 'task.approval',
-        sessionId: isSession(by) ? by : null,
+        sessionId,
         data: { task: id, from: 'pending', to, by },
       });
+      if (!approved) {
+        this.store.appendEvent({
+          kind: 'task.state',
+          sessionId,
+          data: { task: id, from: 'submitted', to: 'canceled', by },
+        });
+      }
       return found(this.getTask(id), id);
     });
   }
 
-  /** Adds a message to a task's discussion; audited as `task.message` (without the body). */
+  /**
+   * Adds a message to a task's discussion; audited as `task.message`
+   * (without the body). One of my Slack messages is stored once: a Slack
+   * retry of the same channel and ts returns the stored message and changes
+   * nothing.
+   */
   addTaskMessage(message: NewTaskMessage): TaskMessageRecord {
     return this.store.transaction(() => {
       const at = this.timestamp();
       const human = message.sender === 'human';
+      if (human) {
+        const existing = this.store.db
+          .prepare('SELECT * FROM task_messages WHERE slack_channel_id = ? AND slack_ts = ?')
+          .get(message.slackChannelId, message.slackTs) as Row | undefined;
+        if (existing) return toTaskMessage(existing);
+      }
       const result = this.store.db
         .prepare(
           `INSERT INTO task_messages

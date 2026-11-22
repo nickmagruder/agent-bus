@@ -433,7 +433,9 @@ are made.
   waiting flags), `task_messages` (agent or me, never both), `task_inbox`
   pointers and `leases`. No tools use them yet (#58 onward).
 - Task state changes are compare-and-swap, so of two racing claims one
-  wins; impossible moves are refused, and every change is audited without
+  wins; a claim needs my approval, a late call from a former holder can't
+  close a re-claimed task, and a canceled or expired approval cancels the
+  task. Impossible moves are refused, and every change is audited without
   message bodies.
 - Task states are short lowercase names mapped to the A2A v1.0
   `TASK_STATE_*` enums in one place (D8, settled).

@@ -254,12 +254,29 @@ Migration 8 adds four tables; the store API is
 - **`leases`:** one row per repo, holder, `hook` or `tool` source (Q22) and
   times. Agent cards stay the `sessions` table (Q6).
 
-Every state or approval change is a compare-and-swap (`moveTask`,
-`decideApproval`), so of two racing claims exactly one wins; moves outside
-`TASK_TRANSITIONS` throw, and each change is audited (`task.created`,
-`task.state`, `task.approval`, `task.message`, never a body) in the same
-transaction. Who may make which move is #59's; inbox pointers' API is #60's
-and leases' is #31's.
+Every state or approval change is a compare-and-swap in one statement
+(`moveTask`, `decideApproval`), audited in the same transaction
+(`task.created`, `task.state`, `task.approval`, `task.message`, never a
+body). Fixed after the [#84](https://github.com/nickmagruder/agent-bus/pull/84) review:
+
+- **A claim needs my approval:** the swap checks `approval = 'approved'`, so
+  an unapproved task can't be claimed between a check and the claim.
+- **Moves out of `working` / `input-required` check the holder** the caller
+  read, so a holder whose task was released and re-claimed can't close it
+  late (ABA).
+- **Canceling or expiring an approval cancels the task** in the same
+  transaction; approving needs the task still `submitted`.
+- **Slack retries are no-ops:** a second insert of my message (same channel
+  and ts) returns the stored one.
+- `input-required` can be released too (Q8); it finishes only through
+  `working`. Moves outside `TASK_TRANSITIONS` throw.
+- Schema: `result` must be valid JSON, an inbox pointer's message must
+  belong to the same task, and indexes for sub-tasks and pending approvals.
+
+Left to the tools on purpose: who may make which move, the hop limit and
+loop refusal (#59); setters for a note without a state change,
+`holder_seen_at`, the stuck and waiting flags, and the approval post and
+thread (#59–#61); the inbox-pointer API (#60) and the lease API (#31).
 
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 

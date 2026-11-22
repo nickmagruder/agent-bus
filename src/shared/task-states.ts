@@ -49,12 +49,15 @@ export const A2A_TASK_STATE = {
  * - submitted: claimed (working), declined (rejected) or canceled.
  * - working: asks back (input-required), finishes, fails, is canceled, or is
  *   released by me when stuck (back to submitted, grilling Q8).
- * - input-required: answered (working), failed or canceled.
+ * - input-required: answered (working), failed, canceled, or released when
+ *   stuck (Q8 offers Cancel and Release whatever the holder is waiting on).
+ *   It can't finish straight from here: the answer puts it back to working
+ *   first, so "completed" always follows work.
  */
 export const TASK_TRANSITIONS: Readonly<Record<TaskState, readonly TaskState[]>> = {
   submitted: ['working', 'rejected', 'canceled'],
   working: ['input-required', 'completed', 'failed', 'canceled', 'submitted'],
-  'input-required': ['working', 'failed', 'canceled'],
+  'input-required': ['working', 'failed', 'canceled', 'submitted'],
   completed: [],
   failed: [],
   canceled: [],

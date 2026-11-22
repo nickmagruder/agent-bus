@@ -165,7 +165,7 @@ export const MIGRATIONS: readonly string[] = [
     state TEXT NOT NULL DEFAULT 'submitted' CHECK (state IN
       ('submitted', 'working', 'input-required', 'completed', 'failed', 'canceled', 'rejected')),
     status_message TEXT,
-    result TEXT,
+    result TEXT CHECK (result IS NULL OR json_valid(result)),
     approval TEXT NOT NULL DEFAULT 'pending'
       CHECK (approval IN ('pending', 'approved', 'canceled', 'expired')),
     approval_expires_at TEXT NOT NULL,
@@ -186,6 +186,8 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX tasks_by_holder ON tasks (holder, state);
   CREATE INDEX tasks_by_context ON tasks (context_id);
   CREATE INDEX tasks_by_thread ON tasks (slack_channel_id, thread_ts);
+  CREATE INDEX tasks_by_parent ON tasks (parent_id);
+  CREATE INDEX tasks_pending_approval ON tasks (approval_expires_at) WHERE approval = 'pending';
 
   CREATE TABLE task_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -200,7 +202,8 @@ export const MIGRATIONS: readonly string[] = [
     created_at TEXT NOT NULL,
     CHECK ((sender = 'agent' AND from_session IS NOT NULL AND slack_user IS NULL)
         OR (sender = 'human' AND from_session IS NULL AND slack_user IS NOT NULL)),
-    UNIQUE (slack_channel_id, slack_ts)
+    UNIQUE (slack_channel_id, slack_ts),
+    UNIQUE (id, task_id)
   );
   CREATE INDEX task_messages_by_task ON task_messages (task_id, id);
 
@@ -216,7 +219,8 @@ export const MIGRATIONS: readonly string[] = [
     delivered_at TEXT,
     delivered_via TEXT,
     CHECK ((kind = 'message') = (message_id IS NOT NULL)),
-    CHECK ((kind = 'notice') = (notice IS NOT NULL))
+    CHECK ((kind = 'notice') = (notice IS NOT NULL)),
+    FOREIGN KEY (message_id, task_id) REFERENCES task_messages (id, task_id)
   );
   CREATE INDEX task_inbox_undelivered ON task_inbox (session_id, delivered_at, id);
 

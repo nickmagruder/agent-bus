@@ -60,6 +60,14 @@ function newTask(overrides: Partial<NewTask> = {}): TaskRecord {
   });
 }
 
+/** A task I've approved, so it can be claimed (D2). */
+function approvedTask(overrides: Partial<NewTask> = {}): TaskRecord {
+  const task = newTask(overrides);
+  const approved = tasks.decideApproval(task.id, 'approved', ACTOR.nick);
+  if (!approved) throw new Error('approval failed');
+  return approved;
+}
+
 function events(kind: string): { session_id: string | null; data: Record<string, unknown> }[] {
   const rows = store.db
     .prepare('SELECT session_id, data FROM events WHERE kind = ? ORDER BY id')
@@ -159,8 +167,8 @@ describe('insertTask', () => {
 });
 
 describe('moveTask', () => {
-  it('claims a submitted task for its holder', () => {
-    const task = newTask();
+  it('claims an approved, submitted task for its holder', () => {
+    const task = approvedTask();
     now = new Date('2026-11-22T20:05:00Z');
     const claimed = tasks.moveTask(task.id, {
       from: 'submitted',
@@ -180,7 +188,7 @@ describe('moveTask', () => {
   });
 
   it('lets only one of two racing claims win (compare and swap)', () => {
-    const task = newTask({ targetSession: null });
+    const task = approvedTask({ targetSession: null });
     const first = tasks.moveTask(task.id, {
       from: 'submitted',
       to: 'working',
@@ -207,19 +215,27 @@ describe('moveTask', () => {
   });
 
   it('stores the note and result, and closes the task on a final state', () => {
-    const task = newTask();
+    const task = approvedTask();
     tasks.moveTask(task.id, { from: 'submitted', to: 'working', by: CODEX, holder: CODEX });
     tasks.moveTask(task.id, {
       from: 'working',
       to: 'input-required',
       by: CODEX,
+      expectedHolder: CODEX,
       statusMessage: 'Which branch?',
     });
-    tasks.moveTask(task.id, { from: 'input-required', to: 'working', by: CODEX });
+    tasks.moveTask(task.id, {
+      from: 'input-required',
+      to: 'working',
+      by: CODEX,
+      expectedHolder: CODEX,
+    });
+    store.db.prepare('UPDATE tasks SET stuck_at = ? WHERE id = ?').run(now.toISOString(), task.id);
     const done = tasks.moveTask(task.id, {
       from: 'working',
       to: 'completed',
       by: CODEX,
+      expectedHolder: CODEX,
       statusMessage: 'Opened the PR',
       result: { text: 'Done', links: ['https://github.com/o/r/pull/1'] },
     });
@@ -229,6 +245,8 @@ describe('moveTask', () => {
       statusMessage: 'Opened the PR',
       result: { text: 'Done', links: ['https://github.com/o/r/pull/1'] },
       closedAt: now.toISOString(),
+      stuckAt: null,
+      waitingAt: null,
     });
     expect(events('task.state').map((e) => `${String(e.data.from)}>${String(e.data.to)}`)).toEqual([
       'submitted>working',
@@ -239,10 +257,15 @@ describe('moveTask', () => {
   });
 
   it('releases a stuck task back to submitted, clearing the holder and flags', () => {
-    const task = newTask();
+    const task = approvedTask();
     tasks.moveTask(task.id, { from: 'submitted', to: 'working', by: CODEX, holder: CODEX });
     store.db.prepare('UPDATE tasks SET stuck_at = ? WHERE id = ?').run(now.toISOString(), task.id);
-    const released = tasks.moveTask(task.id, { from: 'working', to: 'submitted', by: ACTOR.nick });
+    const released = tasks.moveTask(task.id, {
+      from: 'working',
+      to: 'submitted',
+      by: ACTOR.nick,
+      expectedHolder: CODEX,
+    });
     expect(released).toMatchObject({
       state: 'submitted',
       holder: null,
@@ -253,6 +276,69 @@ describe('moveTask', () => {
       session_id: null,
       data: { task: task.id, from: 'working', to: 'submitted', by: 'nick' },
     });
+  });
+
+  it("won't let anyone claim a task I haven't approved", () => {
+    const pending = newTask();
+    const claim = { from: 'submitted', to: 'working', by: CODEX, holder: CODEX } as const;
+    expect(tasks.moveTask(pending.id, claim)).toBeUndefined();
+    expect(tasks.getTask(pending.id)).toMatchObject({ state: 'submitted', holder: null });
+    const expired = newTask();
+    tasks.decideApproval(expired.id, 'expired', ACTOR.broker);
+    expect(tasks.moveTask(expired.id, claim)).toBeUndefined();
+    expect(events('task.state').map((e) => e.data.to)).toEqual(['canceled']);
+  });
+
+  it("doesn't let a former holder close a task someone else now holds (ABA)", () => {
+    const task = approvedTask({ targetSession: null });
+    tasks.moveTask(task.id, { from: 'submitted', to: 'working', by: CODEX, holder: CODEX });
+    tasks.moveTask(task.id, {
+      from: 'working',
+      to: 'submitted',
+      by: ACTOR.nick,
+      expectedHolder: CODEX,
+    });
+    tasks.moveTask(task.id, { from: 'submitted', to: 'working', by: CODEX_2, holder: CODEX_2 });
+    const late = tasks.moveTask(task.id, {
+      from: 'working',
+      to: 'completed',
+      by: CODEX,
+      expectedHolder: CODEX,
+      result: { text: 'stale', links: [] },
+    });
+    expect(late).toBeUndefined();
+    expect(tasks.getTask(task.id)).toMatchObject({
+      state: 'working',
+      holder: CODEX_2,
+      result: null,
+    });
+  });
+
+  it('needs the expected holder for any move out of working or input-required', () => {
+    const task = approvedTask();
+    tasks.moveTask(task.id, { from: 'submitted', to: 'working', by: CODEX, holder: CODEX });
+    expect(() => tasks.moveTask(task.id, { from: 'working', to: 'canceled', by: CLAUDE })).toThrow(
+      'needs the holder it expects',
+    );
+    expect(tasks.getTask(task.id)?.state).toBe('working');
+  });
+
+  it('releases a task stuck waiting for input, too (Q8)', () => {
+    const task = approvedTask();
+    tasks.moveTask(task.id, { from: 'submitted', to: 'working', by: CODEX, holder: CODEX });
+    tasks.moveTask(task.id, {
+      from: 'working',
+      to: 'input-required',
+      by: CODEX,
+      expectedHolder: CODEX,
+    });
+    const released = tasks.moveTask(task.id, {
+      from: 'input-required',
+      to: 'submitted',
+      by: ACTOR.nick,
+      expectedHolder: CODEX,
+    });
+    expect(released).toMatchObject({ state: 'submitted', holder: null });
   });
 
   it('records the broker or me as the actor without a session', () => {
@@ -309,12 +395,29 @@ describe('decideApproval', () => {
     ]);
   });
 
-  it('expires or cancels without an approval time', () => {
+  it('expires or cancels the task with its approval, in one transaction', () => {
     const expired = tasks.decideApproval(newTask().id, 'expired', ACTOR.broker);
-    expect(expired).toMatchObject({ approval: 'expired', approvedAt: null });
+    expect(expired).toMatchObject({
+      approval: 'expired',
+      approvedAt: null,
+      state: 'canceled',
+      closedAt: now.toISOString(),
+    });
     const canceled = tasks.decideApproval(newTask().id, 'canceled', CLAUDE);
-    expect(canceled?.approval).toBe('canceled');
+    expect(canceled).toMatchObject({ approval: 'canceled', state: 'canceled' });
     expect(events('task.approval').at(-1)?.session_id).toBe(CLAUDE);
+    expect(events('task.state').map((e) => [e.data.from, e.data.to, e.data.by])).toEqual([
+      ['submitted', 'canceled', 'agent-bus'],
+      ['submitted', 'canceled', CLAUDE],
+    ]);
+  });
+
+  it("won't approve a task that has already ended", () => {
+    const task = newTask();
+    tasks.moveTask(task.id, { from: 'submitted', to: 'canceled', by: CLAUDE });
+    expect(tasks.decideApproval(task.id, 'approved', ACTOR.nick)).toBeUndefined();
+    expect(tasks.getTask(task.id)).toMatchObject({ approval: 'pending', state: 'canceled' });
+    expect(events('task.approval')).toEqual([]);
   });
 });
 
@@ -369,7 +472,7 @@ describe('task messages', () => {
     expect(() => insert('nick', null, 'U0123ABCD')).toThrow();
   });
 
-  it('stores one of my Slack messages once, whatever Slack retries', () => {
+  it('stores one of my Slack messages once: a retry returns it and changes nothing', () => {
     const task = newTask();
     const mine = {
       taskId: task.id,
@@ -380,9 +483,11 @@ describe('task messages', () => {
       slackChannelId: 'C1',
       slackTs: '1800000000.000200',
     };
-    tasks.addTaskMessage(mine);
-    expect(() => tasks.addTaskMessage(mine)).toThrow();
+    const first = tasks.addTaskMessage(mine);
+    const retry = tasks.addTaskMessage({ ...mine, body: 'different text, same Slack message' });
+    expect(retry).toEqual(first);
     expect(tasks.taskMessages(task.id)).toHaveLength(1);
+    expect(events('task.message')).toHaveLength(1);
   });
 });
 
@@ -410,6 +515,33 @@ describe('task inbox and leases schema', () => {
     expect(() => insert('offer', message.id, null)).toThrow();
     expect(() => insert('notice', null, null)).toThrow();
     expect(() => insert('notice', null, 'Nick approved this')).toThrow();
+  });
+
+  it("can't point at another task's message", () => {
+    const task = newTask();
+    const other = newTask();
+    const message = tasks.addTaskMessage({
+      taskId: other.id,
+      sender: 'agent',
+      fromSession: CLAUDE,
+      role: 'user',
+      body: 'hi',
+    });
+    expect(() =>
+      store.db
+        .prepare(
+          `INSERT INTO task_inbox (session_id, task_id, kind, message_id, created_at)
+           VALUES (?, ?, 'message', ?, '2026-11-22T20:00:00Z')`,
+        )
+        .run(CODEX, task.id, message.id),
+    ).toThrow();
+  });
+
+  it('stores only valid JSON as a result', () => {
+    const task = newTask();
+    expect(() =>
+      store.db.prepare("UPDATE tasks SET result = '{not json' WHERE id = ?").run(task.id),
+    ).toThrow();
   });
 
   it('keeps one lease per repo', () => {
