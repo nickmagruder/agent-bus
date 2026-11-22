@@ -99,7 +99,7 @@ into tracked files.
 - `scripts/mcp-call.ts`: calls one agent-bus tool with a platform token (live tests, manual checks)
 - `.husky/`: pre-commit (lint-staged, then `scripts/gitleaks-staged.sh`) and commit-msg (`scripts/commit-msg.ts`, rules in `scripts/commit-msg-rules.ts`) hooks
 - `.github/workflows/`: `ci.yml` (the required `check` job: typecheck, lint, knip, change guards, markdownlint, Prettier, tests with coverage, secret scan), `codeql.yml`, `scorecard.yml`, `dependency-review.yml` (fails PRs adding a high advisory), `dependabot-auto-merge.yml` (devDependency patches only, after its own dependency review); actions pinned by SHA
-- `scripts/change-guards.ts` (rules in `scripts/change-guards-rules.ts`, tests in `tests/scripts/`): CI check for weakened tests, suppressions and PR size
+- `scripts/change-guards.ts` (rules in `scripts/change-guards-rules.ts`, tests in `tests/scripts/`): CI check for weakened tests, suppressions and PR size. Copies of clankers `templates/change-guards/` (the test differs only in its import path): change the rules there and re-sync; this repo's settings live in `scripts/change-guards.config.ts`
 - `knip.json`: unused files, exports and dependencies (`ignoreExportsUsedInFile`; husky runs `scripts/commit-msg.ts`)
 - `.github/copilot-instructions.md`, `.github/instructions/security.instructions.md`, `.github/skills/code-review/`: Copilot PR review
 - `.github/ISSUE_TEMPLATE/`, `.github/pull_request_template.md`: issue forms and PR template

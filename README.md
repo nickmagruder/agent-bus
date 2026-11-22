@@ -414,6 +414,10 @@ are made.
 
 ### 0.12.8 (2026-11-22)
 
+- **Change guards synced from clankers** (clankers#40): the scripts are now
+  copies of the canonical version in
+  [clankers `templates/change-guards/`](https://github.com/nickmagruder/clankers/tree/main/templates/change-guards), with this repo's test
+  folders in `scripts/change-guards.config.ts`.
 - **Agent-dev checklist** ([#75](https://github.com/nickmagruder/agent-bus/issues/75)): lint fails on
   warnings and adds type-aware promise rules; `npm run knip` checks unused
   files, exports and dependencies; CI change guards fail on focused or
