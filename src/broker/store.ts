@@ -146,6 +146,90 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE sessions ADD COLUMN key_hash TEXT;
   ALTER TABLE sessions ADD COLUMN key_issued_at TEXT;
   `,
+  // v8: Phase 3 records (#57), in minimal A2A v1.0 shapes. Tasks are the
+  // record; task_inbox only points at them (grilling Q12). Agent cards are
+  // the sessions table itself (Q6). See src/broker/task-store.ts.
+  `
+  CREATE TABLE tasks (
+    id TEXT PRIMARY KEY,
+    context_id TEXT NOT NULL,
+    parent_id TEXT REFERENCES tasks (id),
+    hops INTEGER NOT NULL DEFAULT 0 CHECK (hops >= 0),
+    created_by TEXT NOT NULL REFERENCES sessions (id),
+    title TEXT NOT NULL,
+    brief TEXT NOT NULL,
+    target_session TEXT REFERENCES sessions (id),
+    target_platform TEXT NOT NULL,
+    target_project TEXT NOT NULL,
+    holder TEXT REFERENCES sessions (id),
+    state TEXT NOT NULL DEFAULT 'submitted' CHECK (state IN
+      ('submitted', 'working', 'input-required', 'completed', 'failed', 'canceled', 'rejected')),
+    status_message TEXT,
+    result TEXT,
+    approval TEXT NOT NULL DEFAULT 'pending'
+      CHECK (approval IN ('pending', 'approved', 'canceled', 'expired')),
+    approval_expires_at TEXT NOT NULL,
+    approved_at TEXT,
+    approval_post_id INTEGER REFERENCES outbox (id),
+    slack_channel_id TEXT,
+    thread_ts TEXT,
+    holder_seen_at TEXT,
+    stuck_at TEXT,
+    waiting_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    closed_at TEXT
+  );
+  CREATE INDEX tasks_by_target ON tasks (target_session, state);
+  CREATE INDEX tasks_by_pool ON tasks (target_platform, target_project, state);
+  CREATE INDEX tasks_by_creator ON tasks (created_by, created_at);
+  CREATE INDEX tasks_by_holder ON tasks (holder, state);
+  CREATE INDEX tasks_by_context ON tasks (context_id);
+  CREATE INDEX tasks_by_thread ON tasks (slack_channel_id, thread_ts);
+
+  CREATE TABLE task_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL REFERENCES tasks (id),
+    sender TEXT NOT NULL CHECK (sender IN ('agent', 'human')),
+    from_session TEXT REFERENCES sessions (id),
+    slack_user TEXT,
+    role TEXT NOT NULL CHECK (role IN ('user', 'agent')),
+    body TEXT NOT NULL,
+    slack_channel_id TEXT,
+    slack_ts TEXT,
+    created_at TEXT NOT NULL,
+    CHECK ((sender = 'agent' AND from_session IS NOT NULL AND slack_user IS NULL)
+        OR (sender = 'human' AND from_session IS NULL AND slack_user IS NOT NULL)),
+    UNIQUE (slack_channel_id, slack_ts)
+  );
+  CREATE INDEX task_messages_by_task ON task_messages (task_id, id);
+
+  CREATE TABLE task_inbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions (id),
+    task_id TEXT NOT NULL REFERENCES tasks (id),
+    kind TEXT NOT NULL CHECK (kind IN ('offer', 'message', 'notice')),
+    message_id INTEGER REFERENCES task_messages (id),
+    notice TEXT CHECK (notice IN
+      ('approved', 'canceled', 'input-required', 'completed', 'failed', 'rejected')),
+    created_at TEXT NOT NULL,
+    delivered_at TEXT,
+    delivered_via TEXT,
+    CHECK ((kind = 'message') = (message_id IS NOT NULL)),
+    CHECK ((kind = 'notice') = (notice IS NOT NULL))
+  );
+  CREATE INDEX task_inbox_undelivered ON task_inbox (session_id, delivered_at, id);
+
+  CREATE TABLE leases (
+    repo TEXT PRIMARY KEY,
+    holder TEXT NOT NULL REFERENCES sessions (id),
+    source TEXT NOT NULL CHECK (source IN ('hook', 'tool')),
+    claimed_at TEXT NOT NULL,
+    renewed_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  );
+  CREATE INDEX leases_by_holder ON leases (holder);
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

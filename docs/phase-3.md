@@ -113,14 +113,15 @@ Settled 2026-11-19 (asked one by one; all as recommended).
 | D6  | Leases (#31) in this phase?                         | **Yes.**                                                                                                                                                                                                                                                    |
 | D7  | Can Copilot sessions receive tasks?                 | **Yes, as a pool.** _Amended 2026-11-19 (grilling Q13):_ only as "any Copilot session in project Y" (its session IDs change on restart); a task waits until one checks its inbox; `register` warns on an unknown project; waiting tasks show in the digest. |
 
-**D8 (open, from #56):** which spelling task states use. Recommended:
-v1.0 meaning with v0.3-style spelling: short lowercase names in the tools
-and records (`submitted`, `input-required`, `canceled`, …), which agents
-read and type easily, and the `TASK_STATE_*` enums only on an A2A endpoint
-(Phase 5). The mapping lives in one place in code, with a test that every
-v1.0 state except `TASK_STATE_UNSPECIFIED` has exactly one internal name, so
-Phase 5 isn't a rename. The alternative is `TASK_STATE_*` everywhere now.
-Either way, #57 updates this file and [design.md](design.md) in the same PR.
+**D8 (settled 2026-11-21, Nick; built in #57):** task states use the v1.0
+meaning with v0.3-style spelling: short lowercase names in the tools and
+records (`submitted`, `input-required`, `canceled`, …), which agents read
+and type easily, and the `TASK_STATE_*` enums only on an A2A endpoint
+(Phase 5). The mapping lives in one place,
+[`src/shared/task-states.ts`](../src/shared/task-states.ts), with a test that
+every v1.0 state except `TASK_STATE_UNSPECIFIED` has exactly one internal
+name (`auth-required` is mapped but never stored), so Phase 5 isn't a
+rename.
 
 ## Grilling outcomes (2026-11-19)
 
@@ -232,6 +233,34 @@ Known limits:
   until they register a new session; `register` with any key then gives
   `bad_key`.
 
+### Records ([#57](https://github.com/nickmagruder/agent-bus/issues/57), 0.14.0, 2026-11-22)
+
+Migration 8 adds four tables; the store API is
+[`src/broker/task-store.ts`](../src/broker/task-store.ts).
+
+- **`tasks`:** A2A `contextId` (the root task's ID, so a sub-task shares it),
+  parent and `hops`, creator, title and brief, a named `target_session` or
+  a pool (`target_platform` + `target_project`, always set), `holder`,
+  `state` (D8 names, checked), status message, result as JSON
+  `{text, links}` (one artifact, Q19), approval (`pending` / `approved` /
+  `canceled` / `expired`) with its 8 h expiry and post (Q15), the task's
+  Slack thread (Q16), and `holder_seen_at` / `stuck_at` / `waiting_at` for
+  the stuck (Q8) and unclaimed (Q23) flags.
+- **`task_messages`:** stamped sender, either an agent session or my Slack
+  user, never both (a check constraint), with the A2A role; my Slack
+  messages are unique by channel and ts, so retries are no-ops.
+- **`task_inbox`:** pointers only (Q12): an offer, a message (with its
+  message) or one of the fixed broker notices of D3, checked by constraint.
+- **`leases`:** one row per repo, holder, `hook` or `tool` source (Q22) and
+  times. Agent cards stay the `sessions` table (Q6).
+
+Every state or approval change is a compare-and-swap (`moveTask`,
+`decideApproval`), so of two racing claims exactly one wins; moves outside
+`TASK_TRANSITIONS` throw, and each change is audited (`task.created`,
+`task.state`, `task.approval`, `task.message`, never a body) in the same
+transaction. Who may make which move is #59's; inbox pointers' API is #60's
+and leases' is #31's.
+
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 
 Read from the A2A v1.0.0 specification and its "What's new in v1" and
@@ -251,7 +280,7 @@ What changes for the records ([#57](https://github.com/nickmagruder/agent-bus/is
   `TASK_STATE_REJECTED`, plus `TASK_STATE_AUTH_REQUIRED` and the zero
   value `TASK_STATE_UNSPECIFIED` (never a real state). The lowercase,
   hyphenated names in this plan (`input-required`) are the v0.3 spelling.
-  Which spelling the tools use is open: D8.
+  Which spelling the tools use: D8 (settled, short lowercase names).
 - **`auth-required`** is a v1.0 interrupted state for credentials needed
   mid-task. The bus never carries credentials or approvals, so it isn't
   used.
