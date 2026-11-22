@@ -1,9 +1,7 @@
 # Phase 2: I answer from Slack
 
-Status: **in progress** (2026-11-18): PR 1 (inbound Slack and inbox,
-[#7](https://github.com/nickmagruder/agent-bus/pull/7)) and PR 2 (questions,
-[#8](https://github.com/nickmagruder/agent-bus/pull/8)) merged and tested
-live with Slack (see Live results). Next: PR 3 (hooks).
+Status: **done** (2026-11-22): built, and checked live on Claude Code, Codex
+and Copilot ([#25](https://github.com/nickmagruder/agent-bus/issues/25); see Live results).
 
 Goal: an agent on any of the three apps can ask me a question and get my
 answer from Slack (buttons or free text), and anything I write in a
@@ -223,8 +221,10 @@ agent has lost it.
 Known limit: if a `/clear` or compaction `SessionStart` misses the broker
 (down or restarting), the broker can't know the agent lost its ID, so
 prompts stay quiet. The agent can still call `register` for a new ID.
-Context from `UserPromptSubmit` is not verified live on either app yet
-([#25](https://github.com/nickmagruder/agent-bus/issues/25)).
+Claude Code's `UserPromptSubmit` hook has returned the bus ID live (6 times
+in the audit log by 2026-11-22), but no run has checked that the agent used
+it, and Codex hasn't triggered it yet
+([#82](https://github.com/nickmagruder/agent-bus/issues/82)).
 
 ## Decisions
 
@@ -430,4 +430,17 @@ Run from Nick's phone through each app's own MCP connection
   later didn't (hourly limit).
 - **Found:** the Stop hook hands over an expiry alone under "Nick replied in
   Slack" ([#71](https://github.com/nickmagruder/agent-bus/issues/71)); fixed in 0.12.6.
-- Still to check: a foreign user's or bot's reply, and the daily digest.
+
+### Bot message and daily digest (2026-11-22)
+
+Driven from Slack in Chrome; results in
+[#25](https://github.com/nickmagruder/agent-bus/issues/25).
+
+- **Bot message ignored:** `/remind #agents … in 1 minute` in `#agents`.
+  Slackbot's reminder was dropped with reason `bot`, and Slack's "set up a
+  reminder" note (posted in my name, subtype `reminder_add`) with reason
+  `subtype`. No inbox rows. A second _person's_ reply (`not_human`) wasn't
+  run live (no second Slack account); the unit tests cover it.
+- **Digest once a day:** one `digest.done` per slot from 2026-11-19 (the
+  catch-up at broker start) to 2026-11-22, and one post a day in `#agents`,
+  each starting where the last one ended.
