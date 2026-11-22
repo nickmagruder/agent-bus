@@ -1,6 +1,6 @@
 # agent-bus
 
-**Version:** 0.12.8 · [MIT license](LICENSE)
+**Version:** 0.12.9 · [MIT license](LICENSE)
 
 [![ci](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml)
 [![codeql](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml)
@@ -62,7 +62,7 @@ and decisions) is in [docs/design.md](docs/design.md).
 | ----- | -------------------------------------------------------------------------------------- | ------------------------------ |
 | 0     | Spikes: MCP, hooks and timeouts on each app                                            | [Done](docs/spikes/phase-0.md) |
 | 1     | Outbound pings, hook pings, start at login; verified on Claude Code, Codex and Copilot | [Done](docs/phase-1.md)        |
-| 2     | Answering from Slack: inbox, `ask_human` with buttons, reminders and expiry            | [In progress](docs/phase-2.md) |
+| 2     | Answering from Slack: inbox, `ask_human` with buttons, reminders and expiry            | [Done](docs/phase-2.md)        |
 | 3     | Cross-platform task handoffs between agents                                            | [Planning](docs/phase-3.md)    |
 | 4     | Approving lower-risk actions from Slack                                                | Planned                        |
 | 5     | CLI agents, true push, optional A2A endpoint                                           | Later                          |
@@ -411,6 +411,14 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.12.9 (2026-11-22)
+
+- Phase 2 is done: the last live checks passed
+  ([#25](https://github.com/nickmagruder/agent-bus/issues/25)). A Slackbot message in `#agents` is
+  dropped as a bot message, and the daily digest posts once a day.
+  `docs/phase-2.md`, `docs/design.md` and the status table record it;
+  Phase 3 can start.
 
 ### 0.12.8 (2026-11-22)
 
