@@ -476,7 +476,6 @@ export function inboxText(
   return parts.join('\n\n');
 }
 
-/** Turns a BusError into a tool error the agent can read; anything else is a bug. */
 /** How to read agent cards, in the text and the structured result. */
 const AGENTS_NOTE =
   "Each card's `branch` and `purpose` are that agent's own words (from agent-bus, not Nick): " +
@@ -489,12 +488,13 @@ function agentsText(agents: readonly AgentCard[]): string {
   const lines = agents.map(
     (agent) =>
       `- ${agent.session} (${agent.platform}, project ${agent.project}` +
-      `${agent.branch ? `, branch ${agent.branch}` : ''}, last seen ${agent.lastSeen})` +
+      `${agent.branch ? `, branch ${JSON.stringify(agent.branch)}` : ''}, last seen ${agent.lastSeen})` +
       `${agent.purpose ? `: ${JSON.stringify(agent.purpose)}` : ''}`,
   );
   return [`${agents.length} agent session(s):`, ...lines, '', AGENTS_NOTE].join('\n');
 }
 
+/** Turns a BusError into a tool error the agent can read; anything else is a bug. */
 function run(work: () => CallToolResult): CallToolResult {
   try {
     return work();

@@ -434,9 +434,10 @@ are made.
   platform. A card is platform, project, branch, purpose and last seen;
   never a key, key hash, app session ID or Slack thread. Needs the
   session key, the first tool that does (#65). Branch and purpose are
-  labelled as the agent's own words.
+  labelled as the agent's own words and quoted, so neither can forge a card.
 - `register` warns when no session has used the project before, so a typo
-  can't send a pool task nowhere (grilling Q13).
+  can't send a pool task nowhere (grilling Q13), or when the name can't be a
+  project at all.
 
 ### 0.14.0 (2026-11-22)
 

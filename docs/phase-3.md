@@ -294,9 +294,19 @@ Decided with Nick before building (all as recommended):
   key, like every Phase 3 tool (Q20).
 
 `branch` and `purpose` are each agent's own words, so the result carries a
-note to read them as data, and the text quotes each purpose on one line.
-`register` warns when no session has used the project before (Q13). At most
-50 cards, most recently seen first.
+note to read them as data, and the text quotes both as JSON strings on the
+card's one line, so a newline can't forge another card (fixed after the
+[#85](https://github.com/nickmagruder/agent-bus/pull/85) review; hooks set
+the branch too). `register` warns when no session has used the project
+before (Q13), or when the name can't be a project at all and fell back to
+`misc`; `list_agents` with such a name matches nothing. At most 50 cards,
+most recently seen first, filtered in SQL.
+
+Known limits: "seen" includes a session that ended within the last 2 hours,
+and a `/hook` call with its app session ID (T14) refreshes it, so a pool
+listing can show sessions that are gone; a pool task waits until one checks
+its inbox anyway (D7). Once any session has used a project name, a typo
+included, it counts as known for good.
 
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 

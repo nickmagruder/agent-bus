@@ -940,6 +940,36 @@ export class Store {
     return rows.map(toQuestion);
   }
 
+  /**
+   * Sessions seen at or after `since`, most recent first, narrowed in SQL
+   * (agent cards, #58): never `excludeId`, optionally one project or platform,
+   * at most `limit`.
+   */
+  sessionsSeenFiltered(filter: {
+    since: Date;
+    excludeId: string;
+    project?: string | undefined;
+    platform?: Platform | undefined;
+    limit: number;
+  }): SessionRecord[] {
+    const where = ['last_seen_at >= ?', 'id != ?'];
+    const values: SQLInputValue[] = [filter.since.toISOString(), filter.excludeId];
+    if (filter.project !== undefined) {
+      where.push('project = ?');
+      values.push(filter.project);
+    }
+    if (filter.platform !== undefined) {
+      where.push('platform = ?');
+      values.push(filter.platform);
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM sessions WHERE ${where.join(' AND ')} ORDER BY last_seen_at DESC LIMIT ?`,
+      )
+      .all(...values, filter.limit) as Row[];
+    return rows.map(toSession);
+  }
+
   /** Whether any session, past or present, worked in this project. */
   projectSeen(project: string): boolean {
     return (

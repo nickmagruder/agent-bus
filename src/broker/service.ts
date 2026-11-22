@@ -424,7 +424,7 @@ export class BusService {
     }
 
     const project = input.project ? projectSlug(input.project) : NO_PROJECT;
-    const newProject = project !== NO_PROJECT && !this.store.projectSeen(project);
+    const warning = this.projectWarning(input.project, project);
     const session = this.store.transaction(() => {
       const record = this.createSession({
         platform: input.platform,
@@ -441,14 +441,28 @@ export class BusService {
       session: this.reload(session.record.id),
       created: true,
       key: session.key,
-      ...(newProject
-        ? {
-            warning:
-              `No session has worked in project "${project}" before. If that's a typo, register ` +
-              'again with the right project: tasks for a project only reach sessions in it.',
-          }
-        : {}),
+      ...(warning ? { warning } : {}),
     };
+  }
+
+  /**
+   * Why a new session's project looks wrong (grilling Q13), if it does: a
+   * name no session has used before (likely a typo), or a name that isn't
+   * usable as a project at all and so fell back to no project.
+   */
+  private projectWarning(given: string | undefined, project: string): string | undefined {
+    if (given && project === NO_PROJECT && given.trim().toLowerCase() !== NO_PROJECT) {
+      return (
+        "The project name you gave can't be used (it needs letters or digits), so this " +
+        'session has no project and posts to #agents. ' +
+        'Register again with the repo or folder name if you meant one.'
+      );
+    }
+    if (project === NO_PROJECT || this.store.projectSeen(project)) return undefined;
+    return (
+      `No session has worked in project "${project}" before. If that's a typo, register ` +
+      'again with the right project: tasks for a project only reach sessions in it.'
+    );
   }
 
   /**
@@ -464,16 +478,21 @@ export class BusService {
       'list_agents',
     );
     const project = input.project === undefined ? undefined : projectSlug(input.project);
-    const since = new Date(this.now().getTime() - AGENT_CARDS.seenWithinMs);
+    // A name that doesn't slug (empty, "???") falls back to "misc"; asking for
+    // it matches nothing rather than the sessions with no project.
+    const unusable =
+      input.project !== undefined &&
+      project === NO_PROJECT &&
+      input.project.trim().toLowerCase() !== NO_PROJECT;
+    if (unusable) return [];
     return this.store
-      .sessionsSeenSince(since)
-      .filter(
-        (session) =>
-          session.id !== caller.id &&
-          (project === undefined || session.project === project) &&
-          (input.onPlatform === undefined || session.platform === input.onPlatform),
-      )
-      .slice(0, AGENT_CARDS.max)
+      .sessionsSeenFiltered({
+        since: new Date(this.now().getTime() - AGENT_CARDS.seenWithinMs),
+        excludeId: caller.id,
+        project,
+        platform: input.onPlatform,
+        limit: AGENT_CARDS.max,
+      })
       .map((session) => ({
         session: session.id,
         platform: session.platform,
