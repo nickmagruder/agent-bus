@@ -1,9 +1,8 @@
 # agent-bus design
 
-Status (2026-11-19): Phases 0 and 1 complete; Phase 2 built and checked live
-on all three apps, with a foreign reply and the digest still to check (#25);
-Phase 3 planned. Each phase's plan, decisions and live
-results live in its own doc: [Phase 0](spikes/phase-0.md),
+Status (2026-11-22): Phases 0, 1 and 2 complete (Phase 2 checked live on
+all three apps, #25); Phase 3 planned and unblocked. Each phase's plan,
+decisions and live results live in its own doc: [Phase 0](spikes/phase-0.md),
 [Phase 1](phase-1.md), [Phase 2](phase-2.md), [Phase 3](phase-3.md).
 
 This document is the overall design: goals, what the platforms allow, the
@@ -164,14 +163,14 @@ Enforced in the broker, not left to agent instructions:
 
 ## Phases
 
-| Phase | Scope                                                                                                                         | Status      |
-| ----- | ----------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| 0     | Spikes: MCP, hooks and timeouts on each desktop app                                                                           | Done        |
-| 1     | Outbound pings: broker, `register`, `notify_human`, hook pings, start at login; verified on all three apps                    | Done        |
-| 2     | I answer from Slack: inbox, `ask_human` with buttons, reminders and expiry, Stop-hook inbox check, digest                     | In progress |
-| 3     | Cross-platform tasks and handoffs: agent cards, task board, provenance (no signing, D4), per-session key, hop and rate limits | Planned     |
-| 4     | Remote approvals for lower-risk actions via `PermissionRequest`; risky actions stay app-only                                  | Planned     |
-| 5     | CLI agents: Claude Code channels for true push, Codex/Copilot equivalents, optional A2A, OpenTelemetry                        | Later       |
+| Phase | Scope                                                                                                                         | Status  |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------- | ------- |
+| 0     | Spikes: MCP, hooks and timeouts on each desktop app                                                                           | Done    |
+| 1     | Outbound pings: broker, `register`, `notify_human`, hook pings, start at login; verified on all three apps                    | Done    |
+| 2     | I answer from Slack: inbox, `ask_human` with buttons, reminders and expiry, Stop-hook inbox check, digest                     | Done    |
+| 3     | Cross-platform tasks and handoffs: agent cards, task board, provenance (no signing, D4), per-session key, hop and rate limits | Planned |
+| 4     | Remote approvals for lower-risk actions via `PermissionRequest`; risky actions stay app-only                                  | Planned |
+| 5     | CLI agents: Claude Code channels for true push, Codex/Copilot equivalents, optional A2A, OpenTelemetry                        | Later   |
 
 ## Decisions
 
