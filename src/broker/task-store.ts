@@ -107,6 +107,10 @@ function holderAfter(move: TaskMove): string | null | undefined {
   return undefined;
 }
 
+/** The fixed notices the broker writes (D3, Q21): never agent text. */
+export type TaskNotice =
+  'approved' | 'canceled' | 'input-required' | 'completed' | 'failed' | 'rejected';
+
 export type TaskMessageSender = 'agent' | 'human';
 
 export interface TaskMessageRecord {
@@ -360,6 +364,58 @@ export class TaskStore {
       });
       return found(this.taskMessage(id), String(id));
     });
+  }
+
+  /**
+   * A progress note from the holder without a state change: sets the status
+   * message and marks the holder as seen (for the stuck flag, Q8). Compare
+   * and swap on the holder and a held state; undefined when either changed.
+   * Audited as `task.note` (without the note).
+   */
+  noteTask(id: string, holder: string, note: string): TaskRecord | undefined {
+    return this.store.transaction(() => {
+      const at = this.timestamp();
+      const changed = this.store.db
+        .prepare(
+          `UPDATE tasks SET status_message = ?, holder_seen_at = ?, updated_at = ?, stuck_at = NULL
+           WHERE id = ? AND holder = ? AND state IN ('working', 'input-required')`,
+        )
+        .run(note, at, at, id, holder).changes;
+      if (changed === 0) return undefined;
+      this.store.appendEvent({ kind: 'task.note', sessionId: holder, data: { task: id } });
+      return found(this.getTask(id), id);
+    });
+  }
+
+  /**
+   * Queues one of the fixed broker notices (D3, Q21) for a session: a pointer
+   * in its task inbox, delivered by #60. Audited as `task.notice`.
+   */
+  addNotice(sessionId: string, taskId: string, notice: TaskNotice): void {
+    this.store.transaction(() => {
+      this.store.db
+        .prepare(
+          `INSERT INTO task_inbox (session_id, task_id, kind, notice, created_at)
+           VALUES (?, ?, 'notice', ?, ?)`,
+        )
+        .run(sessionId, taskId, notice, this.timestamp());
+      this.store.appendEvent({
+        kind: 'task.notice',
+        sessionId,
+        data: { task: taskId, notice },
+      });
+    });
+  }
+
+  /** A session's queued notices, oldest first (for tests until #60 delivers them). */
+  notices(sessionId: string): { taskId: string; notice: TaskNotice }[] {
+    const rows = this.store.db
+      .prepare(
+        `SELECT task_id, notice FROM task_inbox WHERE session_id = ? AND kind = 'notice'
+         ORDER BY id`,
+      )
+      .all(sessionId) as Row[];
+    return rows.map((row) => ({ taskId: String(row.task_id), notice: row.notice as TaskNotice }));
   }
 
   /** Tasks a session holds and is still working on (working or input-required), newest first. */
