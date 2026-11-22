@@ -1,6 +1,6 @@
 # agent-bus
 
-**Version:** 0.6.5 · [MIT license](LICENSE)
+**Version:** 0.12.8 · [MIT license](LICENSE)
 
 [![ci](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml)
 [![codeql](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml)
@@ -411,6 +411,21 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.12.8 (2026-11-22)
+
+- **Agent-dev checklist** ([#75](https://github.com/nickmagruder/agent-bus/issues/75)): lint fails on
+  warnings and adds type-aware promise rules; `npm run knip` checks unused
+  files, exports and dependencies; CI change guards fail on focused or
+  skipped tests, suppression comments and net-removed assertions (override
+  with a `Test-guard: <reason>` commit line) and warn above about 400
+  changed lines; CI reports test coverage.
+- Dependabot waits 3 days before proposing a release; devDependency patch
+  PRs auto-merge once their own dependency review and `check` pass; a new
+  `dependency-review` workflow fails PRs that add a high or critical
+  advisory.
+- The README version line had drifted (0.6.5); it now matches
+  `package.json`.
 
 ### 0.12.7 (2026-11-20)
 

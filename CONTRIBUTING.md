@@ -14,9 +14,18 @@ below, and [`AGENTS.md`](AGENTS.md) holds the agent-facing version.
 - **Every PR** links its issue (`Closes #12`), says how it was tested, and
   updates the docs it affects (README changelog, `AGENTS.md` key files, phase
   docs).
-- **CI must pass:** typecheck, ESLint, markdownlint, Prettier, Vitest and a
-  gitleaks secret scan (`npm run check` runs all but the scan locally).
-  Copilot reviews every PR; address or answer its comments before merging.
+- **CI must pass:** typecheck, ESLint with zero warnings, knip, change
+  guards, markdownlint, Prettier, Vitest with a coverage report and a
+  gitleaks secret scan (`npm run check` runs all but the guards, coverage
+  and scan locally). Dependency review scans every PR. Every PR gets an AI
+  review (Copilot, or Codex or Claude when Copilot is out of quota); address
+  or answer its comments before merging.
+- **Never weaken a test to make it pass:** no `.only`/`.skip`, no deleted or
+  loosened assertions, no `eslint-disable` or `@ts-ignore` to get past a
+  check. When a change really needs one, add a `Test-guard: <reason>` line
+  to the commit message and explain it under "Tests changed? Why:" in the
+  PR. CI warns above about 400 changed lines: split such PRs where they
+  divide cleanly.
 - **Commit messages:** imperative summary of 72 characters or fewer ("Add
   digest scheduler", not "Added…"), no trailing period, a blank line before
   the body; a body explains why when it isn't obvious; one logical change per

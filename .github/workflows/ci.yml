@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # full history for the secret scan
+          fetch-depth: 0 # full history for the secret scan and the change guards
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -29,9 +29,13 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
+      - run: npm run knip
+      - name: Change guards (weakened tests, suppressions, PR size)
+        run: npm run guards
       - run: npm run lint:md
       - run: npm run format:check
-      - run: npm test
+      - name: Test (with coverage report)
+        run: npm run test:coverage
 
       - name: Secret scan
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0

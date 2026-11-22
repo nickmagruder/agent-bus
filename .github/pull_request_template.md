@@ -5,6 +5,7 @@ Closes #
 ## How tested
 
 - [ ] `npm run check` passes
+- [ ] Tests changed? Why:
 
 ## Docs
 
