@@ -940,6 +940,13 @@ export class Store {
     return rows.map(toQuestion);
   }
 
+  /** Whether any session, past or present, worked in this project. */
+  projectSeen(project: string): boolean {
+    return (
+      this.db.prepare('SELECT 1 FROM sessions WHERE project = ? LIMIT 1').get(project) !== undefined
+    );
+  }
+
   /** Sessions active at or after `since`, most recent first. */
   sessionsSeenSince(since: Date): SessionRecord[] {
     const rows = this.db

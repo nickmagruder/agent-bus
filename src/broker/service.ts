@@ -41,6 +41,39 @@ export const LIMITS = {
   contextSlowDeliveries: 3,
 } as const;
 
+/** Agent cards (#58): who an agent could hand work to. */
+export const AGENT_CARDS = {
+  /** A session counts as around when it called a tool or a hook fired this recently. */
+  seenWithinMs: 2 * 60 * 60_000,
+  /** At most this many cards in one list, most recently seen first. */
+  max: 50,
+} as const;
+
+/**
+ * An agent card: deliberately small (grilling Q6). Never the key or its
+ * hash, the app's own session ID (which can fetch a session's key through
+ * /hook, T14) or Slack thread IDs. `branch` and `purpose` are the agent's
+ * own words.
+ */
+export interface AgentCard {
+  session: string;
+  platform: Platform;
+  project: string;
+  branch: string | null;
+  purpose: string | null;
+  lastSeen: string;
+}
+
+export interface ListAgentsInput {
+  platform: Platform;
+  session: string;
+  key: string | undefined;
+  /** Only this project (a repo or folder name, slugged like register's). */
+  project?: string | undefined;
+  /** Only this platform. */
+  onPlatform?: Platform | undefined;
+}
+
 /** Minimum gap between hook pings of one kind for one session. */
 export const HOOK_THROTTLE_MS = {
   /** Permission prompts often come in bursts; one DM brings me to the app. */
@@ -120,6 +153,8 @@ export interface RegisterResult {
   created: boolean;
   /** A new secret key for the session, when one was issued. */
   key?: string;
+  /** Set when the project was never seen before: likely a typo (grilling Q13). */
+  warning?: string;
 }
 
 export interface NotifyInput {
@@ -388,6 +423,8 @@ export class BusService {
       throw new BusError('rate_limited', 'Too many new sessions this hour; try again later.');
     }
 
+    const project = input.project ? projectSlug(input.project) : NO_PROJECT;
+    const newProject = project !== NO_PROJECT && !this.store.projectSeen(project);
     const session = this.store.transaction(() => {
       const record = this.createSession({
         platform: input.platform,
@@ -400,7 +437,51 @@ export class BusService {
       return { record, key: this.issueKey(record, 'register') };
     });
     this.queue.kick();
-    return { session: this.reload(session.record.id), created: true, key: session.key };
+    return {
+      session: this.reload(session.record.id),
+      created: true,
+      key: session.key,
+      ...(newProject
+        ? {
+            warning:
+              `No session has worked in project "${project}" before. If that's a typo, register ` +
+              'again with the right project: tasks for a project only reach sessions in it.',
+          }
+        : {}),
+    };
+  }
+
+  /**
+   * Cards of the sessions seen in the last AGENT_CARDS.seenWithinMs, on every
+   * platform (the caller's own included, but never the caller), optionally
+   * narrowed to one project or platform. Needs the caller's session key (#65).
+   */
+  listAgents(input: ListAgentsInput): AgentCard[] {
+    const caller = this.requireKeyedSession(
+      input.platform,
+      input.session,
+      input.key,
+      'list_agents',
+    );
+    const project = input.project === undefined ? undefined : projectSlug(input.project);
+    const since = new Date(this.now().getTime() - AGENT_CARDS.seenWithinMs);
+    return this.store
+      .sessionsSeenSince(since)
+      .filter(
+        (session) =>
+          session.id !== caller.id &&
+          (project === undefined || session.project === project) &&
+          (input.onPlatform === undefined || session.platform === input.onPlatform),
+      )
+      .slice(0, AGENT_CARDS.max)
+      .map((session) => ({
+        session: session.id,
+        platform: session.platform,
+        project: session.project,
+        branch: session.branch,
+        purpose: session.purpose,
+        lastSeen: session.lastSeenAt,
+      }));
   }
 
   notify(input: NotifyInput): { route: Route } {

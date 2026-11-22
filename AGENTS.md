@@ -74,7 +74,7 @@ into tracked files.
 - `docs/phase-1.md`: Phase 1 plan, decisions, checklist and build notes
 - `src/broker/main.ts`: broker entry (`npm run broker`); wires store, Slack, queue, HTTP
 - `src/broker/service.ts`: register/notify/hook rules, routing, ownership checks, caps and throttles
-- `src/broker/mcp.ts`: MCP tools (`register`, `notify_human`, `check_inbox`, `ask_human`, `wait_for_reply`)
+- `src/broker/mcp.ts`: MCP tools (`register`, `notify_human`, `check_inbox`, `ask_human`, `wait_for_reply`, `list_agents`)
 - `src/broker/inbox.ts`: my Slack replies → session inboxes (sender gating, routing, reactions, DM hint)
 - `src/broker/slack/inbound.ts`: Bolt `message` listener feeding the inbox; question button handler
 - `src/broker/digest.ts`: daily digest in `#agents` (questions, merged PRs, `fyi` items, sessions seen; catch-up at start)

@@ -278,6 +278,26 @@ loop refusal (#59); setters for a note without a state change,
 `holder_seen_at`, the stuck and waiting flags, and the approval post and
 thread (#59–#61); the inbox-pointer API (#60) and the lease API (#31).
 
+### Agent cards ([#58](https://github.com/nickmagruder/agent-bus/issues/58), 0.15.0, 2026-11-22)
+
+Decided with Nick before building (all as recommended):
+
+- **Seen recently** means within 2 hours (a tool call or any hook event
+  updates `last_seen_at`), matching the lease idle time (Q22).
+- **Who a caller sees:** sessions on every platform, its own platform
+  included, never itself; `platform` and `project` narrow the list. Tasks
+  stay cross-platform only (D1); that's `create_task`'s rule (#59).
+- **Never on a card:** the key or its hash, the app's own session ID (it
+  can fetch a key through `/hook`, T14) and Slack thread IDs. A test checks
+  the card's exact fields and that none of these appear.
+- **Key required:** `list_agents` is the first tool to need the session
+  key, like every Phase 3 tool (Q20).
+
+`branch` and `purpose` are each agent's own words, so the result carries a
+note to read them as data, and the text quotes each purpose on one line.
+`register` warns when no session has used the project before (Q13). At most
+50 cards, most recently seen first.
+
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 
 Read from the A2A v1.0.0 specification and its "What's new in v1" and
