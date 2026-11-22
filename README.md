@@ -1,6 +1,6 @@
 # agent-bus
 
-**Version:** 0.14.0 · [MIT license](LICENSE)
+**Version:** 0.15.0 · [MIT license](LICENSE)
 
 [![ci](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml)
 [![codeql](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml)
@@ -71,13 +71,14 @@ and decisions) is in [docs/design.md](docs/design.md).
 
 ### MCP tools
 
-| Tool                                                                       | What it does                                                                                                                                                                                               |
-| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `register(purpose, project?, branch?, session?, key?)`                     | Announces a session in `#proj-<project>` (or `#agents`) and returns its ID (`platform/project/xxxx`) and, for a new session or with the current `key`, a new secret session key                            |
-| `notify_human(session, text, urgency)`                                     | `urgent` → DM to me, `normal` → the session's thread, `fyi` → the daily digest in `#agents` (08:00 local). Per-session and per-platform hourly caps stop loops                                             |
-| `check_inbox(session)`                                                     | Returns my Slack replies to the session and the outcomes of its questions                                                                                                                                  |
-| `ask_human(session, question, options?, default_action, timeout_minutes?)` | DMs me the question with buttons for up to five options (a reply in its thread works too) and waits up to 150 s (default), then returns `pending` with a question ID. A pointer goes in the session thread |
-| `wait_for_reply(session, question_id?)`                                    | Waits again, for one question or for anything new                                                                                                                                                          |
+| Tool                                                                       | What it does                                                                                                                                                                                                                   |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `register(purpose, project?, branch?, session?, key?)`                     | Announces a session in `#proj-<project>` (or `#agents`) and returns its ID (`platform/project/xxxx`) and, for a new session or with the current `key`, a new secret session key. Warns on a project no session has used before |
+| `list_agents(session, key, project?, platform?)`                           | Cards (platform, project, branch, purpose, last seen) of other sessions seen in the last 2 hours, on every platform, most recent first (Phase 3)                                                                               |
+| `notify_human(session, text, urgency)`                                     | `urgent` → DM to me, `normal` → the session's thread, `fyi` → the daily digest in `#agents` (08:00 local). Per-session and per-platform hourly caps stop loops                                                                 |
+| `check_inbox(session)`                                                     | Returns my Slack replies to the session and the outcomes of its questions                                                                                                                                                      |
+| `ask_human(session, question, options?, default_action, timeout_minutes?)` | DMs me the question with buttons for up to five options (a reply in its thread works too) and waits up to 150 s (default), then returns `pending` with a question ID. A pointer goes in the session thread                     |
+| `wait_for_reply(session, question_id?)`                                    | Waits again, for one question or for anything new                                                                                                                                                                              |
 
 Questions get one reminder at 15 minutes. At the timeout (default 60) the
 question expires and the agent takes its own `default_action`. The first
@@ -424,6 +425,19 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.15.0 (2026-11-22)
+
+- **`list_agents` and agent cards** ([#58](https://github.com/nickmagruder/agent-bus/issues/58)):
+  cards of other sessions seen in the last 2 hours (a tool call or any
+  hook counts), on every platform, at most 50, filtered by project or
+  platform. A card is platform, project, branch, purpose and last seen;
+  never a key, key hash, app session ID or Slack thread. Needs the
+  session key, the first tool that does (#65). Branch and purpose are
+  labelled as the agent's own words and quoted, so neither can forge a card.
+- `register` warns when no session has used the project before, so a typo
+  can't send a pool task nowhere (grilling Q13), or when the name can't be a
+  project at all.
 
 ### 0.14.0 (2026-11-22)
 
