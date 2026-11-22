@@ -92,6 +92,8 @@ into tracked files.
 - `src/broker/heartbeat.ts`: progress notifications for long tool calls
 - `src/shared/guard.ts`: Host/Origin/per-platform bearer checks
 - `src/shared/session-key.ts`: per-session secret keys (mint, hash, constant-time match; #65)
+- `src/broker/task-store.ts`: Phase 3 tasks and task messages (compare-and-swap moves, audited; #57)
+- `src/shared/task-states.ts`: task states, allowed moves and the A2A v1.0 mapping (D8)
 - `src/shared/config.ts`: zod-validated environment
 - `src/shared/slack-text.ts`: escaping and Markdown → Slack mrkdwn for agent text
 - `src/broker/log.ts`: JSON-lines logger and daily log files (`--log-to-file`)

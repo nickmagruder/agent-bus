@@ -121,8 +121,9 @@ Phase 3 records follow [A2A](https://a2a-protocol.org/)'s shapes (an agent card
 per session; tasks moving `submitted` → `working` → `input-required` →
 `completed` / `failed` / `canceled`, or `rejected`) while the transport stays
 MCP, leaving room for an A2A endpoint later. They use A2A v1.0.0's names,
-including `contextId` and the result as an artifact. `input-required` maps
-directly onto "needs a human".
+including `contextId` and the result as an artifact, with the states spelled
+in short lowercase (D8); the `TASK_STATE_*` enums appear only on an A2A
+endpoint. `input-required` maps directly onto "needs a human".
 
 ## Safety rules
 

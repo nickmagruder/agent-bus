@@ -1,6 +1,6 @@
 # agent-bus
 
-**Version:** 0.13.0 · [MIT license](LICENSE)
+**Version:** 0.14.0 · [MIT license](LICENSE)
 
 [![ci](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml)
 [![codeql](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml)
@@ -424,6 +424,21 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.14.0 (2026-11-22)
+
+- **Phase 3 records** ([#57](https://github.com/nickmagruder/agent-bus/issues/57)), migration 8:
+  `tasks` (A2A `contextId`, parent and hops, named or pool target, holder,
+  state, result artifact, approval with expiry, Slack thread, stuck and
+  waiting flags), `task_messages` (agent or me, never both), `task_inbox`
+  pointers and `leases`. No tools use them yet (#58 onward).
+- Task state changes are compare-and-swap, so of two racing claims one
+  wins; a claim needs my approval, a late call from a former holder can't
+  close a re-claimed task, and a canceled or expired approval cancels the
+  task. Impossible moves are refused, and every change is audited without
+  message bodies.
+- Task states are short lowercase names mapped to the A2A v1.0
+  `TASK_STATE_*` enums in one place (D8, settled).
 
 ### 0.13.0 (2026-11-22)
 
