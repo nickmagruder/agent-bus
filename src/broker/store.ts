@@ -141,6 +141,11 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX held_pings_due ON held_pings (state, due_at);
   CREATE INDEX held_pings_by_session ON held_pings (session_id, state);
   `,
+  // v7: the hash of each session's secret key (#65); never the key itself.
+  `
+  ALTER TABLE sessions ADD COLUMN key_hash TEXT;
+  ALTER TABLE sessions ADD COLUMN key_issued_at TEXT;
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -412,6 +417,23 @@ export class Store {
          last_seen_at = ? WHERE id = ?`,
       )
       .run(changes.purpose ?? null, changes.branch ?? null, this.timestamp(), id);
+  }
+
+  /**
+   * Replaces a session's key hash (#65). The hash stays out of SessionRecord
+   * so it can't travel with a session into a result, a post or a log line.
+   */
+  setSessionKeyHash(id: string, keyHash: string): void {
+    this.db
+      .prepare('UPDATE sessions SET key_hash = ?, key_issued_at = ? WHERE id = ?')
+      .run(keyHash, this.timestamp(), id);
+  }
+
+  /** A session's current key hash; undefined when it has none yet. */
+  sessionKeyHash(id: string): string | undefined {
+    const row = this.db.prepare('SELECT key_hash FROM sessions WHERE id = ?').get(id) as
+      Row | undefined;
+    return nullableString(row?.key_hash) ?? undefined;
   }
 
   setThread(id: string, slackChannelId: string, threadTs: string): void {

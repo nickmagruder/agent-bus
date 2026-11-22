@@ -191,6 +191,47 @@ Not in this phase: approving another agent's permission prompts (never), remote
 approvals of my own prompts (Phase 4), CLI agents and an A2A endpoint
 (Phase 5).
 
+## Build notes
+
+### Session key ([#65](https://github.com/nickmagruder/agent-bus/issues/65), 0.13.0, 2026-11-22)
+
+Decided with Nick before building (all as recommended):
+
+- **Two PRs:** #65 first, then the records (#57) on their own branch.
+- **A new key each time:** the broker stores only the key's hash, so it
+  can't hand the same key out again. Every `SessionStart` (startup, resume,
+  `/clear`, compaction) and every `UserPromptSubmit` re-send mints a new key
+  that replaces the last; a holder of an older key gets `bad_key` telling it
+  to use the newest. A subagent still holding a replaced key is refused the
+  same way.
+- **`register` on an existing session** hands out a new key only when given
+  the current one. Without a key it still updates the purpose (Phase 1–2
+  behaviour until #66) and returns none, so a same-platform session can't
+  take another's key. A session that lost its key registers a new session.
+
+Shape: `abk_` plus 32 random bytes (base64url); SHA-256 in `sessions.key_hash`
+(migration 7), compared in constant time, and kept out of `SessionRecord`.
+`requireKeyedSession` checks session, platform, then key, and audits
+`missing_key` / `bad_key` without the key. The Phase 3 tools call it,
+starting with #58.
+
+**Scope (decided with Nick after the PR review):** the key stops one session
+acting as another _through the MCP tools_: a mix-up, or an injected agent
+that can only call tools. It doesn't stop a local process with shell access
+and the platform token: that can post `/hook` `SessionStart` with another
+session's app session ID and get (or replace) its key, or read the key from
+that session's transcript. Such a process can already act as the whole
+platform, so the hook route isn't defended separately (T14). A test pins
+this behaviour.
+
+Known limits:
+
+- If a hook times out, or its audit write fails, after a new key was
+  minted, the agent keeps the old (now refused) key until the next re-send.
+- Sessions from before 0.13.0, and Copilot sessions (no hooks), have no key
+  until they register a new session; `register` with any key then gives
+  `bad_key`.
+
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 
 Read from the A2A v1.0.0 specification and its "What's new in v1" and
@@ -285,4 +326,5 @@ detection are left out. Each test below is posted on its issue; T10–T13 came f
 | T10 | Secrets in tasks             | A brief, message or result holding a token-shaped string (`AGENT_BUS_TOKEN_*`, `xox…-`) is refused or redacted, and the secret never reaches the audit log.                                                     | #59, #60 |
 | T11 | Size and flood               | An oversized brief, result or link list, and a session opening tasks past the caps, are refused by the caps and throttles (D5, Q17).                                                                            | #59      |
 | T12 | Link schemes                 | Result links accept only `https:`; `javascript:`, `file:` and `data:` are refused before the model or Slack sees them.                                                                                          | #60, #61 |
+| T14 | Key via the hook route       | Out of scope (decided 2026-11-22): a local process with the platform token and shell access can get a session's key from `/hook` or its transcript. Pinned by a test in `session-key.test.ts`.                  | #65      |
 | T13 | Claim races and pool scope   | Two sessions claiming one task: exactly one wins and the other is told who has it; a session in project X can't claim a pool task for project Y.                                                                | #59, #65 |

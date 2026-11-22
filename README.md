@@ -1,6 +1,6 @@
 # agent-bus
 
-**Version:** 0.12.9 · [MIT license](LICENSE)
+**Version:** 0.13.0 · [MIT license](LICENSE)
 
 [![ci](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml)
 [![codeql](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml)
@@ -73,7 +73,7 @@ and decisions) is in [docs/design.md](docs/design.md).
 
 | Tool                                                                       | What it does                                                                                                                                                                                               |
 | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `register(purpose, project?, branch?, session?)`                           | Announces a session in `#proj-<project>` (or `#agents`) and returns its ID (`platform/project/xxxx`)                                                                                                       |
+| `register(purpose, project?, branch?, session?, key?)`                     | Announces a session in `#proj-<project>` (or `#agents`) and returns its ID (`platform/project/xxxx`) and, for a new session or with the current `key`, a new secret session key                            |
 | `notify_human(session, text, urgency)`                                     | `urgent` → DM to me, `normal` → the session's thread, `fyi` → the daily digest in `#agents` (08:00 local). Per-session and per-platform hourly caps stop loops                                             |
 | `check_inbox(session)`                                                     | Returns my Slack replies to the session and the outcomes of its questions                                                                                                                                  |
 | `ask_human(session, question, options?, default_action, timeout_minutes?)` | DMs me the question with buttons for up to five options (a reply in its thread works too) and waits up to 150 s (default), then returns `pending` with a question ID. A pointer goes in the session thread |
@@ -131,6 +131,19 @@ broker enforces its rules itself rather than trusting agent instructions:
 - **Identity from the connection.** Each platform has its own token; the
   broker stamps the caller's platform, and a session can only read its own
   inbox and questions.
+- **Per-session keys.** The platform token can't tell two sessions of the
+  same app apart, so each session also gets a secret key (`abk_…`) in its
+  startup context or `register` result. The broker keeps only its SHA-256
+  hash, a new key replaces the old one, and a missing or wrong key is
+  refused and audited. Phase 3's task and lease tools will require it;
+  Phase 1–2 tools adopt it in
+  [#66](https://github.com/nickmagruder/agent-bus/issues/66). The key never
+  reaches Slack, the audit log or the log files, but it does sit in the
+  agent's own context and transcript. **Scope:** it stops one session acting
+  as another through the MCP tools (a mix-up, or prompt injection without
+  shell access). A local process with shell access and the platform token
+  can still get a session's key, from its transcript or from `/hook`, as it
+  can already act as the whole platform.
 - **Sender gating.** Only my Slack user ID can answer or press buttons;
   everything else is dropped and audited.
 - **Hooks don't decide.** They never return allow/deny. The one block is
@@ -411,6 +424,20 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.13.0 (2026-11-22)
+
+- **Per-session secret key** ([#65](https://github.com/nickmagruder/agent-bus/issues/65)), the first
+  Phase 3 piece. `SessionStart` context and `register` (new session) hand
+  the session a key; each new one replaces the last, and the broker stores
+  only its hash (migration 7). `register` with an existing session and its
+  current `key` swaps the key; without a key it still updates the purpose
+  but returns none, so a same-platform session can't take another's key.
+  `requireKeyedSession` refuses a missing, wrong or other session's key
+  (`missing_key`, `bad_key`) and audits it, for the Phase 3 tools to use.
+  It guards the MCP tools, not a local process with shell access and the
+  platform token (see "Per-session keys" under Security model).
+- `session.key_issued` audit events (source only, never the key).
 
 ### 0.12.9 (2026-11-22)
 

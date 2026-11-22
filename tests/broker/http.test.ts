@@ -518,7 +518,7 @@ describe('MCP tools end to end', () => {
         arguments: { purpose: 'Labels', project: 'clankers' },
       });
       expect(reg.structuredContent).toMatchObject({
-        next: 'Pass this as `session` to every agent-bus tool.',
+        next: 'Pass `session` to every agent-bus tool, and `key` to those that ask for it. Keep the key secret.',
       });
       const session = (reg.structuredContent as { session: string }).session;
       const root = await threadOf(session);
