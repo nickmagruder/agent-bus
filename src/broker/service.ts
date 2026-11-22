@@ -948,12 +948,11 @@ export class BusService {
   }
 
   private reregister(input: RegisterInput, id: string): RegisterResult {
-    // A wrong key is refused before anything changes; no key at all is the
-    // Phase 1-2 call (#66 makes it required later).
-    const session =
-      input.key === undefined
-        ? this.ownedSession(input.platform, id, 'register')
-        : this.keyedSession(input.platform, id, input.key, 'register');
+    // A wrong key is refused before anything changes; no key (or an empty
+    // one) is the Phase 1-2 call (#66 makes it required later).
+    const session = !input.key
+      ? this.ownedSession(input.platform, id, 'register')
+      : this.keyedSession(input.platform, id, input.key, 'register');
     const purposeChanged = input.purpose !== session.purpose;
     const key = this.store.transaction(() => {
       this.store.touchSession(id, {
@@ -973,7 +972,7 @@ export class BusService {
       } else if (purposeChanged) {
         this.postInThread(updated, `*Purpose:* ${toSlackMrkdwn(input.purpose)}`);
       }
-      return input.key === undefined ? undefined : this.issueKey(updated, 'register');
+      return input.key ? this.issueKey(updated, 'register') : undefined;
     });
     this.queue.kick();
     return { session: this.reload(id), created: false, ...(key ? { key } : {}) };
@@ -1032,6 +1031,9 @@ export class BusService {
           'gave you (each new one replaces the last); if you have none, call register without a session.',
       );
     }
+    // ownedSession repeats the lookup on purpose: it is the one place that marks
+    // the session used and drops held pings, and that must happen only once
+    // the key has matched.
     return this.ownedSession(platform, id, action);
   }
 

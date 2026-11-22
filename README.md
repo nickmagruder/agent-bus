@@ -138,7 +138,12 @@ broker enforces its rules itself rather than trusting agent instructions:
   refused and audited. Phase 3's task and lease tools will require it;
   Phase 1–2 tools adopt it in
   [#66](https://github.com/nickmagruder/agent-bus/issues/66). The key never
-  reaches Slack, the audit log or the log files.
+  reaches Slack, the audit log or the log files, but it does sit in the
+  agent's own context and transcript. **Scope:** it stops one session acting
+  as another through the MCP tools (a mix-up, or prompt injection without
+  shell access). A local process with shell access and the platform token
+  can still get a session's key, from its transcript or from `/hook`, as it
+  can already act as the whole platform.
 - **Sender gating.** Only my Slack user ID can answer or press buttons;
   everything else is dropped and audited.
 - **Hooks don't decide.** They never return allow/deny. The one block is
@@ -430,6 +435,8 @@ are made.
   but returns none, so a same-platform session can't take another's key.
   `requireKeyedSession` refuses a missing, wrong or other session's key
   (`missing_key`, `bad_key`) and audits it, for the Phase 3 tools to use.
+  It guards the MCP tools, not a local process with shell access and the
+  platform token (see "Per-session keys" under Security model).
 - `session.key_issued` audit events (source only, never the key).
 
 ### 0.12.9 (2026-11-22)

@@ -142,6 +142,35 @@ describe('issuing keys', () => {
     ]);
     expect(rows[0]?.session_id).toBe(id);
     expect(JSON.stringify(rows)).not.toContain(key);
+    expect(store.db.prepare('SELECT key_issued_at FROM sessions WHERE id = ?').get(id)).toEqual({
+      key_issued_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) as unknown,
+    });
+  });
+
+  it('after slow re-sends, only the last key handed over works (review of #83)', () => {
+    const start = service.hook('claude', { event: 'SessionStart', appSessionId: 'app-slow' });
+    let last = keyFrom(start.context);
+    const handed = [last];
+    // Responses that were written slowly don't count as delivered, so each
+    // prompt re-sends the ID with a new key, up to the slow-delivery cap.
+    for (let i = 0; i < 3; i++) {
+      service.markContextDelivered('claude', start.session, 'UserPromptSubmit', 5_000);
+      const prompt = service.hook('claude', {
+        event: 'UserPromptSubmit',
+        appSessionId: 'app-slow',
+      });
+      if (!prompt.context) break;
+      last = keyFrom(prompt.context);
+      handed.push(last);
+    }
+    expect(handed.length).toBeGreaterThan(1);
+    for (const old of handed.slice(0, -1)) {
+      expectBusError(
+        () => service.requireKeyedSession('claude', start.session, old, 'x'),
+        'bad_key',
+      );
+    }
+    service.requireKeyedSession('claude', start.session, last, 'x');
   });
 });
 
@@ -178,6 +207,18 @@ describe('requireKeyedSession', () => {
     );
     expect(denials().map((d) => d.reason)).toEqual(['bad_key', 'bad_key']);
     expect(everythingStored()).not.toContain(guess);
+  });
+
+  it('never repeats the key it was given in the error the agent sees', () => {
+    const { id } = registered();
+    const guess = mintSessionKey();
+    try {
+      service.requireKeyedSession('codex', id, guess, 'x');
+      expect.unreachable();
+    } catch (error) {
+      expect((error as Error).message).not.toContain(guess);
+      expect((error as Error).message).not.toContain('abk_');
+    }
   });
 
   it("refuses another session's key on the same platform (T3)", () => {
@@ -231,6 +272,13 @@ describe('register with an existing session', () => {
     const result = service.register({ platform: 'codex', purpose: 'mine now', session: victim.id });
     expect(result.key).toBeUndefined();
     service.requireKeyedSession('codex', victim.id, victim.key, 'test');
+  });
+
+  it('treats an empty key as no key', () => {
+    const { id, key } = registered();
+    const again = service.register({ platform: 'codex', purpose: 'Keys', session: id, key: '' });
+    expect(again.key).toBeUndefined();
+    service.requireKeyedSession('codex', id, key, 'test');
   });
 
   it('swaps the current key for a new one', () => {
@@ -314,7 +362,7 @@ describe('over HTTP', () => {
     return (result.content as { text: string }[]).map((c) => c.text).join('\n');
   }
 
-  function postHook(appSessionId: string): Promise<string> {
+  function postHook(appSessionId: string, platform: Platform = 'claude'): Promise<string> {
     return new Promise((resolve, reject) => {
       const req = request(
         {
@@ -324,7 +372,7 @@ describe('over HTTP', () => {
           method: 'POST',
           headers: {
             host: `127.0.0.1:${http.port}`,
-            authorization: `Bearer ${TOKENS.claude}`,
+            authorization: `Bearer ${TOKENS[platform]}`,
             'content-type': 'application/json',
           },
         },
@@ -365,6 +413,43 @@ describe('over HTTP', () => {
     expect(wrong.isError).toBe(true);
     expect(textOf(wrong)).toContain("isn't the current key");
     await client.close();
+  });
+
+  it('hands a key to Codex SessionStart too, scoped to its own platform', async () => {
+    const body = JSON.parse(await postHook('app-codex', 'codex')) as {
+      session: string;
+      context?: string;
+    };
+    expect(body.session).toMatch(/^codex\//);
+    const key = keyFrom(body.context);
+    service.requireKeyedSession('codex', body.session, key, 'x');
+    expectBusError(
+      () => service.requireKeyedSession('claude', body.session, key, 'x'),
+      'wrong_platform',
+    );
+  });
+
+  it('known scope: /hook trusts the platform token, so a caller with the token and the app session ID gets a new key', async () => {
+    // Documented in README "Per-session keys" and docs/phase-3.md (T14): the
+    // key separates sessions that only use the MCP tools. Anything with the
+    // platform token and shell access can already read the session's
+    // transcript, so /hook isn't defended separately. If that changes, this
+    // test should change with it.
+    const first = JSON.parse(await postHook('app-shared')) as { session: string; context?: string };
+    const firstKey = keyFrom(first.context);
+    const second = JSON.parse(await postHook('app-shared')) as {
+      session: string;
+      context?: string;
+    };
+    expect(second.session).toBe(first.session);
+    expectBusError(
+      () => service.requireKeyedSession('claude', first.session, firstKey, 'x'),
+      'bad_key',
+    );
+    service.requireKeyedSession('claude', first.session, keyFrom(second.context), 'x');
+    // Another platform's token never reaches this session.
+    const codex = JSON.parse(await postHook('app-shared', 'codex')) as { session: string };
+    expect(codex.session).not.toBe(first.session);
   });
 
   it('never writes a key to the log, the audit log or any table', async () => {
