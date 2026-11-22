@@ -223,6 +223,23 @@ describe('create_task', () => {
       expect(error.message).toContain('input-required');
     });
 
+    it('with several held tasks, takes the newest as parent and checks every chain', () => {
+      const claude = agent('claude');
+      const otherClaude = agent('claude');
+      const codex = agent('codex');
+      const first = create(claude, { session: codex.id });
+      approve(first);
+      claim(first, codex);
+      now = new Date(now.getTime() + 1_000);
+      const second = create(otherClaude, { session: codex.id });
+      approve(second);
+      claim(second, codex);
+      const child = create(codex, { platform: 'copilot', project: 'clankers' });
+      expect(child.parentId).toBe(second.id);
+      // Handing back to the first task's creator is a loop, though it's not the parent's.
+      expectBusError(() => create(codex, { session: claude.id }), 'task_loop');
+    });
+
     it('refuses a pool that holds the earlier creator, too', () => {
       const claude = agent('claude', 'crashmap');
       const codex = agent('codex', 'crashmap');
@@ -262,10 +279,25 @@ describe('create_task', () => {
       const pooled = Array.from({ length: TASK_LIMITS.openPerTarget }, () =>
         create(codexCreator, pool),
       );
-      expectBusError(() => create(agent('claude'), pool), 'too_many_tasks');
-      // A finished task frees its place.
-      records.decideApproval(pooled[0]?.id ?? '', 'canceled', ACTOR.nick);
+      const refused = expectBusError(() => create(agent('codex'), pool), 'too_many_tasks');
+      // No count in the refusal: it would hint at tasks the caller can't see (T7).
+      expect(refused.message).not.toMatch(/\d/);
+      // Another platform's tasks for the same pool don't count against it.
       expect(create(agent('claude'), pool).state).toBe('submitted');
+      // A canceled approval cancels its task, which frees its place.
+      records.decideApproval(pooled[0]?.id ?? '', 'canceled', ACTOR.nick);
+      expect(create(agent('codex'), pool).state).toBe('submitted');
+    });
+
+    it("doesn't count tasks whose approval expired or was canceled", () => {
+      const claude = agent('claude');
+      const codex = agent('codex');
+      for (const decision of ['expired', 'canceled', 'expired'] as const) {
+        records.decideApproval(create(claude, { session: codex.id }).id, decision, ACTOR.broker);
+      }
+      for (let i = 0; i < TASK_LIMITS.openPerTarget; i++) {
+        expect(create(claude, { session: codex.id }).state).toBe('submitted');
+      }
     });
 
     it(`counts ${TASK_LIMITS.awaitingApprovalPerPlatform} tasks awaiting approval on the creator’s platform`, () => {
@@ -277,6 +309,7 @@ describe('create_task', () => {
         'too_many_tasks',
       );
       expect(error.message).toContain('from claude');
+      expect(error.message).not.toMatch(/\d/);
       // Codex's own creations aren't held up by Claude's.
       expect(create(agent('codex'), { platform: 'claude', project: 'x' }).state).toBe('submitted');
     });
@@ -296,7 +329,7 @@ describe('create_task', () => {
 
   describe('secrets (T10)', () => {
     it.each([
-      ['an agent-bus token name', 'set AGENT_BUS_TOKEN_CODEX first'],
+      ['an agent-bus token value', `set AGENT_BUS_TOKEN_CODEX=${'x'.repeat(48)} first`],
       ['a session key', `use abk_${'a'.repeat(43)}`],
       ['a Slack bot token', `xoxb-${'1'.repeat(10)}-${'a'.repeat(10)}`],
       ['a Slack app token', `xapp-1-${'A'.repeat(11)}-${'b'.repeat(6)}`],
@@ -316,8 +349,21 @@ describe('create_task', () => {
       expect(everything).not.toContain(secret);
     });
 
-    it('lets ordinary text through', () => {
+    it.each([
+      ['a private key block', '-----BEGIN RSA PRIVATE KEY-----'],
+      ['an AWS access key', `AKIA${'A'.repeat(16)}`],
+      ['a JWT', `eyJ${'a'.repeat(12)}.eyJ${'b'.repeat(12)}.${'c'.repeat(12)}`],
+      ['an API key', `sk-ant-${'a'.repeat(24)}`],
+      ['a Slack refresh token', `xoxe.xoxp-${'1'.repeat(12)}`],
+      ['a session key glued to a word', `SESSION_KEY_abk_${'a'.repeat(43)}`],
+      ['an agent-bus token value', `AGENT_BUS_TOKEN_CODEX=${'x'.repeat(48)}`],
+    ])('also spots %s', (_what, secret) => {
+      expect(holdsSecret(`see ${secret} here`)).toBe(true);
+    });
+
+    it('lets ordinary text through, including the token variable’s name', () => {
       expect(holdsSecret('Read AGENTS.md and the abk prefix docs; xox is fine')).toBe(false);
+      expect(holdsSecret('Read AGENT_BUS_TOKEN_CODEX from the user environment')).toBe(false);
     });
   });
 });
@@ -353,6 +399,26 @@ describe('list_tasks visibility (T7)', () => {
     expect(ids(codex)).toEqual([named.id]);
     expect(ids(codexPoolMate)).toEqual([pooled.id]);
     expect(ids(claude)).toEqual([named.id, pooled.id].sort());
+  });
+
+  it('never shows a task whose approval expired or was canceled to its target', () => {
+    const claude = agent('claude');
+    const codex = agent('codex');
+    const expired = create(claude, { session: codex.id });
+    const canceled = create(claude, { platform: 'codex', project: 'clankers' });
+    records.decideApproval(expired.id, 'expired', ACTOR.broker);
+    records.decideApproval(canceled.id, 'canceled', ACTOR.nick);
+    expect(list(codex)).toEqual([]);
+    expect(
+      list(claude)
+        .map((task) => [task.id, task.state])
+        .sort(),
+    ).toEqual(
+      [
+        [expired.id, 'canceled'],
+        [canceled.id, 'canceled'],
+      ].sort(),
+    );
   });
 
   it('answers a hidden task exactly like an unknown one', () => {

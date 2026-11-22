@@ -13,7 +13,9 @@ import { TaskService } from './tasks.ts';
 
 const MAX_BODY_BYTES = 1_000_000;
 
-export interface HttpOptions extends McpDeps {
+export interface HttpOptions extends Omit<McpDeps, 'tasks'> {
+  /** Phase 3 task rules; made from `store` and `service` when not given. */
+  tasks?: TaskService | undefined;
   port: number;
   tokens: Record<Platform, string>;
   service: BusService;
@@ -23,6 +25,9 @@ export interface HttpOptions extends McpDeps {
   health?: () => Record<string, unknown>;
 }
 
+/** The options a running server works with: the task service always filled in. */
+type LiveOptions = HttpOptions & McpDeps;
+
 export interface RunningHttpServer {
   server: Server;
   port: number;
@@ -31,7 +36,7 @@ export interface RunningHttpServer {
 
 /** Starts the broker's HTTP server on 127.0.0.1. Port 0 picks a free port (tests). */
 export async function startHttpServer(options: HttpOptions): Promise<RunningHttpServer> {
-  const live = {
+  const live: LiveOptions = {
     ...options,
     tasks: options.tasks ?? new TaskService(options.store, options.service),
   };
@@ -64,7 +69,7 @@ export async function startHttpServer(options: HttpOptions): Promise<RunningHttp
 async function handle(
   req: IncomingMessage,
   res: ServerResponse,
-  options: HttpOptions,
+  options: LiveOptions,
 ): Promise<void> {
   const startedAt = performance.now();
   const verdict = checkRequest(

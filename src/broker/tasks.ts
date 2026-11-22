@@ -37,8 +37,15 @@ const HOUR_MS = 60 * 60_000;
  * whole call; nothing is stored, posted or audited with it.
  */
 const SECRET_PATTERNS: readonly RegExp[] = [
-  /AGENT_BUS_TOKEN_[A-Z]+/,
-  /\babk_[A-Za-z0-9_-]{20,}/,
+  // A value assigned to an agent-bus token; the variable's name alone is fine.
+  /AGENT_BUS_TOKEN_[A-Z]+\s*[=:]\s*\S{16,}/,
+  // A session key, even glued to a word (no \b).
+  /abk_[A-Za-z0-9_-]{20,}/,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+  /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/,
+  /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/,
+  /\bsk-(?:ant-)?[A-Za-z0-9_-]{20,}/,
+  /\bxoxe[.-][A-Za-z0-9.-]{10,}/,
   /\bxox[abposr]-[A-Za-z0-9-]{10,}/,
   /\bxapp-[A-Za-z0-9-]{10,}/,
   /\bgh[pousr]_[A-Za-z0-9]{30,}/,
@@ -75,7 +82,7 @@ export class TaskService {
   private readonly tasks: TaskStore;
   private readonly now: () => Date;
 
-  constructor(store: Store, service: BusService, now: () => Date = () => new Date()) {
+  constructor(store: Store, service: BusService, now: () => Date = service.clock) {
     this.store = store;
     this.service = service;
     this.tasks = new TaskStore(store, now);
@@ -142,19 +149,16 @@ export class TaskService {
     ) {
       refuse('too_many_tasks', 'Too many new tasks from this session this hour; try again later.');
     }
-    if (this.tasks.countOpenForTarget(target) >= TASK_LIMITS.openPerTarget) {
-      refuse(
-        'too_many_tasks',
-        `That target already has ${TASK_LIMITS.openPerTarget} open tasks; wait for one to finish.`,
-      );
+    if (this.tasks.countOpenForTarget(target, caller.platform) >= TASK_LIMITS.openPerTarget) {
+      refuse('too_many_tasks', 'Too many open tasks for that target; wait for some to finish.');
     }
     if (
       this.tasks.countAwaitingApproval(caller.platform) >= TASK_LIMITS.awaitingApprovalPerPlatform
     ) {
       refuse(
         'too_many_tasks',
-        `${TASK_LIMITS.awaitingApprovalPerPlatform} tasks from ${caller.platform} already wait for ` +
-          "Nick's approval; try again once he has answered some.",
+        `Too many tasks from ${caller.platform} already wait for Nick's approval; ` +
+          'try again once he has answered some.',
       );
     }
 

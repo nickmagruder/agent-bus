@@ -405,6 +405,11 @@ export class BusService {
   private readonly now: () => Date;
   private readonly channels: ChannelMembership | undefined;
 
+  /** The broker's clock, for services built on this one (tasks). */
+  get clock(): () => Date {
+    return this.now;
+  }
+
   constructor(
     store: Store,
     queue: { kick(): void },

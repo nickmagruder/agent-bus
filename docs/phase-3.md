@@ -337,6 +337,24 @@ holds it, is `task_loop` (Q18, T4). Caps: 10 new tasks per session per hour,
 as `denied` without the text. `list_tasks` labels each task `from` its
 creator with `trust: untrusted` and quotes its text on one line.
 
+After the [#86](https://github.com/nickmagruder/agent-bus/pull/86) review:
+
+- **3 open per target counts only the creator's platform**, so one
+  platform's pending tasks can't block another's for 8 h. Open means not
+  final; a canceled or expired approval cancels its task, so it never counts.
+- **Refusals give no counts** ("too many open tasks for that target"), so
+  they don't hint at tasks the caller can't see (T7).
+- **Secret shapes** also cover private-key blocks, AWS access keys, JWTs,
+  `sk-…` API keys and Slack refresh tokens, and a key glued to a word; an
+  agent-bus token's variable name alone is allowed, only an assigned value
+  is refused. Part 2 runs the same check on notes and results.
+- Accepted as is: a named target is a loop only when it is an earlier
+  creator itself (A → B → A), while a pool loops if it holds one; and
+  `to_session` errors show whether a session ID exists and its platform
+  (`list_agents` already shows recent ones).
+- For part 2: with several held tasks the newest is the parent; an optional
+  `for_task` argument could remove that guess.
+
 Not yet: approving a task needs #61's Slack button, so nothing can be
 claimed live until then; `claim_task` and `update_task` are part 2.
 

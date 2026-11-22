@@ -26,7 +26,7 @@ export interface McpDeps {
   /** Held calls across all requests, so a cancel on its own request can end one. */
   heldCalls?: HeldCalls | undefined;
   /** Phase 3 task rules (#59); the HTTP server makes one when none is given. */
-  tasks?: TaskService | undefined;
+  tasks: TaskService;
 }
 
 const sessionArg = z
@@ -200,9 +200,7 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
     async ({ session, key, title, brief, to_session, to_platform, to_project }) =>
       run(() => {
         const to = taskTarget(to_session, to_platform, to_project);
-        const tasks = deps.tasks;
-        if (!tasks) throw new Error('No task service');
-        const task = tasks.createTask({ platform, session, key, title, brief, to });
+        const task = deps.tasks.createTask({ platform, session, key, title, brief, to });
         const parent = task.parentId ? ` as a sub-task of ${task.parentId}` : '';
         return {
           content: [
@@ -241,9 +239,7 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
     },
     async ({ session, key, task }) =>
       run(() => {
-        const tasks = deps.tasks;
-        if (!tasks) throw new Error('No task service');
-        const found = tasks.listTasks({ platform, session, key, task });
+        const found = deps.tasks.listTasks({ platform, session, key, task });
         const views = found.map(taskView);
         return {
           content: [{ type: 'text', text: tasksText(views) }],

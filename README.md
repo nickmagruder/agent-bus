@@ -436,8 +436,8 @@ are made.
     as a pool). It waits 8 h for my approval before the target sees it.
   - The parent is the task the caller holds. A third hop, a loop back to
     an earlier creator, more than 10 new tasks per session per hour, more
-    than 3 open per target, or more than 5 awaiting approval per creator
-    platform are refused.
+    than 3 open per target from one platform, or more than 5 awaiting
+    approval per creator platform are refused.
   - Text over the size limits, or holding anything token-shaped, is
     refused, and nothing is stored or audited with it.
   - `list_tasks` shows only what a session may see; a hidden task gets

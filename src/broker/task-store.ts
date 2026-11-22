@@ -376,19 +376,25 @@ export class TaskStore {
   /** Open (not final) tasks for one target: a named session, or a platform + project pool. */
   countOpenForTarget(
     target: { session: string } | { platform: Platform; project: string },
+    creatorPlatform: Platform,
   ): number {
-    const open = "state NOT IN ('completed', 'failed', 'canceled', 'rejected')";
+    // Open: not final. A canceled or expired approval already canceled the
+    // task (decideApproval), so it doesn't count. Only tasks from the
+    // creator's platform count, so one platform can't block another's.
+    const open = `tasks.state NOT IN ('completed', 'failed', 'canceled', 'rejected')
+      AND sessions.platform = ?`;
+    const from = 'FROM tasks JOIN sessions ON sessions.id = tasks.created_by';
     const row =
       'session' in target
         ? this.store.db
-            .prepare(`SELECT COUNT(*) AS n FROM tasks WHERE target_session = ? AND ${open}`)
-            .get(target.session)
+            .prepare(`SELECT COUNT(*) AS n ${from} WHERE tasks.target_session = ? AND ${open}`)
+            .get(target.session, creatorPlatform)
         : this.store.db
             .prepare(
-              `SELECT COUNT(*) AS n FROM tasks WHERE target_session IS NULL
-               AND target_platform = ? AND target_project = ? AND ${open}`,
+              `SELECT COUNT(*) AS n ${from} WHERE tasks.target_session IS NULL
+               AND tasks.target_platform = ? AND tasks.target_project = ? AND ${open}`,
             )
-            .get(target.platform, target.project);
+            .get(target.platform, target.project, creatorPlatform);
     return Number((row as Row).n);
   }
 
