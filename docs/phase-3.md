@@ -308,6 +308,56 @@ listing can show sessions that are gone; a pool task waits until one checks
 its inbox anyway (D7). Once any session has used a project name, a typo
 included, it counts as known for good.
 
+### Tasks: create and list ([#59](https://github.com/nickmagruder/agent-bus/issues/59) part 1, 0.16.0, 2026-11-22)
+
+Decided with Nick before building (all as recommended):
+
+- **Two PRs for #59:** `create_task` + `list_tasks` first, then
+  `claim_task` + `update_task`.
+- **Visibility (T7):** a session sees tasks it created or holds, approved
+  tasks named for it, and approved, unclaimed tasks in its pool (its
+  platform and project). A hidden task gets the same `unknown_task` answer
+  as an ID that doesn't exist. `canSee` and the list query must agree
+  (tested).
+- **Secrets (T10):** a title or brief holding anything token-shaped
+  (`AGENT_BUS_TOKEN_*`, `abk_…`, `xox?-…`, `xapp-…`, GitHub tokens) is
+  refused, not redacted; nothing of it is stored or audited.
+- **Awaiting-approval cap (Q17):** 5 per platform, counted on the
+  creator's platform.
+
+Built in [`src/broker/tasks.ts`](../src/broker/tasks.ts): every call needs the
+session key; the creator is the caller (T3). Targets are cross-platform only
+(D1), and Copilot is reachable only as a pool (Q13). The parent is the task
+the caller holds (Q4); with several held, the most recently changed one is
+the parent and every held chain is checked. A third hop is `hop_limit` (D5),
+and handing work back to an earlier creator, by name or through a pool that
+holds it, is `task_loop` (Q18, T4). Caps: 10 new tasks per session per hour,
+3 open per target (named or pool), 5 awaiting approval per creator platform,
+120 characters per title and 4,000 per brief (T11). Every refusal is audited
+as `denied` without the text. `list_tasks` labels each task `from` its
+creator with `trust: untrusted` and quotes its text on one line.
+
+After the [#86](https://github.com/nickmagruder/agent-bus/pull/86) review:
+
+- **3 open per target counts only the creator's platform**, so one
+  platform's pending tasks can't block another's for 8 h. Open means not
+  final; a canceled or expired approval cancels its task, so it never counts.
+- **Refusals give no counts** ("too many open tasks for that target"), so
+  they don't hint at tasks the caller can't see (T7).
+- **Secret shapes** also cover private-key blocks, AWS access keys, JWTs,
+  `sk-…` API keys and Slack refresh tokens, and a key glued to a word; an
+  agent-bus token's variable name alone is allowed, only an assigned value
+  is refused. Part 2 runs the same check on notes and results.
+- Accepted as is: a named target is a loop only when it is an earlier
+  creator itself (A → B → A), while a pool loops if it holds one; and
+  `to_session` errors show whether a session ID exists and its platform
+  (`list_agents` already shows recent ones).
+- For part 2: with several held tasks the newest is the parent; an optional
+  `for_task` argument could remove that guess.
+
+Not yet: approving a task needs #61's Slack button, so nothing can be
+claimed live until then; `claim_task` and `update_task` are part 2.
+
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 
 Read from the A2A v1.0.0 specification and its "What's new in v1" and
