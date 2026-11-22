@@ -19,7 +19,7 @@ into tracked files.
 
 - **Runtime:** Node 24, TypeScript run directly by Node (type stripping; no build step)
 - **Libraries:** `@modelcontextprotocol/sdk` (≥ 1.24), `zod`, `@slack/bolt`, `@slack/web-api`; SQLite via built-in `node:sqlite`; GitHub REST over `fetch` (digest only)
-- **Tests/tooling:** Vitest, ESLint (typescript-eslint, strict), Prettier, markdownlint; husky + lint-staged hooks
+- **Tests/tooling:** Vitest (coverage via `npm run test:coverage`), ESLint (typescript-eslint strict plus type-aware promise rules, zero warnings), knip, Prettier, markdownlint; husky + lint-staged hooks
 - **Hosting/CI:** runs locally on Windows; GitHub Actions (checks + gitleaks, CodeQL, Scorecard), Dependabot, Copilot PR review
 
 ## Working rules
@@ -45,9 +45,14 @@ into tracked files.
   with Target date set to their milestone's due date.
   Branch, commit, push and open the PR as the natural next step (clankers
   `standards/git.md`); only Nick merges. Never `--no-verify`.
-- **Copilot review:** reviews every PR automatically. Before handing a PR
-  back, fix the valid comments and reply with a reason to the rest, then
-  resolve the threads.
+- **AI review:** Copilot reviews every PR automatically; when it is out of
+  quota, run a Codex or Claude review and post it with `<!-- ai-review -->`
+  (clankers `standards/git.md`). Before handing a PR back, fix the valid
+  comments and reply with a reason to the rest, then resolve the threads.
+- **Tests and checks:** never weaken a test or suppress a lint or type
+  error to get past a check. `npm run guards` (CI) fails on `.only`/`.skip`,
+  `eslint-disable`, `@ts-ignore`-style comments and net-removed assertions
+  unless a commit carries `Test-guard: <reason>`.
 - **Tracking:** status lives in issues; phase docs keep design, decisions and
   live results and link to the issues. Bugs and follow-ups found mid-task
   become issues (`follow-up` label), not plan bullets.
@@ -93,7 +98,9 @@ into tracked files.
 - `scripts/run-broker.ps1`: launcher the task runs; restarts after crashes, stops on exit 78
 - `scripts/mcp-call.ts`: calls one agent-bus tool with a platform token (live tests, manual checks)
 - `.husky/`: pre-commit (lint-staged, then `scripts/gitleaks-staged.sh`) and commit-msg (`scripts/commit-msg.ts`, rules in `scripts/commit-msg-rules.ts`) hooks
-- `.github/workflows/`: `ci.yml` (the required `check` job), `codeql.yml`, `scorecard.yml`; actions pinned by SHA
+- `.github/workflows/`: `ci.yml` (the required `check` job: typecheck, lint, knip, change guards, markdownlint, Prettier, tests with coverage, secret scan), `codeql.yml`, `scorecard.yml`, `dependency-review.yml` (fails PRs adding a high advisory), `dependabot-auto-merge.yml` (devDependency patches only, after its own dependency review); actions pinned by SHA
+- `scripts/change-guards.ts` (rules in `scripts/change-guards-rules.ts`, tests in `tests/scripts/`): CI check for weakened tests, suppressions and PR size
+- `knip.json`: unused files, exports and dependencies (`ignoreExportsUsedInFile`; husky runs `scripts/commit-msg.ts`)
 - `.github/copilot-instructions.md`, `.github/instructions/security.instructions.md`, `.github/skills/code-review/`: Copilot PR review
 - `.github/ISSUE_TEMPLATE/`, `.github/pull_request_template.md`: issue forms and PR template
 
