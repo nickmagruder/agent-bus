@@ -221,8 +221,10 @@ agent has lost it.
 Known limit: if a `/clear` or compaction `SessionStart` misses the broker
 (down or restarting), the broker can't know the agent lost its ID, so
 prompts stay quiet. The agent can still call `register` for a new ID.
-Context from `UserPromptSubmit` is not verified live on either app yet
-([#25](https://github.com/nickmagruder/agent-bus/issues/25)).
+Claude Code's `UserPromptSubmit` hook has returned the bus ID live (6 times
+in the audit log by 2026-11-22), but no run has checked that the agent used
+it, and Codex hasn't triggered it yet
+([#82](https://github.com/nickmagruder/agent-bus/issues/82)).
 
 ## Decisions
 

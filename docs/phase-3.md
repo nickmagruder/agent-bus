@@ -2,7 +2,8 @@
 
 Status: **planned** (2026-11-19), and grilled the same day (see "Grilling
 outcomes"). The Phase 2 live check
-([#25](https://github.com/nickmagruder/agent-bus/issues/25)) passed on 2026-11-22, so Phase 3 code can start. Decisions settled (below); the work is
+([#25](https://github.com/nickmagruder/agent-bus/issues/25)) passed on
+2026-11-22, so Phase 3 code can start. Decisions settled (below); the work is
 tracked in the [Phase 3 milestone](https://github.com/nickmagruder/agent-bus/milestone/4). Design:
 [design.md](design.md); previous phase: [phase-2.md](phase-2.md).
 
@@ -130,7 +131,7 @@ where they differ; the issues carry the matching changes as comments.
 | Q   | Decision                                                                                                                                                                                         |
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 1   | v1 scope: two handoffs, Claude plans → Codex implements (ending in a PR), and another platform reviewing a PR. A result is text plus optional branch and PR links.                               |
-| 2   | Order: no Phase 3 code until #25 passes; then #56, then #57 onward.                                                                                                                              |
+| 2   | Order: no Phase 3 code until #25 passes (passed 2026-11-22); then #56, then #57 onward.                                                                                                          |
 | 3   | D3 amended: the Stop hook may hand over fixed broker-written notices, never agent text.                                                                                                          |
 | 4   | The hop parent is set by the broker from the task the session holds; `create_task` has no `parent` argument.                                                                                     |
 | 5   | Approve means "deliver this", not "Nick endorses it".                                                                                                                                            |
