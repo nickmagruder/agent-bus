@@ -1,6 +1,6 @@
 # agent-bus
 
-**Version:** 0.19.0 · [MIT license](LICENSE)
+**Version:** 0.19.1 · [MIT license](LICENSE)
 
 [![ci](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml)
 [![codeql](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml)
@@ -402,9 +402,12 @@ On GitHub:
   rates the repo's supply-chain hygiene weekly.
 - **Dependabot** opens grouped weekly updates for npm packages and Actions
   (pinned by commit SHA).
-- **Copilot** reviews every PR, using `.github/copilot-instructions.md` and
-  the two-axis `code-review` skill in `.github/skills/` (standards, and the
-  linked issue as the spec).
+- **An AI review** on every PR, requested by the agent that opened it:
+  another platform than the author first, else a separate session, then
+  Copilot while its quota lasts. Copilot reads
+  `.github/copilot-instructions.md` and the two-axis `code-review` skill in
+  `.github/skills/` (standards, and the linked issue as the spec); Claude
+  reviewers use the same skill.
 
 ### Project structure
 
@@ -432,6 +435,14 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.19.1 (2026-11-22)
+
+- AI review is a standing step on every PR
+  ([#90](https://github.com/nickmagruder/agent-bus/issues/90)): the agent that opened it requests
+  it right away, from another platform first, else a separate session, then
+  Copilot while its quota lasts (clankers `standards/git.md`). `AGENTS.md`
+  and the README say so in place of "Copilot reviews every PR".
 
 ### 0.19.0 (2026-11-22)
 

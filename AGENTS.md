@@ -20,7 +20,7 @@ into tracked files.
 - **Runtime:** Node 24, TypeScript run directly by Node (type stripping; no build step)
 - **Libraries:** `@modelcontextprotocol/sdk` (≥ 1.24), `zod`, `@slack/bolt`, `@slack/web-api`; SQLite via built-in `node:sqlite`; GitHub REST over `fetch` (digest only)
 - **Tests/tooling:** Vitest (coverage via `npm run test:coverage`), ESLint (typescript-eslint strict plus type-aware promise rules, zero warnings), knip, Prettier, markdownlint; husky + lint-staged hooks
-- **Hosting/CI:** runs locally on Windows; GitHub Actions (checks + gitleaks, CodeQL, Scorecard), Dependabot, Copilot PR review
+- **Hosting/CI:** runs locally on Windows; GitHub Actions (checks + gitleaks, CodeQL, Scorecard), Dependabot, an AI review on every PR
 
 ## Working rules
 
@@ -45,10 +45,13 @@ into tracked files.
   with Target date set to their milestone's due date.
   Branch, commit, push and open the PR as the natural next step (clankers
   `standards/git.md`); only Nick merges. Never `--no-verify`.
-- **AI review:** Copilot reviews every PR automatically; when it is out of
-  quota, run a Codex or Claude review and post it with `<!-- ai-review -->`
-  (clankers `standards/git.md`). Before handing a PR back, fix the valid
-  comments and reply with a reason to the rest, then resolve the threads.
+- **AI review:** right after opening a PR, request its AI review without
+  asking Nick (clankers `standards/git.md`): another platform than the
+  author first (Codex for a Claude PR), else a separate Claude session (the
+  linked reviewer, if there is one), then Copilot while its quota lasts.
+  A review posted through Nick's `gh` login starts with
+  `<!-- ai-review -->`. Before handing a PR back, fix the valid comments
+  and reply with a reason to the rest, then resolve the threads.
 - **Tests and checks:** never weaken a test or suppress a lint or type
   error to get past a check. `npm run guards` (CI) fails on `.only`/`.skip`,
   `eslint-disable`, `@ts-ignore`-style comments and net-removed assertions
