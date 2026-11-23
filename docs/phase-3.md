@@ -496,6 +496,26 @@ Built in [`src/broker/task-inbox.ts`](../src/broker/task-inbox.ts):
   response, or a new prompt). Copilot never blocks, and its notices wait
   for `check_inbox` (D7).
 
+After the [#89](https://github.com/nickmagruder/agent-bus/pull/89) review:
+
+- **Offers are re-checked when handed over:** a pool task claimed or
+  canceled after its offer was made isn't shown (audited as
+  `task_inbox.dropped`). A take narrowed to one task makes no offers.
+- **Smaller takes:** at most 10 items a call, and an offer's brief is cut
+  to 300 characters with "read it whole with list_tasks".
+- **My replies and task items are taken in one transaction**, in
+  `check_inbox`, the `wait_for_reply` poll and the Stop hook, so a failure
+  can't mark my replies read without returning them.
+- **A stale key doesn't cost my replies:** `check_inbox` with a rejected
+  key is still refused (and audited) for task items, but returns my
+  replies as a keyless call would, saying the key was rejected.
+- The 20-message cap counts agents' messages only (my task-thread replies,
+  #61 part 2, won't use it up). `wait_for_reply` refuses `question_id`
+  and `task` together. The Stop heading says to read each task before
+  acting.
+- By design: a newly approved pool task wakes no one; the pool finds it at
+  its next keyed `check_inbox` (Q13).
+
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 
 Read from the A2A v1.0.0 specification and its "What's new in v1" and

@@ -36,8 +36,11 @@ export interface TaskInboxTake {
   remaining: number;
 }
 
-/** Items in one take. */
-export const TASK_INBOX_TAKE = 20;
+/** Items in one take: other agents' text, so kept small (review of #89). */
+export const TASK_INBOX_TAKE = 10;
+
+/** Brief characters in an offer; the whole brief is one list_tasks call away. */
+export const OFFER_BRIEF_CHARS = 300;
 
 type Row = Record<string, unknown>;
 
@@ -66,7 +69,11 @@ export class TaskInbox {
     options: { limit?: number; kinds?: readonly TaskInboxKind[]; task?: string } = {},
   ): TaskInboxTake {
     return this.store.transaction(() => {
-      if (!options.kinds || options.kinds.includes('offer')) this.offerPoolTasks(session);
+      // A narrowed take (one task, or notices only) creates no offers: they'd
+      // wait undelivered and could go stale.
+      if (!options.task && (!options.kinds || options.kinds.includes('offer'))) {
+        this.offerPoolTasks(session);
+      }
       const where = ['session_id = ?', 'delivered_at IS NULL'];
       const values: (string | number)[] = [session.id];
       if (options.kinds) {
@@ -87,10 +94,22 @@ export class TaskInbox {
         'UPDATE task_inbox SET delivered_at = ?, delivered_via = ? WHERE id = ?',
       );
       const items: TaskInboxItem[] = [];
+      const dropped: number[] = [];
       for (const row of taken) {
         mark.run(at, via, Number(row.id));
-        const item = this.toItem(row);
+        const item = this.toItem(row, session);
         if (item) items.push(item);
+        else dropped.push(Number(row.id));
+      }
+      if (dropped.length > 0) {
+        // An offer for a task that's no longer open to this session (claimed,
+        // canceled), or a pointer whose task or message is gone: handled, not shown.
+        this.store.appendEvent({
+          kind: 'task_inbox.dropped',
+          platform: session.platform,
+          sessionId: session.id,
+          data: { via, ids: dropped },
+        });
       }
       if (items.length > 0) {
         this.store.appendEvent({
@@ -125,6 +144,11 @@ export class TaskInbox {
     });
   }
 
+  /** Runs work in one transaction with the task inbox (so a take of Nick's replies and of task items commit together). */
+  together<T>(work: () => T): T {
+    return this.store.transaction(work);
+  }
+
   /** Undelivered pointers for a session (for the hint when check_inbox has no key). */
   countWaiting(sessionId: string): number {
     const row = this.store.db
@@ -152,10 +176,24 @@ export class TaskInbox {
     for (const row of rows) insert.run(session.id, String(row.id), at);
   }
 
-  private toItem(row: Row): TaskInboxItem | undefined {
+  /**
+   * A pointer as an item, or undefined when there's nothing to hand over. An
+   * offer is re-checked when it's handed over, not only when it was made: a
+   * pool task claimed or canceled meanwhile is no longer open (T7).
+   */
+  private toItem(row: Row, session: SessionRecord): TaskInboxItem | undefined {
     const task = this.tasks.getTask(String(row.task_id));
     if (!task) return undefined;
     const kind = row.kind as TaskInboxKind;
+    if (kind === 'offer') {
+      const open =
+        task.approval === 'approved' &&
+        task.state === 'submitted' &&
+        task.targetSession === null &&
+        task.targetPlatform === session.platform &&
+        task.targetProject === session.project;
+      if (!open) return undefined;
+    }
     const base = { id: Number(row.id), kind, task, createdAt: String(row.created_at) };
     if (kind === 'message') {
       const message = this.tasks

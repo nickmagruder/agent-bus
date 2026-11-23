@@ -424,10 +424,10 @@ export class TaskStore {
       .run(sessionId, taskId, messageId, this.timestamp());
   }
 
-  /** Messages on a task so far, for the per-task cap (Q17). */
+  /** Agents' messages on a task so far, for the per-task cap (Q17); Nick's replies don't count. */
   countMessages(taskId: string): number {
     const row = this.store.db
-      .prepare('SELECT COUNT(*) AS n FROM task_messages WHERE task_id = ?')
+      .prepare("SELECT COUNT(*) AS n FROM task_messages WHERE task_id = ? AND sender = 'agent'")
       .get(taskId) as Row;
     return Number(row.n);
   }

@@ -8,8 +8,9 @@ import { Notifier, Questions } from '../../src/broker/questions.ts';
 import { BusError, BusService } from '../../src/broker/service.ts';
 import { StopDelivery } from '../../src/broker/stop-hook.ts';
 import { Store } from '../../src/broker/store.ts';
-import { TaskInbox } from '../../src/broker/task-inbox.ts';
+import { OFFER_BRIEF_CHARS, TASK_INBOX_TAKE, TaskInbox } from '../../src/broker/task-inbox.ts';
 import { ACTOR, TaskStore, type TaskRecord } from '../../src/broker/task-store.ts';
+import { TaskSlack } from '../../src/broker/task-slack.ts';
 import { TASK_LIMITS, TaskService, type TaskTarget } from '../../src/broker/tasks.ts';
 import type { Platform } from '../../src/shared/platform.ts';
 import { TOKENS, USER_ID } from './fakes.ts';
@@ -165,6 +166,92 @@ describe('send_message', () => {
   });
 });
 
+describe('the task inbox, after the #89 review', () => {
+  function sessionOf(who: Agent) {
+    const session = store.getSession(who.id);
+    if (!session) throw new Error('no session');
+    return session;
+  }
+
+  it('drops an offer whose pool task was claimed before it was handed over (T7)', () => {
+    const claude = agent('claude');
+    const first = agent('codex');
+    const second = agent('codex');
+    const task = approvedTask(claude, { platform: 'codex', project: 'clankers' });
+    // The offer is made but not handed over (a take of nothing).
+    taskInbox.take(sessionOf(first), 'check_inbox', { limit: 0 });
+    tasks.claimTask({ platform: 'codex', session: second.id, key: second.key, task: task.id });
+    expect(take(first).items).toEqual([]);
+    const dropped = store.db
+      .prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'task_inbox.dropped'")
+      .get();
+    expect(dropped).toEqual({ n: 1 });
+  });
+
+  it('makes no offers on a take narrowed to one task', () => {
+    const claude = agent('claude');
+    const codex = agent('codex');
+    const mine = claimed(claude, codex);
+    approvedTask(claude, { platform: 'codex', project: 'clankers' });
+    taskInbox.take(sessionOf(codex), 'wait_for_reply', { task: mine.id });
+    expect(taskInbox.countWaiting(codex.id)).toBe(0);
+  });
+
+  it(`hands over at most ${TASK_INBOX_TAKE} items at once, the rest later`, () => {
+    const claude = agent('claude');
+    const codex = agent('codex');
+    const task = claimed(claude, codex);
+    for (let i = 0; i < TASK_INBOX_TAKE + 3; i++) send(claude, task, `m${i}`);
+    const first = take(codex);
+    expect(first.items).toHaveLength(TASK_INBOX_TAKE);
+    expect(first.remaining).toBe(3);
+    expect(take(codex).items).toHaveLength(3);
+  });
+
+  it("doesn't count Nick's replies against the 20-message cap", () => {
+    const claude = agent('claude');
+    const codex = agent('codex');
+    const task = claimed(claude, codex);
+    for (let i = 0; i < 5; i++) {
+      records.addTaskMessage({
+        taskId: task.id,
+        sender: 'human',
+        slackUser: USER_ID,
+        role: 'user',
+        body: `from Nick ${i}`,
+        slackChannelId: 'C1',
+        slackTs: `1800000000.00000${i}`,
+      });
+    }
+    for (let i = 0; i < TASK_LIMITS.messagesPerTask; i++) send(claude, task, `m${i}`);
+    expectBusError(() => send(codex, task, 'one more'), 'too_many_tasks');
+  });
+
+  it('wakes a named target when Nick approves its task in Slack', () => {
+    const slackWoken: string[] = [];
+    const slack = new TaskSlack({
+      store,
+      queue: { kick: () => undefined },
+      editor: { update: () => undefined },
+      humanUserId: USER_ID,
+      log: silentLogger,
+      wake: (id) => slackWoken.push(id),
+    });
+    const claude = agent('claude');
+    const codex = agent('codex');
+    const task = tasks.createTask({
+      platform: 'claude',
+      session: claude.id,
+      key: claude.key,
+      title: 't',
+      brief: 'b',
+      to: { session: codex.id },
+    });
+    slack.decideByButton(task.id, 'approve', USER_ID);
+    expect(slackWoken).toEqual([codex.id]);
+  });
+});
+
 describe('the task inbox', () => {
   it('hands each pointer over once', () => {
     const claude = agent('claude');
@@ -204,6 +291,71 @@ describe('the task inbox', () => {
     const task = approvedTask(claude, { platform: 'codex', project: 'clankers' });
     tasks.claimTask({ platform: 'codex', session: first.id, key: first.key, task: task.id });
     expect(take(second).items).toEqual([]);
+  });
+});
+
+describe('the Stop hook with Nick and notices together', () => {
+  function stop(who: Agent, appSessionId: string, delivery: StopDelivery) {
+    return service.hook(who.platform, { event: 'Stop', appSessionId }, delivery.check, delivery);
+  }
+
+  function failNotice(creator: Agent): void {
+    const codex = agent('codex');
+    const task = claimed(creator, codex);
+    tasks.updateTask({
+      platform: 'codex',
+      session: codex.id,
+      key: codex.key,
+      task: task.id,
+      state: 'failed',
+      note: 'No access',
+    });
+  }
+
+  it('says Nick replied when he did, and lists the notices after his words', () => {
+    const claude = hooked('claude', 'app-n');
+    store.setThread(claude.id, 'C_N', '1800000100.000001');
+    inbox.receive({
+      channel: 'C_N',
+      channelType: 'channel',
+      ts: '1800000100.000002',
+      threadTs: '1800000100.000001',
+      user: USER_ID,
+      text: 'Ship it',
+      hasFiles: false,
+    });
+    failNotice(claude);
+    const result = stop(claude, 'app-n', new StopDelivery(inbox, store, taskInbox));
+    expect(result.action).toBe('blocked');
+    expect(result.reason).toContain('Nick replied in Slack');
+    const reason = result.reason ?? '';
+    expect(reason.indexOf('Ship it')).toBeLessThan(reason.indexOf('Task updates from agent-bus'));
+  });
+
+  it('hands over at most 5 notices per block, the rest at the next', () => {
+    const claude = hooked('claude', 'app-m');
+    for (let i = 0; i < 7; i++) failNotice(claude);
+    const first = stop(claude, 'app-m', new StopDelivery(inbox, store, taskInbox));
+    expect((first.reason ?? '').match(/ failed: read why/g)).toHaveLength(5);
+    expect(take(claude).items).toHaveLength(2);
+  });
+
+  it('counts notice blocks toward the 6-per-hour cap', () => {
+    const claude = hooked('claude', 'app-k');
+    for (let i = 0; i < 7; i++) {
+      failNotice(claude);
+      const delivery = new StopDelivery(inbox, store, taskInbox);
+      const result = stop(claude, 'app-k', delivery);
+      delivery.settle(true);
+      if (i < 6) expect(result.action).toBe('blocked');
+      else expect(result.action).not.toBe('blocked');
+      service.hook(
+        'claude',
+        { event: 'Stop', appSessionId: 'app-k', stopHookActive: true },
+        delivery.check,
+        delivery,
+      );
+    }
   });
 });
 
@@ -439,6 +591,93 @@ describe('over MCP', () => {
     });
     expect(textOf(result)).toContain("read its result with list_tasks (the other agent's words)");
     expect(textOf(result)).not.toContain('ship it');
+    await client.close();
+  });
+
+  it('cuts an offer’s brief, pointing at list_tasks for the rest', async () => {
+    const claude = agent('claude');
+    const codex = agent('codex');
+    approvedTask(claude, { platform: 'codex', project: 'clankers' }, 'B'.repeat(2000));
+    const client = await connect('codex');
+    const result = await client.callTool({
+      name: 'check_inbox',
+      arguments: { session: codex.id, key: codex.key },
+    });
+    const offer = (result.structuredContent as { tasks: { brief: string; briefCut: boolean }[] })
+      .tasks[0];
+    expect(offer?.brief).toHaveLength(OFFER_BRIEF_CHARS);
+    expect(offer?.briefCut).toBe(true);
+    expect(textOf(result)).toContain('Read it whole with list_tasks');
+    expect(textOf(result).length).toBeLessThan(2000);
+    await client.close();
+  });
+
+  it("still returns Nick's replies when the key is stale, and says the key was rejected", async () => {
+    const claude = agent('claude');
+    store.setThread(claude.id, 'C_K', '1800000200.000001');
+    inbox.receive({
+      channel: 'C_K',
+      channelType: 'channel',
+      ts: '1800000200.000002',
+      threadTs: '1800000200.000001',
+      user: USER_ID,
+      text: 'Still there?',
+      hasFiles: false,
+    });
+    const client = await connect('claude');
+    const result = await client.callTool({
+      name: 'check_inbox',
+      arguments: { session: claude.id, key: `abk_${'z'.repeat(43)}` },
+    });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({
+      messages: [{ text: 'Still there?' }],
+      keyRejected: true,
+    });
+    expect(textOf(result)).toContain('Your session key was rejected');
+    const denied = store.db.prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'denied'").get();
+    expect(denied).toEqual({ n: 1 });
+    await client.close();
+  });
+
+  it("keeps Nick's replies unread when taking task items fails", async () => {
+    const claude = agent('claude');
+    store.setThread(claude.id, 'C_F', '1800000300.000001');
+    inbox.receive({
+      channel: 'C_F',
+      channelType: 'channel',
+      ts: '1800000300.000002',
+      threadTs: '1800000300.000001',
+      user: USER_ID,
+      text: 'Do not lose me',
+      hasFiles: false,
+    });
+    const original = taskInbox.take.bind(taskInbox);
+    taskInbox.take = () => {
+      throw new Error('boom');
+    };
+    const client = await connect('claude');
+    const failed = await client
+      .callTool({
+        name: 'check_inbox',
+        arguments: { session: claude.id, key: claude.key },
+      })
+      .catch((error: unknown) => error);
+    expect(failed).toBeDefined();
+    taskInbox.take = original;
+    const again = await client.callTool({ name: 'check_inbox', arguments: { session: claude.id } });
+    expect(again.structuredContent).toMatchObject({ messages: [{ text: 'Do not lose me' }] });
+    await client.close();
+  });
+
+  it('refuses waiting for a question and a task at once', async () => {
+    const claude = agent('claude');
+    const client = await connect('claude');
+    const result = await client.callTool({
+      name: 'wait_for_reply',
+      arguments: { session: claude.id, key: claude.key, question_id: 'q-000000', task: 't-000000' },
+    });
+    expect(textOf(result)).toContain('not both');
     await client.close();
   });
 
