@@ -2,7 +2,13 @@ import type { App } from '@slack/bolt';
 import type { InboundMessage, Inbox } from '../inbox.ts';
 import { errorMessage, type Logger } from '../log.ts';
 import { ANSWER_ACTION, type ButtonOutcome, type Questions } from '../questions.ts';
-import { TASK_ACTION, TASK_CLICK_REPLIES, type TaskSlack } from '../task-slack.ts';
+import {
+  FLAG_ACTION,
+  FLAG_CLICK_REPLIES,
+  TASK_ACTION,
+  TASK_CLICK_REPLIES,
+  type TaskSlack,
+} from '../task-slack.ts';
 
 /**
  * Reduces a Slack `message` event to the fields the inbox routes on.
@@ -131,6 +137,50 @@ export function registerTaskActions(app: App, taskSlack: TaskSlack, log: Logger)
       else log('info', `task ${outcome} by button`, { task: click.taskId });
     } catch (error) {
       log('error', 'Slack task button handling failed', { error: errorMessage(error) });
+      await respond({
+        response_type: 'ephemeral',
+        replace_original: false,
+        text: 'Something went wrong; the task is unchanged. Try again, or see the broker log.',
+      }).catch(() => undefined);
+    }
+  });
+}
+
+export interface FlagClick {
+  taskId: string;
+  action: 'cancel' | 'release';
+  userId: string;
+}
+
+/** Reads a flag DM's Cancel or Release click from a `block_actions` payload. */
+export function toFlagClick(body: unknown, action: unknown): FlagClick | undefined {
+  if (typeof action !== 'object' || action === null) return undefined;
+  const a = action as Record<string, unknown>;
+  const match = FLAG_ACTION.exec(str(a.action_id) ?? '');
+  const taskId = str(a.block_id);
+  const user = (body as { user?: { id?: unknown } } | null)?.user?.id;
+  if (a.type !== 'button' || !match || !taskId || typeof user !== 'string') return undefined;
+  return { taskId, action: match[1] === 'release' ? 'release' : 'cancel', userId: user };
+}
+
+/**
+ * Handles Cancel and Release on stuck and waiting flag DMs (#61, Q8, Q23).
+ * The task comes from the block ID and the action from the action ID; only
+ * Nick's clicks count (T5). Acks first, then acts.
+ */
+export function registerFlagActions(app: App, taskSlack: TaskSlack, log: Logger): void {
+  app.action(FLAG_ACTION, async ({ ack, body, action, respond }) => {
+    await ack();
+    const click = toFlagClick(body, action);
+    if (!click) return;
+    try {
+      const outcome = taskSlack.flagByButton(click.taskId, click.action, click.userId);
+      const reply = FLAG_CLICK_REPLIES[outcome];
+      if (reply)
+        await respond({ response_type: 'ephemeral', replace_original: false, text: reply });
+      else log('info', `task ${outcome} by flag button`, { task: click.taskId });
+    } catch (error) {
+      log('error', 'Slack flag button handling failed', { error: errorMessage(error) });
       await respond({
         response_type: 'ephemeral',
         replace_original: false,

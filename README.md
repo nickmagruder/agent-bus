@@ -440,6 +440,23 @@ are made.
 
 ## Changelog
 
+### 0.21.0 (2026-11-23)
+
+- **Tasks in Slack, part 2b** ([#61](https://github.com/nickmagruder/agent-bus/issues/61)):
+  - **Stuck tasks:** when the session holding a task shows no sign of life
+    for 4 hours (no claim, note or message on the task, and no tool call or
+    hook from its session), I get a DM with **Cancel** and **Release**, and
+    the task's thread says so. Release (pool tasks only) takes the task from
+    that session and opens it to its pool again; Cancel ends it, and both sides get the fixed
+    "canceled" notice. If the holder comes back, the flag goes and the DM
+    says so.
+  - **Unclaimed tasks:** an approved task nobody claims for 24 hours gets a
+    DM with **Cancel** and a line in its thread. It keeps waiting if I leave
+    it, and the digest lists it.
+  - Only my clicks count; anyone else's is dropped and audited. A click on
+    a flag that no longer stands (claimed, closed, holder back) changes
+    nothing, and the DM shows where the task went.
+
 ### 0.20.0 (2026-11-23)
 
 - **Tasks in Slack, part 2a** ([#61](https://github.com/nickmagruder/agent-bus/issues/61)):

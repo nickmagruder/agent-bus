@@ -245,6 +245,14 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE tasks ADD COLUMN mirrored INTEGER NOT NULL DEFAULT 0;
   CREATE INDEX tasks_by_thread_post ON tasks (thread_post_id);
   `,
+  // v10: stuck and unclaimed flags (#61, Q8, Q23). A flagged task DMs me
+  // once per flag, with buttons; the task keeps that DM and which flag it was,
+  // and when it last became open to claim (approved, or released).
+  `
+  ALTER TABLE tasks ADD COLUMN flag_post_id INTEGER REFERENCES outbox (id);
+  ALTER TABLE tasks ADD COLUMN flag_kind TEXT CHECK (flag_kind IN ('stuck', 'waiting'));
+  ALTER TABLE tasks ADD COLUMN open_since TEXT;
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

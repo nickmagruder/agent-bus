@@ -14,7 +14,12 @@ import { APPROVAL, BusService } from './service.ts';
 import { createWebSlackApi, type SlackApi } from './slack/api.ts';
 import { createSlackConnection, type SlackConnection } from './slack/connection.ts';
 import { ChannelDirectory } from './slack/directory.ts';
-import { registerActions, registerInbound, registerTaskActions } from './slack/inbound.ts';
+import {
+  registerActions,
+  registerFlagActions,
+  registerInbound,
+  registerTaskActions,
+} from './slack/inbound.ts';
 import { Notifier, Questions } from './questions.ts';
 import { PostQueue } from './slack/queue.ts';
 import { Store } from './store.ts';
@@ -145,6 +150,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
     registerInbound(connection.app, inbox, log);
     registerActions(connection.app, questions, log);
     registerTaskActions(connection.app, taskSlack, log);
+    registerFlagActions(connection.app, taskSlack, log);
   }
 
   let http: RunningHttpServer | undefined;
