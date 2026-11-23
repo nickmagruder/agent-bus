@@ -50,8 +50,9 @@ into tracked files.
   best choice at the time and never the PR's author: another platform than
   the author where one can run (Copilot, Codex or a Claude session), else
   a separate session on the same platform (the linked reviewer, if there
-  is one). A completed automatic Copilot review counts; "unable to review"
-  doesn't. A review posted through Nick's `gh` login starts with
+  is one). Local agents orchestrate reviews: the repo no longer requests
+  Copilot automatically. Any completed review by someone other than the
+  author counts; "unable to review" doesn't. A review posted through Nick's `gh` login starts with
   `<!-- ai-review -->`, and the author never adds it to its own comment.
   Before handing a PR back, fix the valid comments and reply with a reason
   to the rest, then resolve the threads.

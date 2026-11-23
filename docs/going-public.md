@@ -121,6 +121,9 @@ Agents open PRs; Nick merges app-repo PRs. Steps run in order unless noted.
 
 ### 4. Copilot first review (with step 3)
 
+_Turned off 2026-11-22 ([#90](https://github.com/nickmagruder/agent-bus/issues/90)): the ruleset
+no longer requests Copilot reviews; local agents orchestrate them._
+
 - [x] Ruleset rule "Automatically request Copilot code review", reviewing new
       pushes
 - [x] `.github/copilot-instructions.md` from `AGENTS.md` working rules and

@@ -403,8 +403,8 @@ On GitHub:
 - **Dependabot** opens grouped weekly updates for npm packages and Actions
   (pinned by commit SHA).
 - **An AI review** on every PR, requested by the agent that opened it
-  from the best reviewer available, never the author (a completed Copilot
-  review counts). Copilot reads `.github/copilot-instructions.md` and the
+  from the best reviewer available, never the author; local agents
+  orchestrate it, and the ruleset no longer requests Copilot. Copilot reads `.github/copilot-instructions.md` and the
   two-axis `code-review` skill in `.github/skills/` (standards, and the
   linked issue as the spec), which Claude reviewers use too.
 
@@ -439,10 +439,11 @@ are made.
 
 - **AI review on every PR** ([#90](https://github.com/nickmagruder/agent-bus/issues/90)): the
   agent that opened a PR requests its review right away, from the best
-  reviewer available, never the author (a completed Copilot review counts),
-  per clankers `standards/git.md`. `AGENTS.md`, `CONTRIBUTING.md` and the
-  README say so in place of "Copilot reviews every PR"; the review table
-  in `docs/going-public.md` notes it's superseded.
+  reviewer available, never the author, per clankers `standards/git.md`.
+  `AGENTS.md`, `CONTRIBUTING.md` and the README say so in place of "Copilot
+  reviews every PR"; the review table in `docs/going-public.md` notes it's
+  superseded. The `main` ruleset no longer requests a Copilot review
+  automatically: local agents orchestrate reviews.
 
 ### 0.19.0 (2026-11-22)
 
