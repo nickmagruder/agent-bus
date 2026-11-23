@@ -129,6 +129,11 @@ export function registerTaskActions(app: App, taskSlack: TaskSlack, log: Logger)
       else log('info', `task ${outcome} by button`, { task: click.taskId });
     } catch (error) {
       log('error', 'Slack task button handling failed', { error: errorMessage(error) });
+      await respond({
+        response_type: 'ephemeral',
+        replace_original: false,
+        text: 'Something went wrong; the task is unchanged. Try again, or see the broker log.',
+      }).catch(() => undefined);
     }
   });
 }

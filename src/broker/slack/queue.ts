@@ -138,8 +138,20 @@ export class PostQueue {
   private async deliver(post: OutboxRecord): Promise<void> {
     const session = post.sessionId ? this.store.getSession(post.sessionId) : undefined;
     const sessionThread = post.inThread && session?.threadTs ? session : undefined;
-    // A reply under another post (a task's thread); top-level if that post never went out.
+    // A reply under another post (a task's thread). If that post failed for
+    // good, the reply is dropped rather than posted loose in the channel.
     const parent = post.replyTo ? this.store.getPost(post.replyTo) : undefined;
+    if (parent?.state === 'failed') {
+      this.store.transaction(() => {
+        this.store.markAttemptFailed(post.id, 'its thread root failed', true);
+        this.store.appendEvent({
+          kind: 'post.dropped',
+          sessionId: post.sessionId,
+          data: { postId: post.id, replyTo: parent.id },
+        });
+      });
+      return;
+    }
     const thread =
       parent?.state === 'sent' && parent.slackChannelId && parent.slackTs
         ? { slackChannelId: parent.slackChannelId, threadTs: parent.slackTs }

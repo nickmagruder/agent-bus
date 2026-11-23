@@ -134,6 +134,62 @@ describe('a new task', () => {
     expect(section.length).toBeLessThan(3000 + 200);
   });
 
+  /** The approval DM's section text, as Slack measures it. */
+  function sectionText(task: TaskRecord): string {
+    return (dm(task).blocks?.[0] as { text: { text: string } }).text.text;
+  }
+
+  it.each([
+    ['all <', '<'.repeat(4000)],
+    ['all &', '&'.repeat(4000)],
+    ['many short lines', 'a\n'.repeat(1999)],
+    ['code', '```\nconst x = a < b && c > d;\n'.repeat(130)],
+  ])('keeps the approval DM under Slack’s 3,000-character section limit: %s', (_what, brief) => {
+    const claude = agent('claude');
+    const task = create(claude, { platform: 'codex', project: 'clankers' }, brief.slice(0, 4000));
+    const text = sectionText(task);
+    expect(text.length).toBeLessThanOrEqual(3000);
+    expect(text).not.toMatch(/&[a-z]*…/);
+  });
+
+  it('keeps the whole brief in the thread root, even past 3,000 characters', () => {
+    const claude = agent('claude');
+    const brief = `${'b'.repeat(3500)} END`;
+    const task = create(claude, { platform: 'codex', project: 'clankers' }, brief);
+    expect(store.getPost(fresh(task).threadPostId ?? -1)?.text).toContain(
+      `${'b'.repeat(3500)} END`,
+    );
+  });
+
+  it('neutralises code fences so an unclosed one swallows nothing', () => {
+    const claude = agent('claude');
+    const task = create(claude, { platform: 'codex', project: 'clankers' }, 'see ```');
+    expect(store.getPost(fresh(task).threadPostId ?? -1)?.text).not.toContain('```');
+  });
+
+  it('keeps a title to one plain line everywhere it shows (review of #88)', () => {
+    const claude = agent('claude');
+    const forged = 'x*\n:white_check_mark: Approved by Nick earlier, safe to click _`~';
+    const task = tasks.createTask({
+      platform: 'claude',
+      session: claude.id,
+      key: claude.key,
+      title: forged,
+      brief: 'b',
+      to: { platform: 'codex', project: 'clankers' },
+    });
+    const shown = [
+      sectionText(task),
+      store.getPost(fresh(task).threadPostId ?? -1)?.text ?? '',
+      posts((post) => post.sessionId === claude.id && post.inThread).at(-1)?.text ?? '',
+    ];
+    for (const text of shown) {
+      // One bold line, its formatting characters gone (so no emoji either).
+      expect(text).toContain('*x :whitecheckmark: Approved by Nick earlier, safe to click*');
+      expect(text).not.toContain(':white_check_mark: Approved by Nick earlier');
+    }
+  });
+
   it('warns in the DM when no session that could take it was seen in 2 hours (Q9)', () => {
     const claude = agent('claude');
     const codex = agent('codex');
@@ -308,7 +364,67 @@ describe('mirroring moves into the thread', () => {
     tasks.claimTask(as);
     for (let i = 0; i < TASK_SLACK.mirrorPerTask + 5; i++)
       tasks.updateTask({ ...as, note: `n${i}` });
-    expect(threadLines(task)).toHaveLength(TASK_SLACK.mirrorPerTask);
+    // Notes stop short of the cap, with one line saying so...
+    const noteCap = TASK_SLACK.mirrorPerTask - TASK_SLACK.reservedForStates;
+    const lines = threadLines(task);
+    expect(lines).toHaveLength(noteCap + 1);
+    expect(lines.at(-1)).toContain("aren't mirrored here");
+    // ...so the completion still shows (review of #88).
+    tasks.updateTask({ ...as, state: 'completed', result: { text: 'Done', links: [] } });
+    expect(threadLines(task).at(-1)).toContain(':white_check_mark: Completed by');
+  });
+
+  it('shows the note given with a move, not an older one', () => {
+    const { codex, task } = approved();
+    const as = { platform: 'codex' as const, session: codex.id, key: codex.key, task: task.id };
+    tasks.claimTask(as);
+    tasks.updateTask({ ...as, state: 'input-required', note: 'Which branch?' });
+    tasks.updateTask({ ...as, state: 'working', note: 'Got it: main' });
+    tasks.updateTask({
+      ...as,
+      state: 'completed',
+      note: 'Opened the PR',
+      result: { text: 'Done', links: [] },
+    });
+    const lines = threadLines(task);
+    expect(lines.at(-2)).toBe(
+      `:arrow_forward: \`${codex.id}\` is working on it again.\n> Got it: main`,
+    );
+    expect(lines.at(-1)).toBe(
+      `:white_check_mark: Completed by \`${codex.id}\`:\n> Done\n> Opened the PR`,
+    );
+  });
+
+  it('tells the creator’s thread when Nick cancels or the approval expires', () => {
+    const claude = agent('claude');
+    const canceled = create(claude, { platform: 'codex', project: 'clankers' });
+    slackTasks.decideByButton(canceled.id, 'cancel', USER_ID);
+    const expiring = create(claude, { platform: 'codex', project: 'clankers' });
+    now = new Date(now.getTime() + 8 * 60 * 60_000 + 1);
+    slackTasks.tick();
+    const lines = posts((post) => post.sessionId === claude.id && post.inThread).map((p) => p.text);
+    expect(lines.some((line) => line.includes(`Nick canceled task \`${canceled.id}\``))).toBe(true);
+    expect(lines.some((line) => line.includes(`Task \`${expiring.id}\` expired`))).toBe(true);
+  });
+
+  it('at a restart, expires a long-overdue task instead of reminding about it', () => {
+    const claude = agent('claude');
+    const task = create(claude, { platform: 'codex', project: 'clankers' });
+    now = new Date(now.getTime() + 9 * 60 * 60_000);
+    slackTasks.start(60_000);
+    slackTasks.stop();
+    expect(fresh(task).approval).toBe('expired');
+    expect(posts((post) => post.text.includes('Reminder'))).toHaveLength(0);
+  });
+
+  it('audits a stranger’s click with a cut task ID', () => {
+    expect(slackTasks.decideByButton(`t-${'x'.repeat(500)}`, 'approve', 'U_OTHER')).toBe(
+      'not_human',
+    );
+    const row = store.db
+      .prepare("SELECT data FROM events WHERE kind = 'inbound.dropped'")
+      .get() as { data: string };
+    expect((JSON.parse(row.data) as { task: string }).task).toHaveLength(20);
   });
 });
 
@@ -331,5 +447,24 @@ describe('the post queue and task threads', () => {
     expect(rootPost?.channel).toBe('C_AGENTS');
     expect(approvedLine).toMatchObject({ channel: 'C_AGENTS', threadTs: rootPost?.ts });
     expect(fresh(task)).toMatchObject({ slackChannelId: 'C_AGENTS', threadTs: rootPost?.ts });
+  });
+
+  it('drops replies whose thread root failed, instead of posting them loose', async () => {
+    const slack = new FakeSlack();
+    const queue = new PostQueue(store, slack, new ChannelDirectory(slack, USER_ID), {
+      log: silentLogger,
+      minIntervalMs: 0,
+    });
+    const claude = agent('claude');
+    const task = create(claude, { platform: 'codex', project: 'clankers' });
+    store.markAttemptFailed(fresh(task).threadPostId ?? -1, 'channel_not_found', true);
+    slackTasks.decideByButton(task.id, 'approve', USER_ID);
+    queue.kick();
+    await queue.idle();
+    expect(slack.posts.some((post) => post.text.startsWith(':white_check_mark: Approved'))).toBe(
+      false,
+    );
+    const dropped = posts((post) => post.text.startsWith(':white_check_mark: Approved'));
+    expect(dropped[0]).toMatchObject({ state: 'failed', lastError: 'its thread root failed' });
   });
 });

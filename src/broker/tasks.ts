@@ -346,7 +346,7 @@ export class TaskService {
       });
       if (after) {
         this.notify(after, to, task.holder);
-        this.events?.moved(after, from, caller.id);
+        this.events?.moved(after, from, caller.id, note);
       }
       return after;
     });

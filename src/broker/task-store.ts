@@ -484,6 +484,15 @@ export class TaskStore {
     );
   }
 
+  /** Counts one more mirrored line only if exactly `at` were counted (the one "no more notes" line). */
+  countMirroredAt(id: string, at: number): boolean {
+    return (
+      this.store.db
+        .prepare('UPDATE tasks SET mirrored = mirrored + 1 WHERE id = ? AND mirrored = ?')
+        .run(id, at).changes === 1
+    );
+  }
+
   /** Tasks a session holds and is still working on (working or input-required), newest first. */
   heldTasks(sessionId: string): TaskRecord[] {
     const rows = this.store.db

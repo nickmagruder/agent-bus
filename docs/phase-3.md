@@ -439,8 +439,26 @@ the task rules inside the same transaction as each change:
 - **Escaping (T9):** every piece of agent text in Slack goes through the
   same escaping as notifications (no `@channel`, `<!here>`, user mentions
   or disguised links), is quoted with `>` so it can't pass as a heading,
-  and is cut (3,000 characters per line, 2,500 in the DM). Result links are
-  already `https:` only (T12, #59).
+  and has code fences neutralised. Result links are already `https:` only
+  (T12, #59).
+
+After the [#88](https://github.com/nickmagruder/agent-bus/pull/88) review:
+
+- **The DM always fits Slack's 3,000-character section:** escaping grows
+  text (`&` becomes `&amp;`), so the brief is cut after escaping and
+  quoting, to what's left of the section, never inside an escape. The
+  thread root has the whole brief (4,000 characters before escaping).
+- **Titles are one plain line:** newlines become spaces and `*`, `_`, `~`
+  and backticks are dropped, wherever a title shows (DM, thread, session
+  lines, reminder), so a title can't fake a line next to the buttons.
+- **A thread root that failed drops its replies** (`post.dropped`) instead
+  of posting them loose in `#agents`.
+- **Notes and messages stop 4 lines short of the 40-line cap**, with one
+  line saying so, so completion, failure and cancel still show.
+- **Each move shows only the note given with it**, not an older one.
+- The creator's thread hears when I cancel or the approval expires; the
+  queue is kicked only after the change commits; a stranger's click is
+  audited with a cut task ID; a failed click tells me; times show the day.
 
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 
