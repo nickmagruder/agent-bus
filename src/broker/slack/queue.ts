@@ -137,8 +137,14 @@ export class PostQueue {
 
   private async deliver(post: OutboxRecord): Promise<void> {
     const session = post.sessionId ? this.store.getSession(post.sessionId) : undefined;
-    const thread = post.inThread && session?.threadTs ? session : undefined;
-    // Once a session's thread exists, replies follow it even if channel membership changed.
+    const sessionThread = post.inThread && session?.threadTs ? session : undefined;
+    // A reply under another post (a task's thread); top-level if that post never went out.
+    const parent = post.replyTo ? this.store.getPost(post.replyTo) : undefined;
+    const thread =
+      parent?.state === 'sent' && parent.slackChannelId && parent.slackTs
+        ? { slackChannelId: parent.slackChannelId, threadTs: parent.slackTs }
+        : sessionThread;
+    // Once a thread exists, replies follow it even if channel membership changed.
     const channel = thread?.slackChannelId ?? (await this.directory.resolve(post.target));
 
     const result = await this.api.postMessage({
@@ -152,6 +158,7 @@ export class PostQueue {
 
     this.store.transaction(() => {
       this.store.markSent(post.id, result.channel, result.ts);
+      this.store.linkTaskThread(post.id, result.channel, result.ts);
       if (post.inThread && session && !session.threadTs) {
         // The session's first threaded post becomes the thread root.
         this.store.setThread(session.id, result.channel, result.ts);
