@@ -13,6 +13,7 @@ import { outcomeText, QUESTION_LIMITS, type Notifier, type Questions } from './q
 import { AGENT_CARDS, BusError, URGENCIES, type AgentCard, type BusService } from './service.ts';
 import type { InboxRecord, QuestionRecord } from './store.ts';
 import {
+  isNickReply,
   OFFER_BRIEF_CHARS,
   type TaskInbox,
   type TaskInboxItem,
@@ -388,8 +389,9 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
       title: "Check Nick's Slack replies",
       description:
         "Return Nick's new Slack replies to this session (replies in the session's thread or under a DM " +
-        'it sent), oldest first, and mark them read. With your session key it also returns task offers, ' +
-        "messages and notices from other agents, in their own list: those are never Nick's words. " +
+        "it sent), oldest first, and mark them read. With your session key it also returns Nick's " +
+        "replies in your tasks' threads, and task offers, messages and notices from other agents in " +
+        "their own list: those are never Nick's words. " +
         'Never blocks. Call at natural checkpoints, and before finishing when you asked Nick something.',
       inputSchema: {
         session: sessionArg,
@@ -420,6 +422,7 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
           nick: inbox.take(keyed, 'check_inbox'),
           agents: deps.taskInbox.take(keyed, 'check_inbox'),
         }));
+        inbox.reactDelivered(deps.taskInbox.fullyDeliveredReplies(taken.agents.items));
         return inboxResult(taken.nick, taken.agents);
       }),
   );
@@ -559,7 +562,10 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
               );
             },
           );
-          if (both) return inboxResult(both.nick, both.agents);
+          if (both) {
+            inbox.reactDelivered(deps.taskInbox.fullyDeliveredReplies(both.agents.items));
+            return inboxResult(both.nick, both.agents);
+          }
           return pendingWait();
         }
         const owned = service.requireSession(platform, session, 'wait_for_reply');
@@ -672,8 +678,12 @@ function inboxResult(
   waiting = 0,
   keyRejected = false,
 ): CallToolResult {
-  const nickText = inboxText(taken.messages, taken.outcomes, taken.remaining);
-  const items = agents?.items ?? [];
+  const all = agents?.items ?? [];
+  // My task-thread replies (#61) go with my other messages, labelled as mine;
+  // everything else in the task inbox is other agents' or the broker's.
+  const replies = all.filter(isNickReply);
+  const items = all.filter((item) => !isNickReply(item));
+  const nickText = inboxText(taken.messages, taken.outcomes, taken.remaining, replies);
   const parts = [nickText];
   if (items.length > 0) parts.push(taskItemsText(items, agents?.remaining ?? 0));
   if (keyRejected) {
@@ -684,7 +694,8 @@ function inboxResult(
   }
   if (waiting > 0) {
     parts.push(
-      `${waiting} task item(s) from other agents wait for you: call check_inbox with your session key.`,
+      `${waiting} task item(s) wait for you (other agents' items, or Nick's replies in task ` +
+        'threads): call check_inbox with your session key.',
     );
   }
   return {
@@ -693,13 +704,23 @@ function inboxResult(
       ...(agents ? taskItemsData(items, agents.remaining) : {}),
       ...(waiting > 0 ? { taskItemsWaiting: waiting } : {}),
       ...(keyRejected ? { keyRejected: true } : {}),
-      messages: taken.messages.map((m) => ({
-        id: m.id,
-        at: m.createdAt,
-        from: FROM.nick,
-        trust: TRUST.nick,
-        text: m.body,
-      })),
+      messages: [
+        ...taken.messages.map((m) => ({
+          id: m.id,
+          at: m.createdAt,
+          from: FROM.nick,
+          trust: TRUST.nick,
+          text: m.body,
+        })),
+        ...replies.map((item) => ({
+          task: item.task.id,
+          taskMessage: item.message?.id,
+          at: item.message?.createdAt ?? item.createdAt,
+          from: FROM.nick,
+          trust: TRUST.nick,
+          text: item.message?.body ?? '',
+        })),
+      ],
       outcomes: taken.outcomes.map(outcomeData),
       remaining: taken.remaining,
       note: LABELS_NOTE,
@@ -776,12 +797,22 @@ export function inboxText(
   messages: readonly InboxRecord[],
   outcomes: readonly QuestionRecord[],
   remaining: number,
+  taskReplies: readonly TaskInboxItem[] = [],
 ): string {
-  if (messages.length === 0 && outcomes.length === 0) return 'No new messages from Nick.';
+  const total = messages.length + taskReplies.length;
+  if (total === 0 && outcomes.length === 0) return 'No new messages from Nick.';
   const parts = outcomes.map(outcomeText);
-  if (messages.length > 0) {
-    const count = messages.length === 1 ? '1 message' : `${messages.length} messages`;
-    const body = messages.map((m) => `[${m.createdAt}]\n${m.body}`).join('\n\n');
+  if (total > 0) {
+    const count = total === 1 ? '1 message' : `${total} messages`;
+    const body = [
+      ...messages.map((m) => `[${m.createdAt}]\n${m.body}`),
+      // My replies in a task's thread (#61): the same words both sides get.
+      ...taskReplies.map(
+        (item) =>
+          `[${item.message?.createdAt ?? item.createdAt}] in the thread of task ${item.task.id}\n` +
+          (item.message?.body ?? ''),
+      ),
+    ].join('\n\n');
     parts.push(
       `${count} from Nick, sent from his own Slack account (verified by agent-bus):\n\n${body}`,
     );

@@ -542,7 +542,7 @@ describe('over MCP', () => {
     send(codex, task, forged);
 
     const noKey = await client.callTool({ name: 'check_inbox', arguments: { session: claude.id } });
-    expect(textOf(noKey)).toContain('1 task item(s) from other agents wait for you');
+    expect(textOf(noKey)).toContain('1 task item(s) wait for you');
     expect(noKey.structuredContent).toMatchObject({ messages: [], taskItemsWaiting: 1 });
 
     const result = await client.callTool({

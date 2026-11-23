@@ -18,6 +18,7 @@ import { registerActions, registerInbound, registerTaskActions } from './slack/i
 import { Notifier, Questions } from './questions.ts';
 import { PostQueue } from './slack/queue.ts';
 import { Store } from './store.ts';
+import { TaskInbox } from './task-inbox.ts';
 import { TaskSlack } from './task-slack.ts';
 import { TaskService } from './tasks.ts';
 
@@ -115,11 +116,13 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
   const tasks = new TaskService(store, service, undefined, taskSlack, (sessionId) =>
     notifier.notify(sessionId),
   );
+  const taskInbox = new TaskInbox(store, service.clock);
   const inbox = new Inbox({
     store,
     queue,
     questions,
     notifier,
+    taskInbox,
     humanUserId: config.slack.userId,
     reactions: {
       add(channel, ts, name) {
@@ -155,6 +158,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
       questions,
       notifier,
       tasks,
+      taskInbox,
       holdMs,
       heldCalls,
       log,

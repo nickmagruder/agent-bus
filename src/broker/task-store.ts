@@ -579,6 +579,55 @@ export class TaskStore {
     return rows.map(toTask);
   }
 
+  /** The task whose thread root is this Slack post (for routing my replies there, #61). */
+  findByThread(slackChannelId: string, threadTs: string): TaskRecord | undefined {
+    const row = this.store.db
+      .prepare('SELECT * FROM tasks WHERE slack_channel_id = ? AND thread_ts = ?')
+      .get(slackChannelId, threadTs) as Row | undefined;
+    return row && toTask(row);
+  }
+
+  /** One of my Slack messages already stored on a task (a Slack retry of it). */
+  findSlackMessage(slackChannelId: string, slackTs: string): TaskMessageRecord | undefined {
+    const row = this.store.db
+      .prepare('SELECT * FROM task_messages WHERE slack_channel_id = ? AND slack_ts = ?')
+      .get(slackChannelId, slackTs) as Row | undefined;
+    return row && toTaskMessage(row);
+  }
+
+  /**
+   * Of these messages, mine whose every recipient has now been handed it
+   * (all their task inbox pointers delivered): the ones that earn their ✅.
+   */
+  fullyDeliveredReplies(messageIds: readonly number[]): TaskMessageRecord[] {
+    if (messageIds.length === 0) return [];
+    const rows = this.store.db
+      .prepare(
+        `SELECT * FROM task_messages m
+         WHERE m.id IN (${messageIds.map(() => '?').join(', ')}) AND m.sender = 'human'
+           AND NOT EXISTS (SELECT 1 FROM task_inbox i
+                           WHERE i.message_id = m.id AND i.delivered_at IS NULL)
+         ORDER BY m.id`,
+      )
+      .all(...messageIds) as Row[];
+    return rows.map(toTaskMessage);
+  }
+
+  /**
+   * Tasks for the daily digest: those opened or closed since `since`, and
+   * every task still open, whenever it was opened.
+   */
+  digestTasks(since: Date): TaskRecord[] {
+    const at = since.toISOString();
+    const rows = this.store.db
+      .prepare(
+        `SELECT * FROM tasks WHERE created_at >= ? OR closed_at >= ? OR closed_at IS NULL
+         ORDER BY created_at, id`,
+      )
+      .all(at, at) as Row[];
+    return rows.map(toTask);
+  }
+
   /** A task's messages, oldest first. */
   taskMessages(taskId: string): TaskMessageRecord[] {
     const rows = this.store.db

@@ -44,6 +44,21 @@ export const OFFER_BRIEF_CHARS = 300;
 
 type Row = Record<string, unknown>;
 
+/** A task item that is my own reply in the task's Slack thread: my words, not an agent's. */
+export function isNickReply(item: TaskInboxItem): boolean {
+  return item.kind === 'message' && item.message?.sender === 'human';
+}
+
+/**
+ * Who hears my reply in a task's thread: its creator, and whoever holds it,
+ * or (before a claim) its named target once I've approved it. A pool task
+ * nobody has claimed has no other side yet.
+ */
+export function replyRecipients(task: TaskRecord): string[] {
+  const other = task.holder ?? (task.approval === 'approved' ? task.targetSession : null);
+  return other && other !== task.createdBy ? [task.createdBy, other] : [task.createdBy];
+}
+
 export class TaskInbox {
   private readonly store: Store;
   private readonly tasks: TaskStore;
@@ -66,19 +81,21 @@ export class TaskInbox {
   take(
     session: SessionRecord,
     via: DeliveryVia,
-    options: { limit?: number; kinds?: readonly TaskInboxKind[]; task?: string } = {},
+    options: { limit?: number; stopSafe?: boolean; task?: string } = {},
   ): TaskInboxTake {
     return this.store.transaction(() => {
-      // A narrowed take (one task, or notices only) creates no offers: they'd
-      // wait undelivered and could go stale.
-      if (!options.task && (!options.kinds || options.kinds.includes('offer'))) {
-        this.offerPoolTasks(session);
-      }
+      // A narrowed take (one task, or the Stop hook's) creates no offers:
+      // they'd wait undelivered and could go stale.
+      if (!options.task && !options.stopSafe) this.offerPoolTasks(session);
       const where = ['session_id = ?', 'delivered_at IS NULL'];
       const values: (string | number)[] = [session.id];
-      if (options.kinds) {
-        where.push(`kind IN (${options.kinds.map(() => '?').join(', ')})`);
-        values.push(...options.kinds);
+      if (options.stopSafe) {
+        // Only what may ride the Stop hook (D3): the broker's fixed notices
+        // and my own replies in task threads, never agent text.
+        where.push(
+          `(kind = 'notice' OR (kind = 'message' AND EXISTS (SELECT 1 FROM task_messages m
+             WHERE m.id = task_inbox.message_id AND m.sender = 'human')))`,
+        );
       }
       if (options.task !== undefined) {
         where.push('task_id = ?');
@@ -121,6 +138,73 @@ export class TaskInbox {
       }
       return { items, remaining: rows.length - taken.length };
     });
+  }
+
+  /**
+   * My reply in a task's Slack thread (#61): stored once as my message on
+   * the task and pointed at each side, the creator and whoever holds it (or
+   * the named target of an approved task before a claim). Undefined when the
+   * thread isn't a task's. A Slack retry of a stored reply changes nothing
+   * (`inserted: false`).
+   */
+  routeNickReply(reply: {
+    slackChannelId: string;
+    threadTs: string;
+    slackTs: string;
+    slackUser: string;
+    body: string;
+  }): { task: TaskRecord; recipients: string[]; inserted: boolean } | undefined {
+    return this.store.transaction(() => {
+      const task = this.tasks.findByThread(reply.slackChannelId, reply.threadTs);
+      if (!task) return undefined;
+      const recipients = replyRecipients(task);
+      if (this.tasks.findSlackMessage(reply.slackChannelId, reply.slackTs)) {
+        return { task, recipients, inserted: false };
+      }
+      const message = this.tasks.addTaskMessage({
+        taskId: task.id,
+        sender: 'human',
+        slackUser: reply.slackUser,
+        role: 'user',
+        body: reply.body,
+        slackChannelId: reply.slackChannelId,
+        slackTs: reply.slackTs,
+      });
+      for (const sessionId of recipients) {
+        this.tasks.addMessagePointer(sessionId, task.id, message.id);
+      }
+      this.store.appendEvent({
+        kind: 'inbound.routed',
+        sessionId: task.createdBy,
+        data: {
+          task: task.id,
+          message: message.id,
+          recipients,
+          channel: reply.slackChannelId,
+          ts: reply.slackTs,
+        },
+      });
+      return { task, recipients, inserted: true };
+    });
+  }
+
+  /** My replies among these items that every recipient now has (each earns its ✅). */
+  fullyDeliveredReplies(items: readonly TaskInboxItem[]): TaskMessageRecord[] {
+    return this.tasks.fullyDeliveredReplies(
+      items.filter(isNickReply).map((item) => item.message?.id ?? -1),
+    );
+  }
+
+  /** `fullyDeliveredReplies` for pointer IDs (a confirmed Stop-hook offer). */
+  fullyDeliveredRepliesByPointer(pointerIds: readonly number[]): TaskMessageRecord[] {
+    if (pointerIds.length === 0) return [];
+    const rows = this.store.db
+      .prepare(
+        `SELECT message_id FROM task_inbox
+         WHERE id IN (${pointerIds.map(() => '?').join(', ')}) AND message_id IS NOT NULL`,
+      )
+      .all(...pointerIds) as Row[];
+    return this.tasks.fullyDeliveredReplies(rows.map((row) => Number(row.message_id)));
   }
 
   /** Puts pointers back as undelivered; only ones delivered via `via` (a cancelled call or block). */

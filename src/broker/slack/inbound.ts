@@ -41,6 +41,8 @@ export function registerInbound(app: App, inbox: Inbox, log: Logger): void {
       const outcome = inbox.receive(message);
       if (outcome.action === 'routed') {
         log('info', 'Slack reply routed', { session: outcome.sessionId });
+      } else if (outcome.action === 'task') {
+        log('info', 'Slack reply routed to a task', { task: outcome.taskId });
       }
     } catch (error) {
       log('error', 'Slack message handling failed', { error: errorMessage(error) });

@@ -3,6 +3,8 @@ import type { GitHubApi, MergedPr } from './github.ts';
 import { errorMessage, type Logger } from './log.ts';
 import { FALLBACK_CHANNEL } from './slack/directory.ts';
 import type { DigestItemRecord, QuestionRecord, SessionRecord, Store } from './store.ts';
+import { title as taskTitle } from './task-slack.ts';
+import { TaskStore, type TaskRecord } from './task-store.ts';
 
 export const DIGEST = {
   /** Local hour of the daily post (docs/phase-2.md: 08:00). */
@@ -64,8 +66,8 @@ export function previousDay(day: string): string {
 }
 
 /**
- * Posts the daily digest to #agents: open and expired questions, PRs merged
- * in the configured repos, fyi notifications grouped by session, and the
+ * Posts the daily digest to #agents: open and expired questions, tasks
+ * (opened, finished, and still open: #61), PRs merged in the configured repos, fyi notifications grouped by session, and the
  * sessions seen since the last digest. Nothing to report → no post (the slot
  * is still marked done).
  */
@@ -151,12 +153,14 @@ export class Digest {
       const items = this.store.pendingDigestItems();
       const questions = this.store.digestQuestions(since);
       const sessions = this.store.sessionsSeenSince(since);
+      const tasks = new TaskStore(this.store, this.now).digestTasks(since);
       const text = digestText({
         since,
         timeZone: this.timeZone,
         items,
         questions,
         sessions,
+        tasks,
         prs,
         prsTruncated: github.truncated,
         sessionById: (id) => this.store.getSession(id),
@@ -172,6 +176,7 @@ export class Digest {
           items: items.length,
           questions: questions.length,
           sessions: sessions.length,
+          tasks: tasks.length,
           prs: prs.length,
         },
       });
@@ -234,26 +239,30 @@ export interface DigestInput {
   items: readonly DigestItemRecord[];
   questions: readonly QuestionRecord[];
   sessions: readonly SessionRecord[];
+  /** Tasks opened or closed in the window, and every open one (#61). */
+  tasks?: readonly TaskRecord[];
   prs?: readonly MergedPr[];
   /** GitHub had more than the page limit: older merged PRs aren't listed. */
   prsTruncated?: boolean;
   sessionById: (id: string) => SessionRecord | undefined;
 }
 
-type LineKind = 'question' | 'pr' | 'fyi' | 'session' | 'other';
+type LineKind = 'question' | 'task' | 'pr' | 'fyi' | 'session' | 'other';
 
 /**
  * The digest post (Slack mrkdwn), or undefined when there's nothing to report.
- * Sections go in order of importance: questions, then fyi items, then
- * sessions seen. Lines are added until the first one that doesn't fit; the
+ * Sections go in order of importance: questions, tasks, merged PRs, fyi
+ * items, then sessions seen. Lines are added until the first one that doesn't fit; the
  * rest is left out and counted in a footer, so a section never shows gaps
  * or a heading without its body.
  */
 export function digestText(input: DigestInput): string | undefined {
   const { items, questions, sessions } = input;
   const prs = input.prs ?? [];
+  const tasks = input.tasks ?? [];
   const prsTruncated = input.prsTruncated ?? false;
-  if (items.length + questions.length + sessions.length + prs.length === 0 && !prsTruncated) {
+  const count = items.length + questions.length + sessions.length + prs.length + tasks.length;
+  if (count === 0 && !prsTruncated) {
     return undefined;
   }
 
@@ -266,6 +275,12 @@ export function digestText(input: DigestInput): string | undefined {
     plan('other', '');
     plan('other', `*Questions* (${questions.length})`);
     for (const question of questions) plan('question', questionLine(question));
+  }
+  // Tasks may wait on me (approval, stuck, unclaimed), so they come next.
+  if (tasks.length > 0) {
+    plan('other', '');
+    plan('other', tasksHeading(tasks, input.since));
+    for (const task of [...tasks].sort(byUrgency)) plan('task', taskLine(task, input.timeZone));
   }
   // Agents merge these without my review, so they come right after questions.
   if (prs.length > 0 || prsTruncated) {
@@ -319,6 +334,7 @@ function leftOutFooter(rest: readonly { kind: LineKind }[]): string {
   const count = (kind: LineKind) => rest.filter((line) => line.kind === kind).length;
   const parts = [
     plural(count('question'), 'question'),
+    plural(count('task'), 'task'),
     plural(count('pr'), 'merged PR'),
     plural(count('fyi'), 'fyi item'),
     plural(count('session'), 'session'),
@@ -340,6 +356,75 @@ export function prLine(pr: MergedPr): string {
   const title = escapeSlackText(clip(pr.title, 160)).replaceAll('|', '¦');
   const agent = pr.agent ? ` (${pr.agent})` : '';
   return `• <${pr.url}|${pr.repo}#${pr.number} ${title}> by ${escapeSlackText(pr.author)}${agent}`;
+}
+
+/** `*Tasks* (2 opened, 1 finished, 3 open)`: counts for the window, and open now. */
+function tasksHeading(tasks: readonly TaskRecord[], since: Date): string {
+  const after = since.toISOString();
+  const opened = tasks.filter((task) => task.createdAt >= after).length;
+  const finished = tasks.filter((task) => task.closedAt !== null && task.closedAt >= after).length;
+  const open = tasks.filter((task) => task.closedAt === null).length;
+  return `*Tasks* (${opened} opened, ${finished} finished, ${open} open)`;
+}
+
+/**
+ * Where a task stands, most in need of me first: stuck, needing input,
+ * awaiting my approval, waiting unclaimed (Copilot pools included, D7),
+ * being worked on; then the ones that finished.
+ */
+const URGENCY = [
+  'stuck',
+  'input-required',
+  'approval',
+  'unclaimed',
+  'working',
+  'completed',
+  'failed',
+  'rejected',
+  'canceled',
+] as const;
+type Standing = (typeof URGENCY)[number];
+
+function standing(task: TaskRecord): Standing {
+  if (task.state === 'submitted') return task.approval === 'pending' ? 'approval' : 'unclaimed';
+  if (task.state === 'working') return task.stuckAt ? 'stuck' : 'working';
+  if (task.state === 'input-required') return task.stuckAt ? 'stuck' : 'input-required';
+  return task.state;
+}
+
+function byUrgency(a: TaskRecord, b: TaskRecord): number {
+  return URGENCY.indexOf(standing(a)) - URGENCY.indexOf(standing(b));
+}
+
+/**
+ * `• :warning: \`t-3f2a1b\` *Title* (\`from\` → \`to\`): stuck since …`. The
+ * title is the agent's, made one plain escaped line; the rest is the broker's.
+ */
+function taskLine(task: TaskRecord, timeZone: string): string {
+  const to = task.targetSession ?? `any ${task.targetPlatform} session in ${task.targetProject}`;
+  const head = `\`${task.id}\` *${taskTitle(task)}* (\`${task.createdBy}\` → \`${to}\`)`;
+  const holder = task.holder ? `\`${task.holder}\`` : 'its holder';
+  const since = (iso: string) => formatTime(new Date(iso), timeZone);
+  switch (standing(task)) {
+    case 'stuck':
+      return `• :warning: ${head}: stuck, ${holder} silent since ${since(task.holderSeenAt ?? task.updatedAt)}`;
+    case 'input-required':
+      return `• :question: ${head}: ${holder} needs input from \`${task.createdBy}\``;
+    case 'approval':
+      return `• :inbox_tray: ${head}: waits for your approval (expires ${since(task.approvalExpiresAt)})`;
+    case 'unclaimed':
+      return `• :hourglass: ${head}: approved, not claimed yet (since ${since(task.approvedAt ?? task.createdAt)})`;
+    case 'working':
+      return `• :arrow_forward: ${head}: ${holder} is working on it`;
+    case 'completed':
+      return `• :white_check_mark: ${head}: completed`;
+    case 'failed':
+      return `• :x: ${head}: failed`;
+    case 'rejected':
+      return `• :leftwards_arrow_with_hook: ${head}: rejected`;
+    case 'canceled':
+      return `• :no_entry_sign: ${head}: canceled`;
+  }
 }
 
 function sessionLine(id: string, session: SessionRecord | undefined): string {

@@ -516,6 +516,43 @@ After the [#89](https://github.com/nickmagruder/agent-bus/pull/89) review:
 - By design: a newly approved pool task wakes no one; the pool finds it at
   its next keyed `check_inbox` (Q13).
 
+### Tasks in Slack, part 2a ([#61](https://github.com/nickmagruder/agent-bus/issues/61), 0.20.0, 2026-11-23)
+
+Decided with Nick before building (all as recommended):
+
+- **My replies in a task thread** go to both sides: the creator, and the
+  holder (or, before a claim, the named target of an approved task). A
+  pool task nobody has claimed, or one still awaiting approval, has only
+  its creator. They're labelled as mine and, being my words, may block a
+  Stop like my other replies (D3 keeps agent text out). 📥 when routed,
+  ✅ once every recipient has read it.
+- **Stuck (Q8)** will count the holder as alive on either task activity
+  (claim, note, move, message) or its session's own last-seen, so a
+  session coding for hours without notes isn't flagged.
+- **Stuck and unclaimed flags** each get a DM with their buttons (Cancel
+  and Release; Cancel) and a line in the task's thread; the digest lists
+  them.
+- **Two PRs:** this one (replies and the digest section), then the flags
+  and their buttons (part 2b).
+
+Built:
+
+- **Routing:** the inbox checks a threaded reply against task threads
+  (`tasks.slack_channel_id` / `thread_ts`, set when the root is sent)
+  before session threads. Sender gating runs first, as for every reply. The
+  reply is stored once as my task message (`sender = human`, a Slack retry
+  changes nothing) with a `task_inbox` pointer per recipient, audited as
+  `inbound.routed` with the task; both recipients are woken.
+- **Delivery:** `check_inbox` and `wait_for_reply` (keyed, as task items
+  are Phase 3 data) return my task-thread replies in `messages` next to my
+  other replies, `from: nick`, `trust: verified-human`, with `task` set;
+  the text says which task's thread. They never appear in `taskMessages`.
+  The Stop hook takes notices and my replies (`stopSafe`), never offers or
+  agents' messages.
+- **Digest:** a **Tasks** section after questions: tasks opened or closed
+  since the last digest and every open one, with counts, sorted by
+  urgency. Titles go through the same one-line escaping as task threads.
+
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 
 Read from the A2A v1.0.0 specification and its "What's new in v1" and
