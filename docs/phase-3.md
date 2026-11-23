@@ -566,6 +566,42 @@ After the [#94](https://github.com/nickmagruder/agent-bus/pull/94) review:
   offer's pointer list is now `taskItemIds` (`noticeIds` still read). The
   digest says an open task always counts, so an unclaimed one shows daily.
 
+### Tasks in Slack, part 2b ([#61](https://github.com/nickmagruder/agent-bus/issues/61), 0.21.0, 2026-11-23)
+
+Decided with Nick before part 2a (all as recommended): a holder is alive on
+task activity or its session's own activity; each flag gets a DM with its
+buttons and a thread line, and the digest lists flagged tasks.
+
+Built in [`src/broker/task-slack.ts`](../src/broker/task-slack.ts) (the
+30-second tick) and `TaskStore` (migration 10: `flag_post_id`,
+`flag_kind`):
+
+- **Stuck (Q8):** a task in `working` or `input-required` whose holder has
+  shown no life for 4 hours: neither `holder_seen_at` (claim, note) nor the
+  session's `last_seen_at` (tool calls, hooks) is newer. It gets
+  `stuck_at` (compare and swap, audited `task.flagged`), a DM to me with
+  **Cancel** and **Release**, and a thread line. When the holder shows life
+  again, the next tick clears the flag (`task.unflagged`) and edits the DM;
+  a note clears it at once.
+- **Waiting (Q23):** an approved, unclaimed task untouched for 24 hours
+  gets `waiting_at`, a DM with **Cancel** (and the "no session seen" hint
+  when no session that could take it was seen), and a thread line. A task
+  still awaiting approval is never flagged; it expires instead.
+- **Clicks:** only mine count (others dropped, audited `inbound.dropped`
+  via `flag_button`). The task comes from the block ID and the action
+  from the action ID. The flag must still stand when I click; otherwise
+  nothing changes and I'm told so. **Release** moves the task back to
+  `submitted` with the holder checked in the same statement (a late call
+  from the old holder fails). A released task shows in `list_tasks` again;
+  pool members never offered it get an offer, but one offered before isn't
+  offered twice (#60). **Cancel** moves it to `canceled` and gives the creator and the
+  holder (or the named target it waited for) the fixed "canceled" notice
+  (D3), waking them.
+- **The DM follows the task:** a claim, a close, a note or the holder's
+  return edits it to say where the task went, without buttons.
+- By design: the released holder gets no notice (there's no fixed notice
+  for it, and it was presumed gone); its next `update_task` is refused.
+
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 
 Read from the A2A v1.0.0 specification and its "What's new in v1" and

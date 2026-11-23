@@ -7,7 +7,13 @@ import type { MessageEditor } from './questions.ts';
 import { AGENT_CARDS } from './service.ts';
 import { FALLBACK_CHANNEL } from './slack/directory.ts';
 import { DM_TARGET, type Store } from './store.ts';
-import { ACTOR, TaskStore, type TaskMessageRecord, type TaskRecord } from './task-store.ts';
+import {
+  ACTOR,
+  TaskStore,
+  type TaskFlag,
+  type TaskMessageRecord,
+  type TaskRecord,
+} from './task-store.ts';
 import { TASK_LIMITS } from './tasks.ts';
 
 /**
@@ -27,14 +33,26 @@ export const TASK_SLACK = {
   mirrorPerTask: 40,
   /** Of those, the last ones are kept for state changes: notes and messages stop earlier. */
   reservedForStates: 4,
-  /** How often reminders and expiries are checked. */
+  /** How often reminders, expiries and flags are checked. */
   tickMs: 30_000,
+  /** A holder silent this long flags its task as stuck (Q8). */
+  stuckAfterMs: 4 * 60 * 60_000,
+  /** An approved task nobody claims this long is flagged as waiting (Q23). */
+  waitingAfterMs: 24 * 60 * 60_000,
 } as const;
 
 /** Button `action_id`s on the approval DM; the block ID is the task ID. */
 export const TASK_ACTION = /^agentbus_task_(approve|cancel)$/;
 
 export type TaskClickOutcome = 'approved' | 'canceled' | 'closed' | 'not_human' | 'unknown';
+
+/**
+ * Button `action_id`s on a flag DM (stuck: Cancel and Release; waiting:
+ * Cancel); the block ID is the task ID.
+ */
+export const FLAG_ACTION = /^agentbus_flag_(cancel|release)$/;
+
+export type FlagClickOutcome = 'canceled' | 'released' | 'unflagged' | 'not_human' | 'unknown';
 
 /** What the task rules tell Slack about, inside the same transaction as the change. */
 export interface TaskEvents {
@@ -128,6 +146,7 @@ export class TaskSlack implements TaskEvents {
           `*${title(task)}*. Its thread is in #${FALLBACK_CHANNEL}.`,
       );
     }
+    this.refreshFlag(task);
     this.kickAfterCommit();
   }
 
@@ -144,6 +163,8 @@ export class TaskSlack implements TaskEvents {
   /** A progress note, mirrored into the task's thread. */
   noted(task: TaskRecord, by: string): void {
     this.mirror(task, `:memo: Note from \`${by}\`:${agentText(task.statusMessage ?? '')}`, 'note');
+    // A note clears the stuck flag (noteTask): the DM says so.
+    this.refreshFlag(task);
     this.kickAfterCommit();
   }
 
@@ -221,6 +242,7 @@ export class TaskSlack implements TaskEvents {
       });
       if (expired) this.refreshApproval(expired);
     }
+    this.flagTick(now);
     for (const task of this.tasks.dueApprovalReminders(now)) {
       this.store.transaction(() => {
         if (!this.tasks.markApprovalReminded(task.id)) return;
@@ -240,6 +262,143 @@ export class TaskSlack implements TaskEvents {
       });
     }
     this.queue.kick();
+  }
+
+  /**
+   * A click on a flag DM's Cancel or Release. Only my clicks count (T5).
+   * The flag must still stand: a holder that came back, or a task claimed or
+   * closed meanwhile, changes nothing. Cancel ends the task for both sides;
+   * Release takes a stuck task from its holder and opens it to claim again.
+   */
+  flagByButton(taskId: string, action: 'cancel' | 'release', userId: string): FlagClickOutcome {
+    const task = this.tasks.getTask(taskId);
+    if (userId !== this.humanUserId) {
+      this.store.appendEvent({
+        kind: 'inbound.dropped',
+        sessionId: task?.createdBy ?? null,
+        data: {
+          reason: 'not_human',
+          user: userId.slice(0, 40),
+          task: task?.id ?? taskId.slice(0, 20),
+          via: 'flag_button',
+        },
+      });
+      return 'not_human';
+    }
+    if (!task) return 'unknown';
+    const flag = activeFlag(task);
+    if (!flag || (action === 'release' && flag !== 'stuck')) {
+      this.refreshFlag(task);
+      this.queue.kick();
+      return 'unflagged';
+    }
+    const to = action === 'release' ? 'submitted' : 'canceled';
+    const woken: string[] = [];
+    const after = this.store.transaction(() => {
+      const held = task.state === 'working' || task.state === 'input-required';
+      const moved = this.tasks.moveTask(task.id, {
+        from: task.state,
+        to,
+        by: ACTOR.nick,
+        ...(held ? { expectedHolder: task.holder ?? '' } : {}),
+      });
+      if (!moved) return undefined;
+      if (to === 'canceled') {
+        // Both sides hear, in the broker's fixed words (D3): the creator, and
+        // whoever held it (or the named target it waited for).
+        const other = task.holder ?? task.targetSession;
+        for (const sessionId of new Set([task.createdBy, ...(other ? [other] : [])])) {
+          this.tasks.addNotice(sessionId, task.id, 'canceled');
+          woken.push(sessionId);
+        }
+        this.sessionLine(
+          task.createdBy,
+          `:no_entry_sign: Nick canceled task \`${task.id}\`: *${title(task)}*.`,
+        );
+      }
+      this.moved(moved, task.state, ACTOR.nick);
+      return moved;
+    });
+    if (!after) {
+      const current = this.tasks.getTask(task.id);
+      if (current) this.refreshFlag(current);
+      this.queue.kick();
+      return 'unflagged';
+    }
+    for (const sessionId of woken) this.wake?.(sessionId);
+    this.queue.kick();
+    return to === 'canceled' ? 'canceled' : 'released';
+  }
+
+  /**
+   * Flags held tasks whose holder went quiet (Q8) and approved tasks nobody
+   * claimed (Q23): a DM to me with buttons and a line in the task's thread,
+   * once per flag. A stuck task whose holder came back loses its flag, and
+   * its DM says so.
+   */
+  private flagTick(now: Date): void {
+    const stuckCutoff = new Date(now.getTime() - TASK_SLACK.stuckAfterMs);
+    for (const task of this.tasks.revivedStuckFlags(stuckCutoff)) {
+      this.store.transaction(() => {
+        const cleared = this.tasks.clearStuck(task.id);
+        if (!cleared) return;
+        this.mirror(
+          cleared,
+          `:arrow_forward: \`${cleared.holder ?? ''}\` is active again.`,
+          'state',
+        );
+        this.refreshFlag(cleared);
+      });
+    }
+    for (const task of this.tasks.dueStuckFlags(stuckCutoff)) this.raiseFlag(task.id, 'stuck');
+    const waitingCutoff = new Date(now.getTime() - TASK_SLACK.waitingAfterMs);
+    for (const task of this.tasks.dueWaitingFlags(waitingCutoff)) {
+      this.raiseFlag(task.id, 'waiting');
+    }
+  }
+
+  private raiseFlag(taskId: string, flag: TaskFlag): void {
+    this.store.transaction(() => {
+      const task = this.tasks.setFlag(taskId, flag);
+      if (!task) return;
+      const seen = flag === 'stuck' ? this.holderSeenAt(task) : undefined;
+      const hint = flag === 'waiting' ? this.noSessionHint(task) : undefined;
+      const message = flagMessage(task, seen, hint);
+      const dm = this.store.enqueue({
+        target: DM_TARGET,
+        text: message.text,
+        blocks: message.blocks,
+      });
+      this.tasks.setFlagPost(task.id, dm.id);
+      this.mirror(
+        task,
+        flag === 'stuck'
+          ? `:warning: Flagged as stuck: no sign of \`${task.holder ?? ''}\` since ` +
+              `${localTime(seen ?? task.updatedAt).slice(3)}. Nick can cancel or release it.`
+          : `:hourglass: Flagged: approved ${localTime(task.updatedAt)} and not claimed yet. ` +
+              'Nick can cancel it.',
+        'state',
+      );
+    });
+  }
+
+  /** When the holder last showed life: on the task, or its session's last call or hook. */
+  private holderSeenAt(task: TaskRecord): string {
+    const session = task.holder ? this.store.getSession(task.holder) : undefined;
+    const onTask = task.holderSeenAt ?? task.updatedAt;
+    return session && session.lastSeenAt > onTask ? session.lastSeenAt : onTask;
+  }
+
+  /** Shows where a flagged task stands on its flag DM: rewrites it if still queued, or edits it. */
+  private refreshFlag(task: TaskRecord): void {
+    if (task.flagPostId === null || task.flagKind === null) return;
+    const seen = task.flagKind === 'stuck' ? this.holderSeenAt(task) : undefined;
+    const message = flagMessage(task, seen, undefined);
+    if (this.store.updateQueuedPost(task.flagPostId, message.text, message.blocks)) return;
+    const post = this.store.getPost(task.flagPostId);
+    if (post?.state === 'sent' && post.slackChannelId && post.slackTs) {
+      this.editor.update(post.slackChannelId, post.slackTs, message.text, message.blocks);
+    }
   }
 
   /**
@@ -479,9 +638,110 @@ export function approvalMessage(
   };
 }
 
+/** The flag that still stands on a task: stuck while held, waiting while unclaimed. */
+export function activeFlag(task: TaskRecord): TaskFlag | undefined {
+  const held = task.state === 'working' || task.state === 'input-required';
+  if (task.stuckAt && held) return 'stuck';
+  if (task.waitingAt && task.state === 'submitted' && task.approval === 'approved')
+    return 'waiting';
+  return undefined;
+}
+
+/**
+ * A flag DM: what's wrong and the buttons while the flag stands (stuck:
+ * Cancel and Release; waiting: Cancel), then where the task went once it
+ * doesn't. `seen`: when a stuck task's holder last showed life.
+ */
+export function flagMessage(
+  task: TaskRecord,
+  seen: string | undefined,
+  hint: string | undefined,
+): { text: string; blocks: unknown[] } {
+  const kind = task.flagKind ?? 'stuck';
+  const holder = task.holder ? `\`${task.holder}\`` : 'its holder';
+  const head =
+    kind === 'stuck'
+      ? `:warning: Task \`${task.id}\` from \`${task.createdBy}\`, held by ${holder}, looks ` +
+        `stuck: no sign of ${holder} since ${localTime(seen ?? task.updatedAt).slice(3)}.`
+      : `:hourglass: Task \`${task.id}\` from \`${task.createdBy}\` to \`${targetName(task)}\` ` +
+        `was approved ${localTime(task.updatedAt)} and nobody has claimed it.`;
+  const section = {
+    type: 'section',
+    text: { type: 'mrkdwn', text: `${head}\n*${title(task)}*` },
+  };
+  const fallback = `Task ${task.id} ${kind === 'stuck' ? 'looks stuck' : 'waits unclaimed'}`;
+  const flag = activeFlag(task);
+  if (flag === kind) {
+    const buttons = [
+      {
+        type: 'button',
+        action_id: 'agentbus_flag_cancel',
+        style: 'danger',
+        text: { type: 'plain_text', text: 'Cancel', emoji: false },
+        value: task.id,
+      },
+      ...(kind === 'stuck'
+        ? [
+            {
+              type: 'button',
+              action_id: 'agentbus_flag_release',
+              text: { type: 'plain_text', text: 'Release', emoji: false },
+              value: task.id,
+            },
+          ]
+        : []),
+    ];
+    const context = [
+      kind === 'stuck'
+        ? `Cancel ends it for both sides. Release takes it from ${holder} and opens it to ` +
+          'claim again. Or leave it: the flag goes when the holder shows life.'
+        : 'Cancel ends it. Or leave it: it waits, and shows in the digest.',
+      ...(hint ? [hint] : []),
+    ].join('\n');
+    return {
+      text: fallback,
+      blocks: [
+        section,
+        { type: 'actions', block_id: task.id, elements: buttons },
+        { type: 'context', elements: [{ type: 'mrkdwn', text: context }] },
+      ],
+    };
+  }
+  return {
+    text: `${fallback} (no longer)`,
+    blocks: [section, { type: 'context', elements: [{ type: 'mrkdwn', text: flagOutcome(task) }] }],
+  };
+}
+
+/** Where a task went once its flag stopped standing. */
+function flagOutcome(task: TaskRecord): string {
+  switch (task.state) {
+    case 'canceled':
+      return ':no_entry_sign: Canceled.';
+    case 'submitted':
+      return task.flagKind === 'stuck'
+        ? ':arrows_counterclockwise: Released: open to claim again.'
+        : ':information_source: No longer flagged.';
+    case 'working':
+    case 'input-required':
+      return task.flagKind === 'stuck'
+        ? `:arrow_forward: \`${task.holder ?? ''}\` is active again: nothing to do.`
+        : `:arrow_forward: Claimed by \`${task.holder ?? ''}\`.`;
+    default:
+      return `:information_source: Now ${task.state}: nothing to do.`;
+  }
+}
+
 /** Feedback for a click that didn't decide anything, shown only to the clicker. */
 export const TASK_CLICK_REPLIES: Partial<Record<TaskClickOutcome, string>> = {
   closed: 'This task was already decided or has expired.',
   not_human: 'Only Nick can approve or cancel agent tasks.',
+  unknown: 'agent-bus no longer knows this task.',
+};
+
+/** Feedback for a flag click that changed nothing, shown only to the clicker. */
+export const FLAG_CLICK_REPLIES: Partial<Record<FlagClickOutcome, string>> = {
+  unflagged: 'This task no longer needs you: it was claimed, closed, or its holder came back.',
+  not_human: 'Only Nick can cancel or release agent tasks.',
   unknown: 'agent-bus no longer knows this task.',
 };

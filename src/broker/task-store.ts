@@ -67,7 +67,13 @@ export interface TaskRecord {
   approvalRemindedAt: string | null;
   /** Lines mirrored into the task's thread so far (capped, Q17). */
   mirrored: number;
+  /** The DM of the task's latest flag (stuck or waiting), and which flag it was (#61). */
+  flagPostId: number | null;
+  flagKind: TaskFlag | null;
 }
+
+/** Stuck: its holder silent too long (Q8). Waiting: approved and unclaimed too long (Q23). */
+export type TaskFlag = 'stuck' | 'waiting';
 
 export interface NewTask {
   createdBy: string;
@@ -579,6 +585,86 @@ export class TaskStore {
     return rows.map(toTask);
   }
 
+  /**
+   * Held tasks whose holder has shown no sign of life since `cutoff`: no
+   * claim, note or message on the task (`holder_seen_at`) and no tool call or
+   * hook from its session (`last_seen_at`). Not yet flagged (Q8).
+   */
+  dueStuckFlags(cutoff: Date): TaskRecord[] {
+    const rows = this.store.db
+      .prepare(
+        `SELECT tasks.* FROM tasks JOIN sessions ON sessions.id = tasks.holder
+         WHERE tasks.state IN ('working', 'input-required') AND tasks.stuck_at IS NULL
+           AND COALESCE(tasks.holder_seen_at, tasks.updated_at) < ?
+           AND sessions.last_seen_at < ?
+         ORDER BY tasks.updated_at, tasks.id`,
+      )
+      .all(cutoff.toISOString(), cutoff.toISOString()) as Row[];
+    return rows.map(toTask);
+  }
+
+  /** Flagged-stuck tasks whose holder has shown a sign of life since `cutoff`. */
+  revivedStuckFlags(cutoff: Date): TaskRecord[] {
+    const rows = this.store.db
+      .prepare(
+        `SELECT tasks.* FROM tasks JOIN sessions ON sessions.id = tasks.holder
+         WHERE tasks.state IN ('working', 'input-required') AND tasks.stuck_at IS NOT NULL
+           AND (COALESCE(tasks.holder_seen_at, tasks.updated_at) >= ? OR sessions.last_seen_at >= ?)
+         ORDER BY tasks.id`,
+      )
+      .all(cutoff.toISOString(), cutoff.toISOString()) as Row[];
+    return rows.map(toTask);
+  }
+
+  /** Approved tasks nobody has claimed since `cutoff` (Q23), not yet flagged. */
+  dueWaitingFlags(cutoff: Date): TaskRecord[] {
+    const rows = this.store.db
+      .prepare(
+        `SELECT * FROM tasks WHERE approval = 'approved' AND state = 'submitted'
+           AND waiting_at IS NULL AND updated_at < ?
+         ORDER BY updated_at, id`,
+      )
+      .all(cutoff.toISOString()) as Row[];
+    return rows.map(toTask);
+  }
+
+  /**
+   * Sets a flag if the task is still in the state the flag is about and not
+   * flagged yet (compare and swap); audited as `task.flagged`. Returns the
+   * flagged task, or undefined when something changed first.
+   */
+  setFlag(id: string, flag: TaskFlag): TaskRecord | undefined {
+    const at = this.timestamp();
+    const sql =
+      flag === 'stuck'
+        ? `UPDATE tasks SET stuck_at = ?, flag_kind = 'stuck'
+           WHERE id = ? AND stuck_at IS NULL AND state IN ('working', 'input-required')`
+        : `UPDATE tasks SET waiting_at = ?, flag_kind = 'waiting'
+           WHERE id = ? AND waiting_at IS NULL AND state = 'submitted' AND approval = 'approved'`;
+    return this.store.transaction(() => {
+      if (this.store.db.prepare(sql).run(at, id).changes === 0) return undefined;
+      this.store.appendEvent({ kind: 'task.flagged', data: { task: id, flag } });
+      return found(this.getTask(id), id);
+    });
+  }
+
+  /** Clears a stuck flag whose holder came back; audited as `task.unflagged`. */
+  clearStuck(id: string): TaskRecord | undefined {
+    return this.store.transaction(() => {
+      const changed = this.store.db
+        .prepare('UPDATE tasks SET stuck_at = NULL WHERE id = ? AND stuck_at IS NOT NULL')
+        .run(id).changes;
+      if (changed === 0) return undefined;
+      this.store.appendEvent({ kind: 'task.unflagged', data: { task: id, flag: 'stuck' } });
+      return found(this.getTask(id), id);
+    });
+  }
+
+  /** Records the DM sent for a task's latest flag. */
+  setFlagPost(id: string, postId: number): void {
+    this.store.db.prepare('UPDATE tasks SET flag_post_id = ? WHERE id = ?').run(postId, id);
+  }
+
   /** The task whose thread root is this Slack post (for routing my replies there, #61). */
   findByThread(slackChannelId: string, threadTs: string): TaskRecord | undefined {
     const row = this.store.db
@@ -706,6 +792,9 @@ function toTask(row: Row): TaskRecord {
     approvalRemindAt: text(row.approval_remind_at),
     approvalRemindedAt: text(row.approval_reminded_at),
     mirrored: Number(row.mirrored ?? 0),
+    flagPostId:
+      row.flag_post_id === null || row.flag_post_id === undefined ? null : Number(row.flag_post_id),
+    flagKind: (text(row.flag_kind) as TaskFlag | null) ?? null,
   };
 }
 

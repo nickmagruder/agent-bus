@@ -98,7 +98,7 @@ into tracked files.
 - `src/shared/guard.ts`: Host/Origin/per-platform bearer checks
 - `src/shared/session-key.ts`: per-session secret keys (mint, hash, constant-time match; #65)
 - `src/broker/task-store.ts`: Phase 3 tasks and task messages (compare-and-swap moves, audited; #57)
-- `src/broker/task-slack.ts`: tasks in Slack: approval DM with Approve/Cancel, reminder and expiry, task threads in `#agents`, mirrored moves (#61)
+- `src/broker/task-slack.ts`: tasks in Slack: approval DM with Approve/Cancel, reminder and expiry, task threads in `#agents`, mirrored moves, stuck and unclaimed flags with Cancel/Release DMs (#61)
 - `src/broker/tasks.ts`: Phase 3 task rules: create, list, claim and update; targets, hops, loops, caps, secrets, visibility, roles (#59)
 - `src/shared/task-states.ts`: task states, allowed moves and the A2A v1.0 mapping (D8)
 - `src/shared/config.ts`: zod-validated environment
