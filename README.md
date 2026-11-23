@@ -1,6 +1,6 @@
 # agent-bus
 
-**Version:** 0.16.0 · [MIT license](LICENSE)
+**Version:** 0.17.0 · [MIT license](LICENSE)
 
 [![ci](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml)
 [![codeql](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml)
@@ -77,6 +77,8 @@ and decisions) is in [docs/design.md](docs/design.md).
 | `list_agents(session, key, project?, platform?)`                                  | Cards (platform, project, branch, purpose, last seen) of other sessions seen in the last 2 hours, on every platform, most recent first (Phase 3)                                                                               |
 | `create_task(session, key, title, brief, to_session or to_platform + to_project)` | Hands a task to another platform's session, or to any session of a platform in a project (Copilot only this way). Waits for my approval; hop, loop, cap, size and secret checks (Phase 3)                                      |
 | `list_tasks(session, key, task?)`                                                 | Tasks the session created or holds, approved ones sent to it, and approved unclaimed ones in its pool; agent-written text labelled untrusted (Phase 3)                                                                         |
+| `claim_task(session, key, task)`                                                  | Takes on an approved task named for the session or in its pool; the loser of a race is told who has it (Phase 3)                                                                                                               |
+| `update_task(session, key, task, state?, note?, result_text?, links?)`            | The holder notes progress, asks its creator (`input-required`), completes with a result (`https:` links only), fails or gives it back; a named target rejects; the creator cancels (Phase 3)                                   |
 | `notify_human(session, text, urgency)`                                            | `urgent` → DM to me, `normal` → the session's thread, `fyi` → the daily digest in `#agents` (08:00 local). Per-session and per-platform hourly caps stop loops                                                                 |
 | `check_inbox(session)`                                                            | Returns my Slack replies to the session and the outcomes of its questions                                                                                                                                                      |
 | `ask_human(session, question, options?, default_action, timeout_minutes?)`        | DMs me the question with buttons for up to five options (a reply in its thread works too) and waits up to 150 s (default), then returns `pending` with a question ID. A pointer goes in the session thread                     |
@@ -427,6 +429,25 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.17.0 (2026-11-22)
+
+- **`claim_task` and `update_task`** ([#59](https://github.com/nickmagruder/agent-bus/issues/59), part 2):
+  - A named target or a pool member claims an approved task. Of two racing
+    claims one wins, and the other is told who has it; a pool in another
+    project can't be claimed.
+  - The holder adds progress notes (marking it as active), asks its creator
+    (`input-required`, with a note), completes with a result of text and up
+    to 10 `https:` links, fails with a reason, or gives the task back.
+  - A named target can reject (with a reason) before claiming; only the
+    creator can cancel.
+  - Notes, results and links get the size and secret checks; other link
+    schemes are refused.
+  - Each move queues a fixed notice for the other side (input-required,
+    completed, failed or rejected to the creator; canceled to the holder),
+    delivered with #60.
+- `create_task` takes `for_task`: a session working on several tasks must
+  say which one a sub-task belongs to.
 
 ### 0.16.0 (2026-11-22)
 

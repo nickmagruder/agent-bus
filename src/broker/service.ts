@@ -120,7 +120,12 @@ export type BusErrorCode =
   | 'task_loop'
   | 'too_many_tasks'
   | 'too_long'
-  | 'secret_in_text';
+  | 'secret_in_text'
+  | 'which_task'
+  | 'not_allowed'
+  | 'task_taken'
+  | 'bad_state'
+  | 'bad_result';
 
 export interface AskInput {
   platform: Platform;

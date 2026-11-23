@@ -358,6 +358,53 @@ After the [#86](https://github.com/nickmagruder/agent-bus/pull/86) review:
 Not yet: approving a task needs #61's Slack button, so nothing can be
 claimed live until then; `claim_task` and `update_task` are part 2.
 
+### Tasks: claim and update ([#59](https://github.com/nickmagruder/agent-bus/issues/59) part 2, 0.17.0, 2026-11-22)
+
+Decided with Nick before building (all as recommended):
+
+- **`for_task`:** a session working on several tasks must name the parent
+  of a new sub-task; with one held task, that one is the parent. Only the
+  named chain is checked for hops and loops.
+- **Rejecting:** only a named target, and only before it claims; pool
+  members leave a task for someone else.
+- **Canceling:** only the creator (and me from Slack, #61); the holder fails
+  a task instead.
+- **Giving back:** the holder can release a task to `submitted`; releasing
+  a task stuck for 4 h comes with #61's Slack button.
+- **Notes alone:** `update_task` with only a note records it and marks the
+  holder as active, which clears the stuck flag.
+
+Rules: `claim_task` sees approved tasks aimed at the caller even once
+claimed, so the loser of a race is told who has it (T13); a pool in another
+project stays `unknown_task`. `input-required` and `failed` need a note,
+`completed` needs a result (text, up to 10 `https:` links of at most 500
+characters, T12). Notes, results and links get the 4,000-character and
+secret checks (T10, T11). Each move queues a fixed notice in `task_inbox`
+(Q21): input-required, completed, failed and rejected to the creator,
+canceled to the holder or named target; #60 delivers them. Refusals are
+audited without their text.
+
+After the [#87](https://github.com/nickmagruder/agent-bus/pull/87) review:
+
+- **A move and its notice commit together**, so a notice is never lost.
+- **A cancel before approval tells no one:** the named target never saw
+  the task (T7); after approval it is told.
+- **A result goes only with `completed`**; `rejected` needs a note, like
+  `failed` and `input-required`.
+- **Links** must be plain `https:` URLs: no whitespace or control
+  characters (URL parsing would drop them silently), no user name or
+  password; each is stored in its parsed form. A link can still carry data
+  in its path or query; host allow-lists would break PR and branch links,
+  so the creator treats links as untrusted like the rest (T8).
+- **The labels note** says title and brief come from the creator, the note
+  and result from the holder (or the creator, for a cancel).
+- Not added: a creator notice when the holder gives a task back. Q21 lists
+  none, and a new notice would need a migration.
+- By design: while a session holds a task, anything it creates is a
+  sub-task of a held one (Q4); it can't open an unrelated top-level task.
+- #59's "`input-required` pings the creator" is the queued notice here; the
+  agent sees it once #60 delivers notices.
+
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 
 Read from the A2A v1.0.0 specification and its "What's new in v1" and

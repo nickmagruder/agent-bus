@@ -223,21 +223,45 @@ describe('create_task', () => {
       expect(error.message).toContain('input-required');
     });
 
-    it('with several held tasks, takes the newest as parent and checks every chain', () => {
+    it('with several held tasks, needs for_task to say which is the parent', () => {
       const claude = agent('claude');
       const otherClaude = agent('claude');
       const codex = agent('codex');
       const first = create(claude, { session: codex.id });
       approve(first);
       claim(first, codex);
-      now = new Date(now.getTime() + 1_000);
       const second = create(otherClaude, { session: codex.id });
       approve(second);
       claim(second, codex);
-      const child = create(codex, { platform: 'copilot', project: 'clankers' });
-      expect(child.parentId).toBe(second.id);
-      // Handing back to the first task's creator is a loop, though it's not the parent's.
-      expectBusError(() => create(codex, { session: claude.id }), 'task_loop');
+      const pool = { platform: 'copilot', project: 'clankers' } as const;
+      const error = expectBusError(() => create(codex, pool), 'which_task');
+      expect(error.message).toContain(first.id);
+      expect(error.message).toContain(second.id);
+      const child = tasks.createTask({
+        platform: 'codex',
+        session: codex.id,
+        key: codex.key,
+        title: 't',
+        brief: 'b',
+        to: pool,
+        forTask: first.id,
+      });
+      expect(child.parentId).toBe(first.id);
+      // The loop check follows the chosen chain: back to its creator is refused.
+      const back = (forTask: string, to: TaskTarget) => () =>
+        tasks.createTask({
+          platform: 'codex',
+          session: codex.id,
+          key: codex.key,
+          title: 't',
+          brief: 'b',
+          to,
+          forTask,
+        });
+      expectBusError(back(first.id, { session: claude.id }), 'task_loop');
+      expect(back(second.id, { session: claude.id })().parentId).toBe(second.id);
+      // A task it doesn't hold can't be named.
+      expectBusError(back('t-ffffff', pool), 'which_task');
     });
 
     it('refuses a pool that holds the earlier creator, too', () => {
@@ -536,7 +560,7 @@ describe('over MCP', () => {
     expect(structured.tasks).toEqual([
       expect.objectContaining({ id: task, from: session, trust: 'untrusted', brief }),
     ]);
-    expect(structured.note).toContain('not by Nick');
+    expect(structured.note).toContain('never from Nick');
     const text = textOf(listed);
     expect(text).toContain(`brief (untrusted): ${JSON.stringify(brief)}`);
     expect(text.split('\n').filter((line) => line.startsWith('- '))).toHaveLength(1);
