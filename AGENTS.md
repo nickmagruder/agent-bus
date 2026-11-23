@@ -69,7 +69,7 @@ into tracked files.
 ## Key files
 
 - `README.md`: public overview, status, security model, setup, changelog
-- `memory/MEMORY.md`: agent memory index (`memory/local/` is gitignored)
+- `memory/MEMORY.md`: agent memory index
 - `docs/design.md`: overall design, platform capabilities, safety rules, phases, decisions
 - `CONTRIBUTING.md`: coding standards and how changes are made (also read by PR reviewers)
 - `SECURITY.md`: vulnerability reporting and scope

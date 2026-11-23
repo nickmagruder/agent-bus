@@ -438,8 +438,8 @@ are made.
 ### 0.19.2 (2026-11-23)
 
 - **Memory stays private where it should** ([#92](https://github.com/nickmagruder/agent-bus/issues/92)):
-  notes about the maintainer's own setup and permissions moved from the
-  tracked `memory/` to the gitignored `memory/local/`; the broker-restart
+  some notes moved from the tracked `memory/` to the gitignored
+  `memory/local/`; the broker-restart
   note keeps only the lesson and points at this README. `CLAUDE.md` now
   imports both memory indexes, and `AGENTS.md` tells every agent to read
   them at the start of a session.
