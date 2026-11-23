@@ -16,9 +16,10 @@ interface Offer {
   questionIds: string[];
   /**
    * Task inbox pointers (#60, #61): the fixed broker notices of D3 and my
-   * replies in task threads, never agent text. (The name predates my replies.)
+   * replies in task threads, never agent text. Offers recorded before 0.20.0
+   * call it `noticeIds`.
    */
-  noticeIds: number[];
+  taskItemIds: number[];
 }
 
 /**
@@ -66,7 +67,7 @@ export class StopDelivery implements StopOffers {
     const offer: Offer = {
       messageIds: take.messages.map((m) => m.id),
       questionIds: take.outcomes.map((q) => q.id),
-      noticeIds: notices.map((n) => n.id),
+      taskItemIds: notices.map((n) => n.id),
     };
     this.store.appendEvent({
       kind: OFFER.offered,
@@ -100,7 +101,8 @@ export class StopDelivery implements StopOffers {
     this.closeOffer(session, OFFER.confirmed, 'stop_hook_active');
     this.inbox.confirmIds(offer.messageIds, offer.questionIds);
     if (this.taskInbox) {
-      this.inbox.reactDelivered(this.taskInbox.fullyDeliveredRepliesByPointer(offer.noticeIds));
+      this.taskInbox.confirmStop(offer.taskItemIds);
+      this.inbox.reactDelivered(this.taskInbox.fullyDeliveredRepliesByPointer(offer.taskItemIds));
     }
   }
 
@@ -109,7 +111,7 @@ export class StopDelivery implements StopOffers {
     if (!offer) return;
     this.store.transaction(() => {
       this.inbox.untakeIds(session, offer.messageIds, offer.questionIds, 'stop_hook');
-      this.taskInbox?.untakeIds(session, offer.noticeIds, 'stop_hook');
+      this.taskInbox?.untakeIds(session, offer.taskItemIds, 'stop_hook');
       this.closeOffer(session, OFFER.returned, reason);
     });
   }
@@ -118,11 +120,13 @@ export class StopDelivery implements StopOffers {
   private openOffer(session: SessionRecord): Offer | undefined {
     const last = this.store.latestSessionEvent(session.id, Object.values(OFFER));
     if (last?.kind !== OFFER.offered) return undefined;
-    const { messageIds, questionIds, noticeIds } = last.data as Partial<Offer>;
+    const { messageIds, questionIds, taskItemIds, noticeIds } = last.data as Partial<
+      Offer & { noticeIds: number[] }
+    >;
     return {
       messageIds: messageIds ?? [],
       questionIds: questionIds ?? [],
-      noticeIds: noticeIds ?? [],
+      taskItemIds: taskItemIds ?? noticeIds ?? [],
     };
   }
 

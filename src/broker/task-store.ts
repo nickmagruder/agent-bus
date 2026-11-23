@@ -596,8 +596,9 @@ export class TaskStore {
   }
 
   /**
-   * Of these messages, mine whose every recipient has now been handed it
-   * (all their task inbox pointers delivered): the ones that earn their ✅.
+   * Of these messages, mine whose every recipient has now read it: the ones
+   * that earn their ✅. A pointer counts once delivered, except a Stop-hook
+   * delivery the app hasn't confirmed yet, which can still be put back.
    */
   fullyDeliveredReplies(messageIds: readonly number[]): TaskMessageRecord[] {
     if (messageIds.length === 0) return [];
@@ -606,7 +607,8 @@ export class TaskStore {
         `SELECT * FROM task_messages m
          WHERE m.id IN (${messageIds.map(() => '?').join(', ')}) AND m.sender = 'human'
            AND NOT EXISTS (SELECT 1 FROM task_inbox i
-                           WHERE i.message_id = m.id AND i.delivered_at IS NULL)
+                           WHERE i.message_id = m.id
+                             AND (i.delivered_at IS NULL OR i.delivered_via = 'stop_hook'))
          ORDER BY m.id`,
       )
       .all(...messageIds) as Row[];

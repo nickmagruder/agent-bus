@@ -1,7 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Digest } from '../../src/broker/digest.ts';
+import { Digest, DIGEST } from '../../src/broker/digest.ts';
 import { startHttpServer, type RunningHttpServer } from '../../src/broker/http.ts';
 import { Inbox, REACTION, type InboundMessage } from '../../src/broker/inbox.ts';
 import { silentLogger } from '../../src/broker/log.ts';
@@ -194,6 +194,59 @@ describe('my replies in a task thread', () => {
     expect(take(claude).items).toHaveLength(1);
   });
 
+  it('keep the recipients they went to when Slack retries after a claim', () => {
+    const claude = agent('claude');
+    const codex = agent('codex');
+    const t = task(claude, { platform: 'codex', project: 'clankers' });
+    const message = {
+      channel: CHANNEL,
+      channelType: 'channel',
+      ts: '1800000999.000002',
+      threadTs: t.thread,
+      user: USER_ID,
+      text: 'Before the claim',
+      hasFiles: false,
+    };
+    inbox.receive(message);
+    claim(codex, t.id);
+    expect(inbox.receive(message)).toEqual({
+      action: 'task_duplicate',
+      taskId: t.id,
+      recipients: [claude.id],
+    });
+  });
+
+  it("aren't passed on once the task is closed: dropped, audited, and the thread says so", () => {
+    const claude = agent('claude');
+    const codex = agent('codex');
+    const t = task(claude, { session: codex.id });
+    claim(codex, t.id);
+    tasks.updateTask({
+      platform: 'codex',
+      session: codex.id,
+      key: codex.key,
+      task: t.id,
+      state: 'completed',
+      result: { text: 'done', links: [] },
+    });
+    store.db
+      .prepare('UPDATE tasks SET thread_post_id = ? WHERE id = ?')
+      .run(store.enqueue({ target: 'agents', text: 'root' }).id, t.id);
+    woken = [];
+    expect(reply(t.thread, 'Thanks!')).toEqual({ action: 'dropped', reason: 'task_closed' });
+    expect(woken).toEqual([]);
+    expect(records.taskMessages(t.id)).toEqual([]);
+    expect(taskInbox.countWaiting(claude.id) + taskInbox.countWaiting(codex.id)).toBe(1); // the completed notice
+    const note = store.db
+      .prepare("SELECT text FROM outbox WHERE target = 'agents' ORDER BY id DESC LIMIT 1")
+      .get() as { text: string };
+    expect(note.text).toContain(`${t.id}\` is completed, so replies here aren't passed on`);
+    const dropped = store.db
+      .prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'inbound.dropped'")
+      .get();
+    expect(dropped).toEqual({ n: 1 });
+  });
+
   it('only count when I send them: other users and bots are dropped (sender gating)', () => {
     const claude = agent('claude');
     const t = task(claude, { platform: 'codex', project: 'clankers' });
@@ -273,6 +326,27 @@ describe('the Stop hook hands over my task-thread replies (they are my words, D3
       delivery,
     );
     expect(reactions.map(([, name]) => name)).toEqual([REACTION.routed, REACTION.delivered]);
+  });
+
+  it("doesn't count an unconfirmed Stop offer as read: no ✅ until the app confirms it", () => {
+    const claude = hooked('claude', 'app-u');
+    const codex = agent('codex');
+    const t = task(claude, { session: codex.id });
+    reply(t.thread, 'Both, please');
+    const delivery = new StopDelivery(inbox, store, taskInbox);
+    expect(stop(claude, 'app-u', delivery).action).toBe('blocked');
+    delivery.settle(true); // written, not yet confirmed
+    // The other side reads it while the creator's offer is still open.
+    expect(taskInbox.fullyDeliveredReplies(take(codex).items)).toEqual([]);
+    // A new prompt shows the block never reached the agent: it's put back.
+    service.hook(
+      'claude',
+      { event: 'UserPromptSubmit', appSessionId: 'app-u' },
+      delivery.check,
+      delivery,
+    );
+    expect(reactions.map(([, name]) => name)).toEqual([REACTION.routed]);
+    expect(take(claude).items.map((i) => i.message?.body)).toEqual(['Both, please']);
   });
 
   it('puts my reply back when the block never reached the agent', () => {
@@ -441,8 +515,35 @@ describe('the digest task section', () => {
       state: 'canceled',
     });
     now = new Date('2026-11-24T16:30:00Z');
-    await digestPost(); // this window has it
+    expect(await digestPost()).toContain(old.id); // this window has it
+    now = new Date('2026-11-25T12:00:00Z');
+    const fresh = task(claude, { platform: 'codex', project: 'clankers' });
     now = new Date('2026-11-25T16:30:00Z');
-    expect(await digestPost()).not.toContain(old.id);
+    const next = await digestPost();
+    expect(next).toContain(fresh.id);
+    expect(next).toContain('*Tasks* (1 opened, 0 finished, 1 open)');
+    expect(next).not.toContain(old.id);
+  });
+
+  it('counts task lines the length cap leaves out, never ending on a bare heading', async () => {
+    const claude = agent('claude');
+    for (let i = 0; i < 40; i++) {
+      records.insertTask({
+        createdBy: claude.id,
+        title: `Task ${i} ${'x'.repeat(110)}`,
+        brief: 'b',
+        targetSession: null,
+        targetPlatform: 'codex',
+        targetProject: 'clankers',
+        approvalExpiresAt: new Date(now.getTime() + 8 * 3_600_000),
+      });
+    }
+    now = new Date('2026-11-24T16:30:00Z');
+    const text = await digestPost();
+    expect(text.length).toBeLessThanOrEqual(DIGEST.maxChars);
+    const lines = text.split('\n');
+    expect(lines.at(-1)).toMatch(/^_…not shown: \d+ tasks, 1 session_$/);
+    expect(lines.at(-2)).toMatch(/^• /);
+    expect(text).not.toContain('*Sessions seen*');
   });
 });

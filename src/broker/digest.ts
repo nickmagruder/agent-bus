@@ -67,9 +67,10 @@ export function previousDay(day: string): string {
 
 /**
  * Posts the daily digest to #agents: open and expired questions, tasks
- * (opened, finished, and still open: #61), PRs merged in the configured repos, fyi notifications grouped by session, and the
- * sessions seen since the last digest. Nothing to report → no post (the slot
- * is still marked done).
+ * (opened, finished, and still open: #61), PRs merged in the configured
+ * repos, fyi notifications grouped by session, and the sessions seen since
+ * the last digest. Nothing to report → no post (the slot is still marked
+ * done); an open task always counts, so one waiting unclaimed shows daily.
  */
 export class Digest {
   private readonly store: Store;
@@ -282,7 +283,7 @@ export function digestText(input: DigestInput): string | undefined {
     plan('other', tasksHeading(tasks, input.since));
     for (const task of [...tasks].sort(byUrgency)) plan('task', taskLine(task, input.timeZone));
   }
-  // Agents merge these without my review, so they come right after questions.
+  // Agents merge these without my review, so they come right after tasks.
   if (prs.length > 0 || prsTruncated) {
     plan('other', '');
     plan('other', `*Merged PRs* (${prs.length})`);

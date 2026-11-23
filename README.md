@@ -449,7 +449,8 @@ are made.
     (`trust: verified-human`), never in the other-agents list; it needs the
     session key, and like my other replies it can block a Stop. 📥 when
     it's routed, ✅ once every side has read it. It doesn't count toward
-    the 20 messages per task.
+    the 20 messages per task. A reply on a closed task isn't passed on;
+    the thread says so.
   - The daily digest has a **Tasks** section: how many opened, finished and
     are open, then each task, most urgent first (stuck, needing input,
     awaiting my approval, approved but unclaimed, being worked on, then

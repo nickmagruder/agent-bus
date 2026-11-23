@@ -25,7 +25,7 @@ export interface InboundMessage {
   hasFiles: boolean;
 }
 
-export type DropReason = 'bot' | 'subtype' | 'not_human' | 'empty';
+export type DropReason = 'bot' | 'subtype' | 'not_human' | 'empty' | 'task_closed';
 
 export type InboundOutcome =
   | { action: 'routed' | 'duplicate'; sessionId: string; inboxId: number; questionId?: string }
@@ -278,6 +278,10 @@ export class Inbox {
       body: messageBody(message),
     });
     if (!routed) return undefined;
+    if (routed.closed) {
+      this.queue.kick();
+      return { action: 'dropped', reason: 'task_closed' };
+    }
     const outcome = { taskId: routed.task.id, recipients: routed.recipients };
     if (!routed.inserted) return { action: 'task_duplicate', ...outcome };
     this.reactions.add(channel, ts, REACTION.routed);

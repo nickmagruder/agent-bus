@@ -553,6 +553,19 @@ Built:
   since the last digest and every open one, with counts, sorted by
   urgency. Titles go through the same one-line escaping as task threads.
 
+After the [#94](https://github.com/nickmagruder/agent-bus/pull/94) review:
+
+- **✅ waits for a confirmed Stop:** a Stop-hook delivery counts as read
+  only once the app confirms the block (`delivered_via` becomes
+  `stop_hook_confirmed`); an open offer can still be put back.
+- **Closed tasks:** a reply in a completed, failed, rejected or canceled
+  task's thread isn't passed on (it would only wake agents that have moved
+  on, or block a Stop). It's audited as `inbound.dropped`
+  (`task_closed`), and the thread gets a line saying so.
+- A Slack retry reports the recipients the reply first went to. The Stop
+  offer's pointer list is now `taskItemIds` (`noticeIds` still read). The
+  digest says an open task always counts, so an unclaimed one shows daily.
+
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 
 Read from the A2A v1.0.0 specification and its "What's new in v1" and
