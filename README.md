@@ -444,9 +444,10 @@ are made.
   reviews every PR"; the review table in `docs/going-public.md` notes it's
   superseded. The `main` ruleset no longer requests a Copilot review
   automatically: local agents orchestrate reviews.
-- `AGENTS.md` checks clankers first and points to its git, review and
-  tracking rules instead of restating them, keeping only agent-bus facts
-  (nickmagruder/clankers#45).
+- `AGENTS.md` checks clankers first and points to its rules instead of
+  restating them. Agent memory moves into a tracked `memory/` folder
+  (`memory/local/`, gitignored, for IDs and local paths), replacing the old
+  rule that kept it out of the repo.
 
 ### 0.19.0 (2026-11-22)
 

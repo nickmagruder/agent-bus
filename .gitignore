@@ -11,7 +11,8 @@ desktop.ini
 
 # Local-only agent state
 .claude/settings.local.json
-**/memory/
+# Agent memory is tracked in memory/; only memory/local/ stays out (clankers "Memory")
+memory/local/
 
 # Secrets
 .env

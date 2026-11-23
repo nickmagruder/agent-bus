@@ -42,10 +42,12 @@ into tracked files.
   Codex only. Any change to a blocking path needs tests for every path.
 - Hook payloads hold prompts and tool input: send only the fields in
   `src/shared/hook-protocol.ts`, never the whole payload.
-- **Git, PRs and AI review:** clankers `standards/git.md` (trunk-based; the
-  agent requests each PR's AI review itself; only Nick merges). agent-bus
-  facts: PRs squash-merge; reviewers use `.github/skills/code-review/`
-  (synced from clankers `skills/pr-review`).
+- **Git, PRs and AI review:** clankers `standards/git.md`. agent-bus facts:
+  PRs squash-merge; reviewers use `.github/skills/code-review/` (synced from
+  clankers `skills/pr-review`).
+- **Memory:** clankers `global/AGENTS.md` "Memory": `memory/MEMORY.md` here;
+  IDs and local paths go in `memory/local/` (gitignored), never in a tracked
+  file.
 - **Tests and checks:** never weaken a test or suppress a lint or type
   error to get past a check. `npm run guards` (CI) fails on `.only`/`.skip`,
   `eslint-disable`, `@ts-ignore`-style comments and net-removed assertions
@@ -65,8 +67,9 @@ into tracked files.
 ## Key files
 
 - `README.md`: public overview, status, security model, setup, changelog
+- `memory/MEMORY.md`: agent memory index (`memory/local/` is gitignored)
 - `docs/design.md`: overall design, platform capabilities, safety rules, phases, decisions
-- `CONTRIBUTING.md`: coding standards and how changes are made (also read by Copilot review)
+- `CONTRIBUTING.md`: coding standards and how changes are made (also read by PR reviewers)
 - `SECURITY.md`: vulnerability reporting and scope
 - `docs/going-public.md`: plan for going public and the repo standards that follow
 - `docs/spikes/phase-0.md`: Phase 0 spike runbook and results
@@ -106,7 +109,7 @@ into tracked files.
 - `.github/workflows/`: `ci.yml` (the required `check` job: typecheck, lint, knip, change guards, markdownlint, Prettier, tests with coverage, secret scan), `codeql.yml`, `scorecard.yml`, `dependency-review.yml` (fails PRs adding a high advisory), `dependabot-auto-merge.yml` (devDependency patches only, after its own dependency review); actions pinned by SHA
 - `scripts/change-guards.ts` (rules in `scripts/change-guards-rules.ts`, tests in `tests/scripts/`): CI check for weakened tests, suppressions and PR size. Copies of clankers `templates/change-guards/` (the test differs only in its import path): change the rules there and re-sync; this repo's settings live in `scripts/change-guards.config.ts`
 - `knip.json`: unused files, exports and dependencies (`ignoreExportsUsedInFile`; husky runs `scripts/commit-msg.ts`)
-- `.github/copilot-instructions.md`, `.github/instructions/security.instructions.md`, `.github/skills/code-review/`: Copilot PR review
+- `.github/copilot-instructions.md`, `.github/instructions/security.instructions.md`, `.github/skills/code-review/`: PR reviewers' instructions
 - `.github/ISSUE_TEMPLATE/`, `.github/pull_request_template.md`: issue forms and PR template
 
 ## Docs kept in this repo

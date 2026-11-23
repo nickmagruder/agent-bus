@@ -18,9 +18,9 @@ below, and [`AGENTS.md`](AGENTS.md) holds the agent-facing version.
   guards, markdownlint, Prettier, Vitest with a coverage report and a
   gitleaks secret scan (`npm run check` runs all but the guards, coverage
   and scan locally). Dependency review scans every PR. Every PR gets an AI
-  review from a reviewer other than its author (Copilot, Codex or a Claude
-  session, whichever is the best choice at the time); address or answer
-  its comments before merging.
+  review from a reviewer other than its author, requested by the agent
+  that opened it (the maintainer's shared PR review policy); address or
+  answer its comments before merging.
 - **Never weaken a test to make it pass:** no `.only`/`.skip`, no deleted or
   loosened assertions, no `eslint-disable` or `@ts-ignore` to get past a
   check. When a change really needs one, add a `Test-guard: <reason>` line
