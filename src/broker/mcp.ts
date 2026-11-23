@@ -15,7 +15,7 @@ import type { InboxRecord, QuestionRecord } from './store.ts';
 import type { TaskRecord } from './task-store.ts';
 import { TASK_LIMITS, type TaskService, type TaskTarget } from './tasks.ts';
 
-export const SERVER_INFO = { name: 'agent-bus', version: '0.17.0' } as const;
+export const SERVER_INFO = { name: 'agent-bus', version: '0.18.0' } as const;
 
 export interface McpDeps {
   service: BusService;

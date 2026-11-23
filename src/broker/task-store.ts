@@ -60,6 +60,13 @@ export interface TaskRecord {
   /** A2A status timestamp: the last change. */
   updatedAt: string;
   closedAt: string | null;
+  /** The task's thread root in #agents (#61). */
+  threadPostId: number | null;
+  /** When the one approval reminder is due, and when it went out (#61). */
+  approvalRemindAt: string | null;
+  approvalRemindedAt: string | null;
+  /** Lines mirrored into the task's thread so far (capped, Q17). */
+  mirrored: number;
 }
 
 export interface NewTask {
@@ -418,6 +425,74 @@ export class TaskStore {
     return rows.map((row) => ({ taskId: String(row.task_id), notice: row.notice as TaskNotice }));
   }
 
+  /** Records a task's Slack posts: its thread root, its approval DM, and when to remind me (#61). */
+  setSlackPosts(
+    id: string,
+    posts: { threadPostId: number; approvalPostId: number; approvalRemindAt: Date },
+  ): void {
+    this.store.db
+      .prepare(
+        `UPDATE tasks SET thread_post_id = ?, approval_post_id = ?, approval_remind_at = ?
+         WHERE id = ?`,
+      )
+      .run(posts.threadPostId, posts.approvalPostId, posts.approvalRemindAt.toISOString(), id);
+  }
+
+  /** Tasks still awaiting my approval whose one reminder is due. */
+  dueApprovalReminders(now: Date): TaskRecord[] {
+    const rows = this.store.db
+      .prepare(
+        `SELECT * FROM tasks WHERE approval = 'pending' AND state = 'submitted'
+           AND approval_reminded_at IS NULL AND approval_remind_at <= ?
+         ORDER BY approval_remind_at, id`,
+      )
+      .all(now.toISOString()) as Row[];
+    return rows.map(toTask);
+  }
+
+  /** Marks the reminder sent; false if another tick already did (compare and swap). */
+  markApprovalReminded(id: string): boolean {
+    return (
+      this.store.db
+        .prepare(
+          'UPDATE tasks SET approval_reminded_at = ? WHERE id = ? AND approval_reminded_at IS NULL',
+        )
+        .run(this.timestamp(), id).changes === 1
+    );
+  }
+
+  /** Tasks whose approval wait (8 h, Q15) has run out. */
+  dueApprovalExpiries(now: Date): TaskRecord[] {
+    const rows = this.store.db
+      .prepare(
+        `SELECT * FROM tasks WHERE approval = 'pending' AND state = 'submitted'
+           AND approval_expires_at <= ? ORDER BY approval_expires_at, id`,
+      )
+      .all(now.toISOString()) as Row[];
+    return rows.map(toTask);
+  }
+
+  /**
+   * Counts one more line mirrored into a task's thread, if it's still under
+   * `cap`; false once the cap is reached (Q17).
+   */
+  countMirrored(id: string, cap: number): boolean {
+    return (
+      this.store.db
+        .prepare('UPDATE tasks SET mirrored = mirrored + 1 WHERE id = ? AND mirrored < ?')
+        .run(id, cap).changes === 1
+    );
+  }
+
+  /** Counts one more mirrored line only if exactly `at` were counted (the one "no more notes" line). */
+  countMirroredAt(id: string, at: number): boolean {
+    return (
+      this.store.db
+        .prepare('UPDATE tasks SET mirrored = mirrored + 1 WHERE id = ? AND mirrored = ?')
+        .run(id, at).changes === 1
+    );
+  }
+
   /** Tasks a session holds and is still working on (working or input-required), newest first. */
   heldTasks(sessionId: string): TaskRecord[] {
     const rows = this.store.db
@@ -555,6 +630,13 @@ function toTask(row: Row): TaskRecord {
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     closedAt: text(row.closed_at),
+    threadPostId:
+      row.thread_post_id === null || row.thread_post_id === undefined
+        ? null
+        : Number(row.thread_post_id),
+    approvalRemindAt: text(row.approval_remind_at),
+    approvalRemindedAt: text(row.approval_reminded_at),
+    mirrored: Number(row.mirrored ?? 0),
   };
 }
 

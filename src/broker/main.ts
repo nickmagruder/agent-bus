@@ -14,10 +14,12 @@ import { APPROVAL, BusService } from './service.ts';
 import { createWebSlackApi, type SlackApi } from './slack/api.ts';
 import { createSlackConnection, type SlackConnection } from './slack/connection.ts';
 import { ChannelDirectory } from './slack/directory.ts';
-import { registerActions, registerInbound } from './slack/inbound.ts';
+import { registerActions, registerInbound, registerTaskActions } from './slack/inbound.ts';
 import { Notifier, Questions } from './questions.ts';
 import { PostQueue } from './slack/queue.ts';
 import { Store } from './store.ts';
+import { TaskSlack } from './task-slack.ts';
+import { TaskService } from './tasks.ts';
 
 /**
  * Exit code for problems a restart can't fix (invalid environment, port
@@ -86,20 +88,30 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
   const service = new BusService(store, queue, undefined, directory);
   const notifier = new Notifier();
   const heldCalls = new HeldCalls();
+  /** Edits a message the bot sent (a question or task DM's outcome); fire-and-forget. */
+  const editor = {
+    update(channel: string, ts: string, text: string, blocks: unknown[]) {
+      slackApi.updateMessage(channel, ts, text, blocks).catch((error: unknown) => {
+        log('warn', 'could not update a Slack message', { error: errorMessage(error) });
+      });
+    },
+  };
   const questions = new Questions({
     store,
     queue,
     notifier,
     humanUserId: config.slack.userId,
     log,
-    editor: {
-      update(channel, ts, text, blocks) {
-        slackApi.updateMessage(channel, ts, text, blocks).catch((error: unknown) => {
-          log('warn', 'could not update a Slack message', { error: errorMessage(error) });
-        });
-      },
-    },
+    editor,
   });
+  const taskSlack = new TaskSlack({
+    store,
+    queue,
+    editor,
+    humanUserId: config.slack.userId,
+    log,
+  });
+  const tasks = new TaskService(store, service, undefined, taskSlack);
   const inbox = new Inbox({
     store,
     queue,
@@ -126,6 +138,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
   if (connection) {
     registerInbound(connection.app, inbox, log);
     registerActions(connection.app, questions, log);
+    registerTaskActions(connection.app, taskSlack, log);
   }
 
   let http: RunningHttpServer | undefined;
@@ -138,6 +151,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
       inbox,
       questions,
       notifier,
+      tasks,
       holdMs,
       heldCalls,
       log,
@@ -161,6 +175,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
   // Posts queued before a restart go out now; reminders and expiries missed while off run now.
   queue.kick();
   questions.start(deps.tickMs);
+  taskSlack.start(deps.tickMs);
   // Approval DMs whose grace period ran out (including while the broker was off).
   const flushHeldPings = () => {
     try {
@@ -203,6 +218,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
     heldCalls,
     async stop() {
       questions.stop();
+      taskSlack.stop();
       clearInterval(heldPingTimer);
       digest?.stop();
       // Held calls answer "pending" before their connections close, so an

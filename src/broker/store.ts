@@ -234,6 +234,17 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX leases_by_holder ON leases (holder);
   `,
+  // v9: tasks in Slack (#61). A post can reply under another post (a task's
+  // thread in #agents); a task knows its thread's root post, and its one
+  // approval reminder; mirrored lines are counted against a cap (Q17).
+  `
+  ALTER TABLE outbox ADD COLUMN reply_to INTEGER REFERENCES outbox (id);
+  ALTER TABLE tasks ADD COLUMN thread_post_id INTEGER REFERENCES outbox (id);
+  ALTER TABLE tasks ADD COLUMN approval_remind_at TEXT;
+  ALTER TABLE tasks ADD COLUMN approval_reminded_at TEXT;
+  ALTER TABLE tasks ADD COLUMN mirrored INTEGER NOT NULL DEFAULT 0;
+  CREATE INDEX tasks_by_thread_post ON tasks (thread_post_id);
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -304,6 +315,8 @@ export interface OutboxRecord {
   slackTs: string | null;
   /** Block Kit blocks; `text` is the notification fallback. */
   blocks: unknown[] | null;
+  /** Post this as a reply under that post (a task's thread), once it's sent. */
+  replyTo: number | null;
 }
 
 export interface NewPost {
@@ -317,6 +330,8 @@ export interface NewPost {
   icon?: string | null;
   /** Repeating a key returns the existing post instead of queueing a duplicate. */
   idemKey?: string | null;
+  /** Reply under this post (a task's thread root); posted top-level if it never got sent. */
+  replyTo?: number | null;
 }
 
 /** How an inbox message or question outcome reached the agent. */
@@ -1044,8 +1059,9 @@ export class Store {
     const result = this.db
       .prepare(
         `INSERT INTO outbox
-           (idem_key, target, session_id, in_thread, text, username, icon, created_at, blocks)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (idem_key, target, session_id, in_thread, text, username, icon, created_at, blocks,
+            reply_to)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         post.idemKey ?? null,
@@ -1057,6 +1073,7 @@ export class Store {
         post.icon ?? null,
         this.timestamp(),
         post.blocks ? JSON.stringify(post.blocks) : null,
+        post.replyTo ?? null,
       );
     return found(this.getPost(Number(result.lastInsertRowid)), 'new outbox post');
   }
@@ -1087,6 +1104,13 @@ export class Store {
       .prepare("SELECT * FROM outbox WHERE state = 'queued' AND target = ? ORDER BY id LIMIT 1")
       .get(target) as Row | undefined;
     return row && toOutbox(row);
+  }
+
+  /** Once a task's thread root is sent, the task knows its thread (for routing my replies). */
+  linkTaskThread(postId: number, slackChannelId: string, slackTs: string): void {
+    this.db
+      .prepare('UPDATE tasks SET slack_channel_id = ?, thread_ts = ? WHERE thread_post_id = ?')
+      .run(slackChannelId, slackTs, postId);
   }
 
   markSent(id: number, slackChannelId: string, slackTs: string): void {
@@ -1144,6 +1168,7 @@ function toOutbox(row: Row): OutboxRecord {
       row.blocks === null || row.blocks === undefined
         ? null
         : (JSON.parse(String(row.blocks)) as unknown[]),
+    replyTo: row.reply_to === null || row.reply_to === undefined ? null : Number(row.reply_to),
   };
 }
 

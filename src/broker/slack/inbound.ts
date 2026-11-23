@@ -2,6 +2,7 @@ import type { App } from '@slack/bolt';
 import type { InboundMessage, Inbox } from '../inbox.ts';
 import { errorMessage, type Logger } from '../log.ts';
 import { ANSWER_ACTION, type ButtonOutcome, type Questions } from '../questions.ts';
+import { TASK_ACTION, TASK_CLICK_REPLIES, type TaskSlack } from '../task-slack.ts';
 
 /**
  * Reduces a Slack `message` event to the fields the inbox routes on.
@@ -89,6 +90,50 @@ export function registerActions(app: App, questions: Questions, log: Logger): vo
       else log('info', 'question answered by button', { question: click.questionId });
     } catch (error) {
       log('error', 'Slack button handling failed', { error: errorMessage(error) });
+    }
+  });
+}
+
+export interface TaskClick {
+  taskId: string;
+  action: 'approve' | 'cancel';
+  userId: string;
+}
+
+/** Reads a task Approve or Cancel click from a `block_actions` payload. */
+export function toTaskClick(body: unknown, action: unknown): TaskClick | undefined {
+  if (typeof action !== 'object' || action === null) return undefined;
+  const a = action as Record<string, unknown>;
+  const match = TASK_ACTION.exec(str(a.action_id) ?? '');
+  const taskId = str(a.block_id);
+  const user = (body as { user?: { id?: unknown } } | null)?.user?.id;
+  if (a.type !== 'button' || !match || !taskId || typeof user !== 'string') return undefined;
+  return { taskId, action: match[1] === 'approve' ? 'approve' : 'cancel', userId: user };
+}
+
+/**
+ * Handles the Approve and Cancel buttons on task approval DMs (#61). The
+ * task comes from the block ID and the decision from the action ID; only
+ * Nick's clicks count (T5). Acks first, then decides.
+ */
+export function registerTaskActions(app: App, taskSlack: TaskSlack, log: Logger): void {
+  app.action(TASK_ACTION, async ({ ack, body, action, respond }) => {
+    await ack();
+    const click = toTaskClick(body, action);
+    if (!click) return;
+    try {
+      const outcome = taskSlack.decideByButton(click.taskId, click.action, click.userId);
+      const reply = TASK_CLICK_REPLIES[outcome];
+      if (reply)
+        await respond({ response_type: 'ephemeral', replace_original: false, text: reply });
+      else log('info', `task ${outcome} by button`, { task: click.taskId });
+    } catch (error) {
+      log('error', 'Slack task button handling failed', { error: errorMessage(error) });
+      await respond({
+        response_type: 'ephemeral',
+        replace_original: false,
+        text: 'Something went wrong; the task is unchanged. Try again, or see the broker log.',
+      }).catch(() => undefined);
     }
   });
 }

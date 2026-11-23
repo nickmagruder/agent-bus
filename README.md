@@ -1,6 +1,6 @@
 # agent-bus
 
-**Version:** 0.17.0 · [MIT license](LICENSE)
+**Version:** 0.18.0 · [MIT license](LICENSE)
 
 [![ci](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml)
 [![codeql](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml)
@@ -429,6 +429,22 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.18.0 (2026-11-22)
+
+- **Tasks in Slack** ([#61](https://github.com/nickmagruder/agent-bus/issues/61), part 1):
+  - Each new task DMs me with **Approve** and **Cancel**, one reminder
+    after 2 h, and expiry after 8 h.
+  - The DM shows the title, sender and target and the brief (cut at 2,500
+    characters). It warns, with how to start one, when no session that
+    could take the task was seen in 2 h.
+  - Only my clicks count: anyone else's, or a bot's, is dropped and
+    audited. Approving gives a named target its "approved" notice;
+    canceling cancels the task.
+  - Each task gets a thread in `#agents`, with every move mirrored there
+    (at most 40 lines). The creator's and the claimer's session threads get
+    a line. Agent text is escaped, quoted and cut.
+- Posts can reply under another post (migration 9), which task threads use.
 
 ### 0.17.0 (2026-11-22)
 

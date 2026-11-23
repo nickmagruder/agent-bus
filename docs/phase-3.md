@@ -405,6 +405,61 @@ After the [#87](https://github.com/nickmagruder/agent-bus/pull/87) review:
 - #59's "`input-required` pings the creator" is the queued notice here; the
   agent sees it once #60 delivers notices.
 
+### Tasks in Slack ([#61](https://github.com/nickmagruder/agent-bus/issues/61) part 1, 0.18.0, 2026-11-22)
+
+Decided with Nick before building (all as recommended):
+
+- **Order:** #61 part 1 (approval and threads), then #60 (delivery), then
+  #61 part 2 (stuck and waiting tasks, digest, my replies in task threads).
+- **Reminder:** one, 2 hours after the task is created; expiry stays 8 h.
+- **The approval DM** shows title, sender, target and the brief cut at
+  2,500 characters (a Block Kit section holds 3,000); the thread has the
+  whole brief. When no session that could take it was seen in 2 hours, it
+  says so and how to start one (Q9).
+- **Pool tasks** get no "approved" notice: there's no one session to tell;
+  the pool finds them with `list_tasks` (and `check_inbox` with #60).
+- **The lease Break button** stays with #31.
+
+Built in [`src/broker/task-slack.ts`](../src/broker/task-slack.ts), called by
+the task rules inside the same transaction as each change:
+
+- **Approval (D2, Q15, T5):** Approve and Cancel on the DM. The task comes
+  from the block ID and the decision from the action ID, never the button
+  value. A click from anyone but me (another user or a bot) is dropped and
+  audited as `inbound.dropped`. Text that says "approved" changes nothing.
+  A second click, or a click on an expired task, gets "already decided".
+  The DM is edited to show the outcome.
+- **Threads (Q16):** a root in `#agents` per task, posted as a reply
+  target through the new `outbox.reply_to` (migration 9); the task learns
+  its thread when the root is sent. Claims, notes, input-required,
+  completion (with its links), failure, rejection, cancel, give-back,
+  approval and expiry are mirrored there, up to 40 lines per task (Q17).
+  The creator's thread gets a line when the task is opened, and the
+  claimer's when it claims (announced sessions only).
+- **Escaping (T9):** every piece of agent text in Slack goes through the
+  same escaping as notifications (no `@channel`, `<!here>`, user mentions
+  or disguised links), is quoted with `>` so it can't pass as a heading,
+  and has code fences neutralised. Result links are already `https:` only
+  (T12, #59).
+
+After the [#88](https://github.com/nickmagruder/agent-bus/pull/88) review:
+
+- **The DM always fits Slack's 3,000-character section:** escaping grows
+  text (`&` becomes `&amp;`), so the brief is cut after escaping and
+  quoting, to what's left of the section, never inside an escape. The
+  thread root has the whole brief (4,000 characters before escaping).
+- **Titles are one plain line:** newlines become spaces and `*`, `_`, `~`
+  and backticks are dropped, wherever a title shows (DM, thread, session
+  lines, reminder), so a title can't fake a line next to the buttons.
+- **A thread root that failed drops its replies** (`post.dropped`) instead
+  of posting them loose in `#agents`.
+- **Notes and messages stop 4 lines short of the 40-line cap**, with one
+  line saying so, so completion, failure and cancel still show.
+- **Each move shows only the note given with it**, not an older one.
+- The creator's thread hears when I cancel or the approval expires; the
+  queue is kicked only after the change commits; a stranger's click is
+  audited with a cut task ID; a failed click tells me; times show the day.
+
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 
 Read from the A2A v1.0.0 specification and its "What's new in v1" and

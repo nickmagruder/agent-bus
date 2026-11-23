@@ -2,6 +2,7 @@ import type { Platform } from '../shared/platform.ts';
 import { NO_PROJECT, projectSlug } from '../shared/session-id.ts';
 import { BusError, type BusErrorCode, type BusService } from './service.ts';
 import type { SessionRecord, Store } from './store.ts';
+import type { TaskEvents } from './task-slack.ts';
 import { TaskStore, type TaskRecord, type TaskResult } from './task-store.ts';
 import { canMoveTask, type TaskState } from '../shared/task-states.ts';
 
@@ -115,12 +116,20 @@ export class TaskService {
   private readonly service: BusService;
   private readonly tasks: TaskStore;
   private readonly now: () => Date;
+  /** Slack's side of each change (#61), run in the same transaction; none in some tests. */
+  private readonly events: TaskEvents | undefined;
 
-  constructor(store: Store, service: BusService, now: () => Date = service.clock) {
+  constructor(
+    store: Store,
+    service: BusService,
+    now: () => Date = service.clock,
+    events?: TaskEvents,
+  ) {
     this.store = store;
     this.service = service;
     this.tasks = new TaskStore(store, now);
     this.now = now;
+    this.events = events;
   }
 
   /**
@@ -195,15 +204,19 @@ export class TaskService {
       );
     }
 
-    return this.tasks.insertTask({
-      createdBy: caller.id,
-      title: input.title,
-      brief: input.brief,
-      targetSession: 'session' in target ? target.session : null,
-      targetPlatform: target.platform,
-      targetProject: target.project,
-      parentId: parent?.id ?? null,
-      approvalExpiresAt: new Date(this.now().getTime() + TASK_LIMITS.approvalTtlMs),
+    return this.store.transaction(() => {
+      const task = this.tasks.insertTask({
+        createdBy: caller.id,
+        title: input.title,
+        brief: input.brief,
+        targetSession: 'session' in target ? target.session : null,
+        targetPlatform: target.platform,
+        targetProject: target.project,
+        parentId: parent?.id ?? null,
+        approvalExpiresAt: new Date(this.now().getTime() + TASK_LIMITS.approvalTtlMs),
+      });
+      this.events?.created(task);
+      return task;
     });
   }
 
@@ -246,11 +259,15 @@ export class TaskService {
     if (task.approval !== 'approved') {
       refuse('bad_state', `${task.id} still waits for Nick's approval.`);
     }
-    const claimed = this.tasks.moveTask(task.id, {
-      from: 'submitted',
-      to: 'working',
-      by: caller.id,
-      holder: caller.id,
+    const claimed = this.store.transaction(() => {
+      const after = this.tasks.moveTask(task.id, {
+        from: 'submitted',
+        to: 'working',
+        by: caller.id,
+        holder: caller.id,
+      });
+      if (after) this.events?.moved(after, 'submitted', caller.id);
+      return after;
     });
     if (claimed) return claimed;
     const now = this.tasks.getTask(task.id);
@@ -281,7 +298,12 @@ export class TaskService {
     if (input.state === undefined) {
       if (note === undefined) return refuse('bad_state', 'Give a state, a note, or both.');
       if (!isHolder) return notHolder();
-      return this.tasks.noteTask(task.id, caller.id, note) ?? lost();
+      const noted = this.store.transaction(() => {
+        const after = this.tasks.noteTask(task.id, caller.id, note);
+        if (after) this.events?.noted(after, caller.id);
+        return after;
+      });
+      return noted ?? lost();
     }
 
     const to = input.state;
@@ -322,7 +344,10 @@ export class TaskService {
         ...(note !== undefined ? { statusMessage: note } : {}),
         ...(result ? { result } : {}),
       });
-      if (after) this.notify(after, to, task.holder);
+      if (after) {
+        this.notify(after, to, task.holder);
+        this.events?.moved(after, from, caller.id, note);
+      }
       return after;
     });
     return moved ?? lost();
