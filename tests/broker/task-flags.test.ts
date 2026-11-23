@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { digestText } from '../../src/broker/digest.ts';
 import { silentLogger } from '../../src/broker/log.ts';
 import { BusError, BusService } from '../../src/broker/service.ts';
 import { toFlagClick } from '../../src/broker/slack/inbound.ts';
@@ -145,7 +146,9 @@ describe('the stuck flag (Q8)', () => {
     expect(fresh(task)).toMatchObject({ flagKind: 'stuck', stuckAt: now.toISOString() });
     const message = flagDm(task);
     expect(message.target).toBe(DM_TARGET);
-    expect(buttons(message)).toEqual(['agentbus_flag_cancel', 'agentbus_flag_release']);
+    // Sent to codex by name: only that session could take it again, so no Release.
+    expect(buttons(message)).toEqual(['agentbus_flag_cancel']);
+    expect(blockText(message)).toContain('No Release: it was sent to');
     expect(blockText(message)).toContain(`held by \`${codex.id}\`, looks stuck`);
     expect(threadLines(task).at(-1)).toContain(':warning: Flagged as stuck');
     expect(events('task.flagged')).toEqual([{ task: task.id, flag: 'stuck' }]);
@@ -203,14 +206,22 @@ describe('the stuck flag (Q8)', () => {
     expect(events('task.unflagged')).toEqual([{ task: task.id, flag: 'stuck' }]);
   });
 
-  it('Release takes it from the holder and opens it to claim again', () => {
+  it('Release takes a pool task from the holder and opens it to the pool again', () => {
     const claude = agent('claude');
-    const codex = agent('codex');
-    const task = claimed(claude, codex);
+    const first = agent('codex');
+    const second = agent('codex');
+    const task = approved(claude, { platform: 'codex', project: 'clankers' });
+    tasks.claimTask({ platform: 'codex', session: first.id, key: first.key, task: task.id });
     later(5 * HOUR);
     slackTasks.tick();
+    expect(buttons(flagDm(task))).toEqual(['agentbus_flag_cancel', 'agentbus_flag_release']);
     expect(slackTasks.flagByButton(task.id, 'release', USER_ID)).toBe('released');
-    expect(fresh(task)).toMatchObject({ state: 'submitted', holder: null, stuckAt: null });
+    expect(fresh(task)).toMatchObject({
+      state: 'submitted',
+      holder: null,
+      stuckAt: null,
+      openSince: now.toISOString(),
+    });
     expect(blockText(flagDm(task))).toContain('Released: open to claim again');
     expect(threadLines(task).at(-1)).toContain('Given back by `nick`');
     expect(events('task.state').at(-1)).toMatchObject({
@@ -223,17 +234,58 @@ describe('the stuck flag (Q8)', () => {
       () =>
         tasks.updateTask({
           platform: 'codex',
-          session: codex.id,
-          key: codex.key,
+          session: first.id,
+          key: first.key,
           task: task.id,
           state: 'completed',
           result: { text: 'done', links: [] },
         }),
       'not_allowed',
     );
-    // The named target can claim it again.
+    // Another session in the pool takes it.
+    tasks.claimTask({ platform: 'codex', session: second.id, key: second.key, task: task.id });
+    expect(fresh(task)).toMatchObject({ state: 'working', holder: second.id });
+  });
+
+  it('offers no Release on a task sent to one session by name, and refuses a forged click', () => {
+    const claude = agent('claude');
+    const codex = agent('codex');
+    const task = claimed(claude, codex);
+    later(5 * HOUR);
+    slackTasks.tick();
+    expect(slackTasks.flagByButton(task.id, 'release', USER_ID)).toBe('unflagged');
+    expect(fresh(task)).toMatchObject({ state: 'working', holder: codex.id });
+  });
+
+  it('won’t release a holder that came back before the tick noticed', () => {
+    const claude = agent('claude');
+    const codex = agent('codex');
+    const task = approved(claude, { platform: 'codex', project: 'clankers' });
     tasks.claimTask({ platform: 'codex', session: codex.id, key: codex.key, task: task.id });
-    expect(fresh(task).state).toBe('working');
+    later(5 * HOUR);
+    slackTasks.tick();
+    touch(codex); // back, and no tick since
+    expect(slackTasks.flagByButton(task.id, 'release', USER_ID)).toBe('unflagged');
+    expect(fresh(task)).toMatchObject({ state: 'working', holder: codex.id, stuckAt: null });
+    expect(blockText(flagDm(task))).toContain('is active again: nothing to do');
+  });
+
+  it('flags again, with a new DM, if a revived holder goes quiet again', () => {
+    const claude = agent('claude');
+    const codex = agent('codex');
+    const task = claimed(claude, codex);
+    later(5 * HOUR);
+    slackTasks.tick();
+    const firstDm = flagDm(task);
+    touch(codex);
+    slackTasks.tick();
+    later(5 * HOUR);
+    slackTasks.tick();
+    const secondDm = flagDm(task);
+    expect(secondDm.id).not.toBe(firstDm.id);
+    expect(buttons(secondDm)).toEqual(['agentbus_flag_cancel']);
+    expect(blockText(store.getPost(firstDm.id) ?? {})).toContain('is active again');
+    expect(events('task.flagged')).toHaveLength(2);
   });
 
   it('Cancel ends it for both sides, with the fixed notice to each', () => {
@@ -268,6 +320,46 @@ describe('the waiting flag (Q23)', () => {
     expect(buttons(flagDm(task))).toEqual(['agentbus_flag_cancel']);
     expect(blockText(flagDm(task))).toContain('nobody has claimed it');
     expect(threadLines(task).at(-1)).toContain(':hourglass: Flagged');
+  });
+
+  it('runs the clock from approval: messages and my replies don’t reset it', () => {
+    const claude = agent('claude');
+    const task = approved(claude, { platform: 'copilot', project: 'clankers' });
+    const openedAt = fresh(task).openSince;
+    later(20 * HOUR);
+    records.addTaskMessage({
+      taskId: task.id,
+      sender: 'human',
+      slackUser: USER_ID,
+      role: 'user',
+      body: 'Anyone?',
+      slackChannelId: 'C1',
+      slackTs: '1800000000.000001',
+    });
+    later(5 * HOUR);
+    slackTasks.tick();
+    expect(fresh(task).flagKind).toBe('waiting');
+    expect(fresh(task).openSince).toBe(openedAt);
+    expect(blockText(flagDm(task))).toContain('has been open to claim since');
+  });
+
+  it('shows as flagged in the digest', () => {
+    const claude = agent('claude');
+    const task = approved(claude, { platform: 'copilot', project: 'clankers' });
+    later(25 * HOUR);
+    slackTasks.tick();
+    const text =
+      digestText({
+        since: new Date(0),
+        timeZone: 'America/Los_Angeles',
+        items: [],
+        questions: [],
+        sessions: [],
+        tasks: [fresh(task)],
+        sessionById: () => undefined,
+      }) ?? '';
+    expect(text).toContain(`\`${task.id}\``);
+    expect(text).toContain('flagged, unclaimed since');
   });
 
   it('never flags a task still awaiting my approval (that one expires instead)', () => {

@@ -602,6 +602,23 @@ Built in [`src/broker/task-slack.ts`](../src/broker/task-slack.ts) (the
 - By design: the released holder gets no notice (there's no fixed notice
   for it, and it was presumed gone); its next `update_task` is refused.
 
+After the [#95](https://github.com/nickmagruder/agent-bus/pull/95) review:
+
+- **Release is for pool tasks only.** A task sent to one session by name
+  can only be claimed by that session, so releasing it would hand it back
+  to the session that went quiet and tell no one. Its stuck DM offers
+  Cancel only, and says why.
+- **The waiting clock** runs from when the task last became open to claim
+  (`open_since`, set on approval and on a give-back, migration 10), not
+  `updated_at`: messages and my replies no longer reset it, and the DM
+  shows that time.
+- **Release re-checks the holder at the click:** a holder back since the
+  last tick clears the flag there, and nothing is released.
+- The digest marks a waiting-flagged task as flagged. Slack edits from
+  inside a transaction (here and in `refreshApproval`) can still show a
+  change that later rolled back; queuing them after commit is a later
+  cleanup.
+
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 
 Read from the A2A v1.0.0 specification and its "What's new in v1" and

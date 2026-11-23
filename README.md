@@ -446,8 +446,8 @@ are made.
   - **Stuck tasks:** when the session holding a task shows no sign of life
     for 4 hours (no claim, note or message on the task, and no tool call or
     hook from its session), I get a DM with **Cancel** and **Release**, and
-    the task's thread says so. Release takes the task from that session and
-    opens it to claim again; Cancel ends it, and both sides get the fixed
+    the task's thread says so. Release (pool tasks only) takes the task from
+    that session and opens it to its pool again; Cancel ends it, and both sides get the fixed
     "canceled" notice. If the holder comes back, the flag goes and the DM
     says so.
   - **Unclaimed tasks:** an approved task nobody claims for 24 hours gets a

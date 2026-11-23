@@ -70,6 +70,8 @@ export interface TaskRecord {
   /** The DM of the task's latest flag (stuck or waiting), and which flag it was (#61). */
   flagPostId: number | null;
   flagKind: TaskFlag | null;
+  /** When it last became open to claim: approved, or given back (the waiting clock, Q23). */
+  openSince: string | null;
 }
 
 /** Stuck: its holder silent too long (Q8). Waiting: approved and unclaimed too long (Q23). */
@@ -247,6 +249,11 @@ export class TaskStore {
         sets.push('holder = ?', 'holder_seen_at = ?');
         values.push(holder, holder ? at : null);
       }
+      if (move.to === 'submitted') {
+        // Given back: open to claim again from now (the waiting clock).
+        sets.push('open_since = ?');
+        values.push(at);
+      }
       if (move.statusMessage !== undefined) {
         sets.push('status_message = ?');
         values.push(move.statusMessage);
@@ -305,12 +312,13 @@ export class TaskStore {
       const approved = to === 'approved';
       const changed = this.store.db
         .prepare(
-          `UPDATE tasks SET approval = ?, approved_at = ?, updated_at = ?,
+          `UPDATE tasks SET approval = ?, approved_at = ?, open_since = ?, updated_at = ?,
              state = ?, closed_at = ?, stuck_at = NULL, waiting_at = NULL
            WHERE id = ? AND approval = 'pending' AND state = 'submitted'`,
         )
         .run(
           to,
+          approved ? at : null,
           approved ? at : null,
           at,
           approved ? 'submitted' : 'canceled',
@@ -587,8 +595,9 @@ export class TaskStore {
 
   /**
    * Held tasks whose holder has shown no sign of life since `cutoff`: no
-   * claim, note or message on the task (`holder_seen_at`) and no tool call or
-   * hook from its session (`last_seen_at`). Not yet flagged (Q8).
+   * claim or note on the task (`holder_seen_at`) and no tool call or hook
+   * from its session (`last_seen_at`, which its messages and moves also
+   * touch). Not yet flagged (Q8).
    */
   dueStuckFlags(cutoff: Date): TaskRecord[] {
     const rows = this.store.db
@@ -616,12 +625,16 @@ export class TaskStore {
     return rows.map(toTask);
   }
 
-  /** Approved tasks nobody has claimed since `cutoff` (Q23), not yet flagged. */
+  /**
+   * Approved tasks open to claim since before `cutoff` (Q23), not yet
+   * flagged. The clock runs from approval or the last give-back; messages
+   * and replies don't reset it.
+   */
   dueWaitingFlags(cutoff: Date): TaskRecord[] {
     const rows = this.store.db
       .prepare(
         `SELECT * FROM tasks WHERE approval = 'approved' AND state = 'submitted'
-           AND waiting_at IS NULL AND updated_at < ?
+           AND waiting_at IS NULL AND COALESCE(open_since, approved_at, updated_at) < ?
          ORDER BY updated_at, id`,
       )
       .all(cutoff.toISOString()) as Row[];
@@ -795,6 +808,7 @@ function toTask(row: Row): TaskRecord {
     flagPostId:
       row.flag_post_id === null || row.flag_post_id === undefined ? null : Number(row.flag_post_id),
     flagKind: (text(row.flag_kind) as TaskFlag | null) ?? null,
+    openSince: text(row.open_since),
   };
 }
 

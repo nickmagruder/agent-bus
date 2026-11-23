@@ -287,8 +287,18 @@ export class TaskSlack implements TaskEvents {
     }
     if (!task) return 'unknown';
     const flag = activeFlag(task);
-    if (!flag || (action === 'release' && flag !== 'stuck')) {
+    const releasable = flag === 'stuck' && task.targetSession === null;
+    if (!flag || (action === 'release' && !releasable)) {
       this.refreshFlag(task);
+      this.queue.kick();
+      return 'unflagged';
+    }
+    if (flag === 'stuck' && this.holderSeenAt(task) >= this.stuckCutoff().toISOString()) {
+      // The holder came back since the last tick: the flag no longer stands.
+      this.store.transaction(() => {
+        const cleared = this.tasks.clearStuck(task.id);
+        if (cleared) this.revived(cleared);
+      });
       this.queue.kick();
       return 'unflagged';
     }
@@ -337,17 +347,11 @@ export class TaskSlack implements TaskEvents {
    * its DM says so.
    */
   private flagTick(now: Date): void {
-    const stuckCutoff = new Date(now.getTime() - TASK_SLACK.stuckAfterMs);
+    const stuckCutoff = this.stuckCutoff(now);
     for (const task of this.tasks.revivedStuckFlags(stuckCutoff)) {
       this.store.transaction(() => {
         const cleared = this.tasks.clearStuck(task.id);
-        if (!cleared) return;
-        this.mirror(
-          cleared,
-          `:arrow_forward: \`${cleared.holder ?? ''}\` is active again.`,
-          'state',
-        );
-        this.refreshFlag(cleared);
+        if (cleared) this.revived(cleared);
       });
     }
     for (const task of this.tasks.dueStuckFlags(stuckCutoff)) this.raiseFlag(task.id, 'stuck');
@@ -355,6 +359,16 @@ export class TaskSlack implements TaskEvents {
     for (const task of this.tasks.dueWaitingFlags(waitingCutoff)) {
       this.raiseFlag(task.id, 'waiting');
     }
+  }
+
+  private stuckCutoff(now: Date = this.now()): Date {
+    return new Date(now.getTime() - TASK_SLACK.stuckAfterMs);
+  }
+
+  /** A stuck task's holder came back: a thread line, and the DM says so. */
+  private revived(task: TaskRecord): void {
+    this.mirror(task, `:arrow_forward: \`${task.holder ?? ''}\` is active again.`, 'state');
+    this.refreshFlag(task);
   }
 
   private raiseFlag(taskId: string, flag: TaskFlag): void {
@@ -375,8 +389,8 @@ export class TaskSlack implements TaskEvents {
         flag === 'stuck'
           ? `:warning: Flagged as stuck: no sign of \`${task.holder ?? ''}\` since ` +
               `${localTime(seen ?? task.updatedAt).slice(3)}. Nick can cancel or release it.`
-          : `:hourglass: Flagged: approved ${localTime(task.updatedAt)} and not claimed yet. ` +
-              'Nick can cancel it.',
+          : `:hourglass: Flagged: open to claim since ${localTime(openSince(task)).slice(3)} ` +
+              'and not claimed yet. Nick can cancel it.',
         'state',
       );
     });
@@ -664,7 +678,8 @@ export function flagMessage(
       ? `:warning: Task \`${task.id}\` from \`${task.createdBy}\`, held by ${holder}, looks ` +
         `stuck: no sign of ${holder} since ${localTime(seen ?? task.updatedAt).slice(3)}.`
       : `:hourglass: Task \`${task.id}\` from \`${task.createdBy}\` to \`${targetName(task)}\` ` +
-        `was approved ${localTime(task.updatedAt)} and nobody has claimed it.`;
+        `has been open to claim since ${localTime(openSince(task)).slice(3)} and nobody has ` +
+        'claimed it.';
   const section = {
     type: 'section',
     text: { type: 'mrkdwn', text: `${head}\n*${title(task)}*` },
@@ -680,7 +695,7 @@ export function flagMessage(
         text: { type: 'plain_text', text: 'Cancel', emoji: false },
         value: task.id,
       },
-      ...(kind === 'stuck'
+      ...(kind === 'stuck' && task.targetSession === null
         ? [
             {
               type: 'button',
@@ -692,10 +707,14 @@ export function flagMessage(
         : []),
     ];
     const context = [
-      kind === 'stuck'
+      kind === 'stuck' && task.targetSession === null
         ? `Cancel ends it for both sides. Release takes it from ${holder} and opens it to ` +
-          'claim again. Or leave it: the flag goes when the holder shows life.'
-        : 'Cancel ends it. Or leave it: it waits, and shows in the digest.',
+          'its pool again. Or leave it: the flag goes when the holder shows life.'
+        : kind === 'stuck'
+          ? `Cancel ends it for both sides. (No Release: it was sent to ${holder} by name, so ` +
+            'only that session could take it again.) Or leave it: the flag goes when the ' +
+            'holder shows life.'
+          : 'Cancel ends it. Or leave it: it waits, and shows in the digest.',
       ...(hint ? [hint] : []),
     ].join('\n');
     return {
@@ -711,6 +730,11 @@ export function flagMessage(
     text: `${fallback} (no longer)`,
     blocks: [section, { type: 'context', elements: [{ type: 'mrkdwn', text: flagOutcome(task) }] }],
   };
+}
+
+/** When a task last became open to claim: approved, or given back. */
+function openSince(task: TaskRecord): string {
+  return task.openSince ?? task.approvedAt ?? task.updatedAt;
 }
 
 /** Where a task went once its flag stopped standing. */

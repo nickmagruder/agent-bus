@@ -246,10 +246,12 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX tasks_by_thread_post ON tasks (thread_post_id);
   `,
   // v10: stuck and unclaimed flags (#61, Q8, Q23). A flagged task DMs me
-  // once per flag, with buttons; the task keeps that DM and which flag it was.
+  // once per flag, with buttons; the task keeps that DM and which flag it was,
+  // and when it last became open to claim (approved, or released).
   `
   ALTER TABLE tasks ADD COLUMN flag_post_id INTEGER REFERENCES outbox (id);
   ALTER TABLE tasks ADD COLUMN flag_kind TEXT CHECK (flag_kind IN ('stuck', 'waiting'));
+  ALTER TABLE tasks ADD COLUMN open_since TEXT;
   `,
 ];
 

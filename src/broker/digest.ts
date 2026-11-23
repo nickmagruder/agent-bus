@@ -413,8 +413,12 @@ function taskLine(task: TaskRecord, timeZone: string): string {
       return `• :question: ${head}: ${holder} needs input from \`${task.createdBy}\``;
     case 'approval':
       return `• :inbox_tray: ${head}: waits for your approval (expires ${since(task.approvalExpiresAt)})`;
-    case 'unclaimed':
-      return `• :hourglass: ${head}: approved, not claimed yet (since ${since(task.approvedAt ?? task.createdAt)})`;
+    case 'unclaimed': {
+      const open = since(task.openSince ?? task.approvedAt ?? task.createdAt);
+      return task.waitingAt
+        ? `• :hourglass: ${head}: flagged, unclaimed since ${open} (cancel it from its DM)`
+        : `• :hourglass: ${head}: approved, not claimed yet (since ${open})`;
+    }
     case 'working':
       return `• :arrow_forward: ${head}: ${holder} is working on it`;
     case 'completed':
