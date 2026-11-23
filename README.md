@@ -1,6 +1,6 @@
 # agent-bus
 
-**Version:** 0.19.1 · [MIT license](LICENSE)
+**Version:** 0.19.2 · [MIT license](LICENSE)
 
 [![ci](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml)
 [![codeql](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml)
@@ -434,6 +434,15 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.19.2 (2026-11-23)
+
+- **Memory stays private where it should** ([#92](https://github.com/nickmagruder/agent-bus/issues/92)):
+  some notes moved from the tracked `memory/` to the gitignored
+  `memory/local/`; the broker-restart
+  note keeps only the lesson and points at this README. `CLAUDE.md` now
+  imports both memory indexes, and `AGENTS.md` tells every agent to read
+  them at the start of a session.
 
 ### 0.19.1 (2026-11-22)
 
