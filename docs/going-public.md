@@ -68,6 +68,11 @@ here). Prettier style stays agent-bus's own (semicolons).
 | Shared config | clankers                           | Short-lived branch → PR (several agents may edit at once)               | Copilot review, requested by the agent           | Agent, after the review is addressed, `--rebase`; listed in the daily digest |
 | Notes vault   | code-notes                         | Its own `Ship-Session`: worktree → PR (direct pushes to `main` allowed) | none                                             | Agent, squash                                                                |
 
+_Review column superseded 2026-11-22 by [#90](https://github.com/nickmagruder/agent-bus/issues/90)
+and clankers `standards/git.md`: every PR gets an AI review from the best
+reviewer available, never its author, requested by the agent that opened it;
+merges still wait for Nick's ask (code-notes excepted)._
+
 ## Plan
 
 Agents open PRs; Nick merges app-repo PRs. Steps run in order unless noted.

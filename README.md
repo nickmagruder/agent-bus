@@ -402,12 +402,11 @@ On GitHub:
   rates the repo's supply-chain hygiene weekly.
 - **Dependabot** opens grouped weekly updates for npm packages and Actions
   (pinned by commit SHA).
-- **An AI review** on every PR, requested by the agent that opened it:
-  another platform than the author first, else a separate session, then
-  Copilot while its quota lasts. Copilot reads
-  `.github/copilot-instructions.md` and the two-axis `code-review` skill in
-  `.github/skills/` (standards, and the linked issue as the spec); Claude
-  reviewers use the same skill.
+- **An AI review** on every PR, requested by the agent that opened it
+  from the best reviewer available, never the author (a completed Copilot
+  review counts). Copilot reads `.github/copilot-instructions.md` and the
+  two-axis `code-review` skill in `.github/skills/` (standards, and the
+  linked issue as the spec), which Claude reviewers use too.
 
 ### Project structure
 
@@ -438,11 +437,12 @@ are made.
 
 ### 0.19.1 (2026-11-22)
 
-- AI review is a standing step on every PR
-  ([#90](https://github.com/nickmagruder/agent-bus/issues/90)): the agent that opened it requests
-  it right away, from another platform first, else a separate session, then
-  Copilot while its quota lasts (clankers `standards/git.md`). `AGENTS.md`
-  and the README say so in place of "Copilot reviews every PR".
+- **AI review on every PR** ([#90](https://github.com/nickmagruder/agent-bus/issues/90)): the
+  agent that opened a PR requests its review right away, from the best
+  reviewer available, never the author (a completed Copilot review counts),
+  per clankers `standards/git.md`. `AGENTS.md`, `CONTRIBUTING.md` and the
+  README say so in place of "Copilot reviews every PR"; the review table
+  in `docs/going-public.md` notes it's superseded.
 
 ### 0.19.0 (2026-11-22)
 

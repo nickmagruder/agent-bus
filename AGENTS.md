@@ -46,12 +46,15 @@ into tracked files.
   Branch, commit, push and open the PR as the natural next step (clankers
   `standards/git.md`); only Nick merges. Never `--no-verify`.
 - **AI review:** right after opening a PR, request its AI review without
-  asking Nick (clankers `standards/git.md`): another platform than the
-  author first (Codex for a Claude PR), else a separate Claude session (the
-  linked reviewer, if there is one), then Copilot while its quota lasts.
-  A review posted through Nick's `gh` login starts with
-  `<!-- ai-review -->`. Before handing a PR back, fix the valid comments
-  and reply with a reason to the rest, then resolve the threads.
+  asking Nick (clankers `standards/git.md`), from whichever reviewer is the
+  best choice at the time and never the PR's author: another platform than
+  the author where one can run (Copilot, Codex or a Claude session), else
+  a separate session on the same platform (the linked reviewer, if there
+  is one). A completed automatic Copilot review counts; "unable to review"
+  doesn't. A review posted through Nick's `gh` login starts with
+  `<!-- ai-review -->`, and the author never adds it to its own comment.
+  Before handing a PR back, fix the valid comments and reply with a reason
+  to the rest, then resolve the threads.
 - **Tests and checks:** never weaken a test or suppress a lint or type
   error to get past a check. `npm run guards` (CI) fails on `.only`/`.skip`,
   `eslint-disable`, `@ts-ignore`-style comments and net-removed assertions
