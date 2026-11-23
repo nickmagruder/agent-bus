@@ -151,6 +151,7 @@ describe('MCP tools end to end', () => {
       'list_tasks',
       'notify_human',
       'register',
+      'send_message',
       'update_task',
       'wait_for_reply',
     ]);
