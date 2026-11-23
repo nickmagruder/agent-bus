@@ -21,7 +21,7 @@ import {
 import type { TaskNotice, TaskRecord } from './task-store.ts';
 import { TASK_LIMITS, type TaskService, type TaskTarget } from './tasks.ts';
 
-export const SERVER_INFO = { name: 'agent-bus', version: '0.19.1' } as const;
+export const SERVER_INFO = { name: 'agent-bus', version: '0.19.2' } as const;
 
 export interface McpDeps {
   service: BusService;

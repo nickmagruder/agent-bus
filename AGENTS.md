@@ -45,9 +45,11 @@ into tracked files.
 - **Git, PRs and AI review:** clankers `standards/git.md`. agent-bus facts:
   PRs squash-merge; reviewers use `.github/skills/code-review/` (synced from
   clankers `skills/pr-review`).
-- **Memory:** clankers `global/AGENTS.md` "Memory": `memory/MEMORY.md` here;
-  IDs and local paths go in `memory/local/` (gitignored), never in a tracked
-  file.
+- **Memory:** clankers `global/AGENTS.md` "Memory". Read `memory/MEMORY.md`
+  and, if present, `memory/local/MEMORY.md` at the start of a session
+  (`CLAUDE.md` imports both). This repo is public: a memory is tracked only
+  if every line is fine for anyone to read; IDs, local paths, Nick's setup
+  and permissions go in `memory/local/` (gitignored).
 - **Tests and checks:** never weaken a test or suppress a lint or type
   error to get past a check. `npm run guards` (CI) fails on `.only`/`.skip`,
   `eslint-disable`, `@ts-ignore`-style comments and net-removed assertions
