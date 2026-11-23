@@ -5,10 +5,14 @@
 
 ## Shared standards (clankers)
 
-Universal standards, skills and agents come from the **clankers** repo
-(<https://github.com/nickmagruder/clankers>, local: `~/.claude/clankers`) and
-load globally. This file holds only what is specific to this project and wins
-on conflict. All projects: `~/.claude/clankers/registry/PROJECTS.md`.
+Check clankers first. Universal standards, skills and agents come from the
+**clankers** repo (<https://github.com/nickmagruder/clankers>, local:
+`~/.claude/clankers`) and load globally: git, PRs, AI review, issues and docs
+follow `~/.claude/clankers/standards/` here as in every repo. This file holds
+only facts specific to this project and doesn't restate or override those
+rules; this project's only exceptions are the ones listed for it under
+"Exceptions to clankers standards" in `~/.claude/clankers/registry/PROJECTS.md`
+(none today).
 
 The design and phases live in `docs/design.md` (moved from clankers
 `docs/slack-integration-plan.md`, which now points here). The repo is
@@ -38,31 +42,19 @@ into tracked files.
   Codex only. Any change to a blocking path needs tests for every path.
 - Hook payloads hold prompts and tool input: send only the fields in
   `src/shared/hook-protocol.ts`, never the whole payload.
-- **Git (trunk-based):** every change has a GitHub issue (phase label and
-  milestone where it fits); branch `<type>/<issue>-<slug>` from the latest
-  `main`; PR body starts `Closes #N`; add new issues to the
-  [AI Orchestration board](https://github.com/users/nickmagruder/projects/5)
-  with Target date set to their milestone's due date.
-  Branch, commit, push and open the PR as the natural next step (clankers
-  `standards/git.md`); only Nick merges. Never `--no-verify`.
-- **AI review:** right after opening a PR, request its AI review without
-  asking Nick (clankers `standards/git.md`), from whichever reviewer is the
-  best choice at the time and never the PR's author: another platform than
-  the author where one can run (Copilot, Codex or a Claude session), else
-  a separate session on the same platform (the linked reviewer, if there
-  is one). Local agents orchestrate reviews: the repo no longer requests
-  Copilot automatically. Any completed review by someone other than the
-  author counts; "unable to review" doesn't. A review posted through Nick's `gh` login starts with
-  `<!-- ai-review -->`, and the author never adds it to its own comment.
-  Before handing a PR back, fix the valid comments and reply with a reason
-  to the rest, then resolve the threads.
+- **Git, PRs and AI review:** clankers `standards/git.md` (trunk-based; the
+  agent requests each PR's AI review itself; only Nick merges). agent-bus
+  facts: PRs squash-merge; reviewers use `.github/skills/code-review/`
+  (synced from clankers `skills/pr-review`).
 - **Tests and checks:** never weaken a test or suppress a lint or type
   error to get past a check. `npm run guards` (CI) fails on `.only`/`.skip`,
   `eslint-disable`, `@ts-ignore`-style comments and net-removed assertions
   unless a commit carries `Test-guard: <reason>`.
-- **Tracking:** status lives in issues; phase docs keep design, decisions and
-  live results and link to the issues. Bugs and follow-ups found mid-task
-  become issues (`follow-up` label), not plan bullets.
+- **Tracking:** clankers `standards/github.md`. agent-bus facts: issues get
+  a phase label and milestone where they fit, and go on the
+  [AI Orchestration board](https://github.com/users/nickmagruder/projects/5)
+  with Target date set to their milestone's due date; phase docs keep
+  design, decisions and live results and link to the issues.
 
 ## Conventions
 
