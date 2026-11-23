@@ -7,7 +7,7 @@ import type { MessageEditor } from './questions.ts';
 import { AGENT_CARDS } from './service.ts';
 import { FALLBACK_CHANNEL } from './slack/directory.ts';
 import { DM_TARGET, type Store } from './store.ts';
-import { ACTOR, TaskStore, type TaskRecord } from './task-store.ts';
+import { ACTOR, TaskStore, type TaskMessageRecord, type TaskRecord } from './task-store.ts';
 import { TASK_LIMITS } from './tasks.ts';
 
 /**
@@ -42,6 +42,7 @@ export interface TaskEvents {
   /** `note`: the note given with this move, if any (the task keeps older ones). */
   moved(task: TaskRecord, from: TaskState, by: string, note?: string): void;
   noted(task: TaskRecord, by: string): void;
+  messaged(task: TaskRecord, message: TaskMessageRecord): void;
 }
 
 const PLATFORM_NAMES: Record<Platform, string> = {
@@ -59,6 +60,7 @@ export class TaskSlack implements TaskEvents {
   private readonly log: Logger;
   private readonly now: () => Date;
   private timer: NodeJS.Timeout | undefined;
+  private readonly wake: ((sessionId: string) => void) | undefined;
 
   constructor(options: {
     store: Store;
@@ -67,7 +69,10 @@ export class TaskSlack implements TaskEvents {
     humanUserId: string;
     log: Logger;
     now?: () => Date;
+    /** Wakes a session's held wait_for_reply when a notice arrives for it (#60). */
+    wake?: (sessionId: string) => void;
   }) {
+    this.wake = options.wake;
     this.store = options.store;
     this.queue = options.queue;
     this.editor = options.editor;
@@ -126,6 +131,16 @@ export class TaskSlack implements TaskEvents {
     this.kickAfterCommit();
   }
 
+  /** A message between creator and holder, mirrored into the task's thread (#60). */
+  messaged(task: TaskRecord, message: TaskMessageRecord): void {
+    this.mirror(
+      task,
+      `:speech_balloon: \`${message.fromSession ?? 'Nick'}\` on \`${task.id}\`:${agentText(message.body)}`,
+      'note',
+    );
+    this.kickAfterCommit();
+  }
+
   /** A progress note, mirrored into the task's thread. */
   noted(task: TaskRecord, by: string): void {
     this.mirror(task, `:memo: Note from \`${by}\`:${agentText(task.statusMessage ?? '')}`, 'note');
@@ -178,6 +193,8 @@ export class TaskSlack implements TaskEvents {
       return after;
     });
     if (!decided) return 'closed';
+    if (decided.approval === 'approved' && decided.targetSession)
+      this.wake?.(decided.targetSession);
     this.refreshApproval(decided);
     this.queue.kick();
     return decided.approval === 'approved' ? 'approved' : 'canceled';

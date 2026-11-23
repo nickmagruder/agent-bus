@@ -9,13 +9,16 @@ import { createBusMcpServer, type McpDeps } from './mcp.ts';
 import { StopDelivery } from './stop-hook.ts';
 import type { BusService } from './service.ts';
 import type { Store } from './store.ts';
+import { TaskInbox } from './task-inbox.ts';
 import { TaskService } from './tasks.ts';
 
 const MAX_BODY_BYTES = 1_000_000;
 
-export interface HttpOptions extends Omit<McpDeps, 'tasks'> {
+export interface HttpOptions extends Omit<McpDeps, 'tasks' | 'taskInbox'> {
   /** Phase 3 task rules; made from `store` and `service` when not given. */
   tasks?: TaskService | undefined;
+  /** Task items for agents; made from `store` when not given. */
+  taskInbox?: TaskInbox | undefined;
   port: number;
   tokens: Record<Platform, string>;
   service: BusService;
@@ -38,7 +41,12 @@ export interface RunningHttpServer {
 export async function startHttpServer(options: HttpOptions): Promise<RunningHttpServer> {
   const live: LiveOptions = {
     ...options,
-    tasks: options.tasks ?? new TaskService(options.store, options.service),
+    tasks:
+      options.tasks ??
+      new TaskService(options.store, options.service, undefined, undefined, (id) =>
+        options.notifier.notify(id),
+      ),
+    taskInbox: options.taskInbox ?? new TaskInbox(options.store, options.service.clock),
   };
   const server = createServer((req, res) => {
     handle(req, res, live).catch((error: unknown) => {
@@ -109,7 +117,7 @@ async function handle(
   if (url.pathname === '/hook') {
     const parsed = hookRequestSchema.safeParse(body);
     if (!parsed.success) return reply(res, 400, 'Invalid hook request');
-    const delivery = new StopDelivery(options.inbox, options.store);
+    const delivery = new StopDelivery(options.inbox, options.store, options.taskInbox);
     // A hook that already gave up (timed out, closed) can't be handed replies,
     // but its event still settles the last offer.
     const result: HookResponse = options.service.hook(

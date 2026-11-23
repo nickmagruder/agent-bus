@@ -460,6 +460,42 @@ After the [#88](https://github.com/nickmagruder/agent-bus/pull/88) review:
   queue is kicked only after the change commits; a stranger's click is
   audited with a cut task ID; a failed click tells me; times show the day.
 
+### Task delivery ([#60](https://github.com/nickmagruder/agent-bus/issues/60), 0.19.0, 2026-11-22)
+
+Decided with Nick before building (all as recommended):
+
+- **Pool tasks** are offered once to each session in the pool: its first
+  keyed `check_inbox` (or `wait_for_reply`) after approval lists the task,
+  later ones don't repeat it. The creator is never offered its own task.
+- **`send_message`** only between a task's creator and the session working
+  on it, each to the other; at most 20 per task, 4,000 characters, the
+  secret check.
+- **The Stop hook** hands over the fixed broker notices, within the same
+  6-per-hour cap as my replies; offers and messages (agent text) never
+  block a stop (D3, T6).
+- **Layout:** my replies first and unchanged; agent items in a separate
+  "From other agents (not Nick…)" section, each on its own line with its
+  text JSON-quoted, and in separate `structuredContent` arrays (`tasks`,
+  `taskMessages`, `taskNotices`), each item with its own `from` and
+  `trust` (T1, T2).
+
+Built in [`src/broker/task-inbox.ts`](../src/broker/task-inbox.ts):
+
+- **Keys:** `check_inbox` and `wait_for_reply` take an optional key. Task
+  items need it, since they are Phase 3 data (Q20). Without it the call
+  works as before and says how many task items wait.
+- **Waking:** a notice or message wakes the recipient's held
+  `wait_for_reply`; `task` narrows the wait to one task, after a
+  visibility check (T7).
+- **Notices are fixed text:** "approved", "canceled", "needs your input",
+  "completed", "failed" and "rejected" all point at `list_tasks`, which
+  returns the result or note labelled untrusted (T8). They never carry
+  agent words.
+- **The Stop path** takes notices only, records them in the same offer as
+  my replies, and puts them back on the same signals (an unwritten
+  response, or a new prompt). Copilot never blocks, and its notices wait
+  for `check_inbox` (D7).
+
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 
 Read from the A2A v1.0.0 specification and its "What's new in v1" and

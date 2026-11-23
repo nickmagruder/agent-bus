@@ -3,7 +3,12 @@ import { NO_PROJECT, projectSlug } from '../shared/session-id.ts';
 import { BusError, type BusErrorCode, type BusService } from './service.ts';
 import type { SessionRecord, Store } from './store.ts';
 import type { TaskEvents } from './task-slack.ts';
-import { TaskStore, type TaskRecord, type TaskResult } from './task-store.ts';
+import {
+  TaskStore,
+  type TaskMessageRecord,
+  type TaskRecord,
+  type TaskResult,
+} from './task-store.ts';
 import { canMoveTask, type TaskState } from '../shared/task-states.ts';
 
 /**
@@ -32,6 +37,8 @@ export const TASK_LIMITS = {
   /** Links in one result, each at most `linkMax` characters, `https:` only (T12). */
   resultLinks: 10,
   linkMax: 500,
+  /** Messages on one task, both sides together (Q17). */
+  messagesPerTask: 20,
 } as const;
 
 const HOUR_MS = 60 * 60_000;
@@ -116,6 +123,8 @@ export class TaskService {
   private readonly service: BusService;
   private readonly tasks: TaskStore;
   private readonly now: () => Date;
+  /** Wakes a session's held wait_for_reply when something arrives for it (#60). */
+  private readonly wake: ((sessionId: string) => void) | undefined;
   /** Slack's side of each change (#61), run in the same transaction; none in some tests. */
   private readonly events: TaskEvents | undefined;
 
@@ -124,7 +133,9 @@ export class TaskService {
     service: BusService,
     now: () => Date = service.clock,
     events?: TaskEvents,
+    wake?: (sessionId: string) => void,
   ) {
+    this.wake = wake;
     this.store = store;
     this.service = service;
     this.tasks = new TaskStore(store, now);
@@ -335,6 +346,7 @@ export class TaskService {
     }
 
     // The move and its notice commit together, so a notice is never lost.
+    let recipient: string | undefined;
     const moved = this.store.transaction(() => {
       const after = this.tasks.moveTask(task.id, {
         from,
@@ -345,12 +357,66 @@ export class TaskService {
         ...(result ? { result } : {}),
       });
       if (after) {
-        this.notify(after, to, task.holder);
+        recipient = this.notify(after, to, task.holder);
         this.events?.moved(after, from, caller.id, note);
       }
       return after;
     });
+    if (moved && recipient) this.wake?.(recipient);
     return moved ?? lost();
+  }
+
+  /**
+   * A message on a task, between its creator and the session working on it
+   * (#60): each side's goes to the other's task inbox and the task's thread.
+   * Only while someone holds the task; at most 20 per task (Q17); the same
+   * size and secret checks as everything else (T10, T11). The sender is the
+   * keyed caller, never an argument (T1, T3).
+   */
+  sendMessage(input: {
+    platform: Platform;
+    session: string;
+    key: string | undefined;
+    task: string;
+    body: string;
+  }): TaskMessageRecord {
+    const { caller, task } = this.visibleTask(input, 'send_message');
+    const refuse = this.refuser(caller, 'send_message');
+    this.checkText(input.body, refuse);
+    const isCreator = task.createdBy === caller.id;
+    if (!isCreator && task.holder !== caller.id) {
+      return refuse(
+        'not_allowed',
+        `Only ${task.id}'s creator and the session working on it can message on it.`,
+      );
+    }
+    if (!task.holder || (task.state !== 'working' && task.state !== 'input-required')) {
+      return refuse(
+        'bad_state',
+        `${task.id} is ${task.state}: messages go only while someone works on it.`,
+      );
+    }
+    if (this.tasks.countMessages(task.id) >= TASK_LIMITS.messagesPerTask) {
+      return refuse(
+        'too_many_tasks',
+        `${task.id} has had its ${TASK_LIMITS.messagesPerTask} messages.`,
+      );
+    }
+    const to = isCreator ? task.holder : task.createdBy;
+    const message = this.store.transaction(() => {
+      const added = this.tasks.addTaskMessage({
+        taskId: task.id,
+        sender: 'agent',
+        fromSession: caller.id,
+        role: isCreator ? 'user' : 'agent',
+        body: input.body,
+      });
+      this.tasks.addMessagePointer(to, task.id, added.id);
+      this.events?.messaged(task, added);
+      return added;
+    });
+    this.wake?.(to);
+    return message;
   }
 
   /**
@@ -358,14 +424,21 @@ export class TaskService {
    * completed, failed and rejected; whoever held it, or the named target of
    * an approved task, hears it was canceled. Delivery is #60's.
    */
-  private notify(task: TaskRecord, to: TaskState, previousHolder: string | null): void {
+  private notify(
+    task: TaskRecord,
+    to: TaskState,
+    previousHolder: string | null,
+  ): string | undefined {
     if (to === 'input-required' || to === 'completed' || to === 'failed' || to === 'rejected') {
       this.tasks.addNotice(task.createdBy, task.id, to);
+      return task.createdBy;
     } else if (to === 'canceled') {
       // A named target hears only of a task it could see (approved, T7).
       const target = previousHolder ?? (task.approval === 'approved' ? task.targetSession : null);
       if (target) this.tasks.addNotice(target, task.id, 'canceled');
+      return target ?? undefined;
     }
+    return undefined;
   }
 
   /** The keyed caller and a task it can see; anything else is `unknown_task` (T7). */

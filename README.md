@@ -1,6 +1,6 @@
 # agent-bus
 
-**Version:** 0.18.0 · [MIT license](LICENSE)
+**Version:** 0.19.0 · [MIT license](LICENSE)
 
 [![ci](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/ci.yml)
 [![codeql](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml/badge.svg)](https://github.com/nickmagruder/agent-bus/actions/workflows/codeql.yml)
@@ -80,9 +80,10 @@ and decisions) is in [docs/design.md](docs/design.md).
 | `claim_task(session, key, task)`                                                  | Takes on an approved task named for the session or in its pool; the loser of a race is told who has it (Phase 3)                                                                                                               |
 | `update_task(session, key, task, state?, note?, result_text?, links?)`            | The holder notes progress, asks its creator (`input-required`), completes with a result (`https:` links only), fails or gives it back; a named target rejects; the creator cancels (Phase 3)                                   |
 | `notify_human(session, text, urgency)`                                            | `urgent` → DM to me, `normal` → the session's thread, `fyi` → the daily digest in `#agents` (08:00 local). Per-session and per-platform hourly caps stop loops                                                                 |
-| `check_inbox(session)`                                                            | Returns my Slack replies to the session and the outcomes of its questions                                                                                                                                                      |
+| `check_inbox(session, key?)`                                                      | Returns my Slack replies to the session and the outcomes of its questions; with the key, also task offers, messages and notices from other agents, in their own labelled list                                                  |
 | `ask_human(session, question, options?, default_action, timeout_minutes?)`        | DMs me the question with buttons for up to five options (a reply in its thread works too) and waits up to 150 s (default), then returns `pending` with a question ID. A pointer goes in the session thread                     |
-| `wait_for_reply(session, question_id?)`                                           | Waits again, for one question or for anything new                                                                                                                                                                              |
+| `wait_for_reply(session, question_id?, key?, task?)`                              | Waits again, for one question, for anything new, or (with the key) for task items, optionally about one task                                                                                                                   |
+| `send_message(session, key, task, body)`                                          | A message on a task between its creator and the session working on it, to the other's inbox and the task's thread (Phase 3)                                                                                                    |
 
 Questions get one reminder at 15 minutes. At the timeout (default 60) the
 question expires and the agent takes its own `default_action`. The first
@@ -153,7 +154,9 @@ broker enforces its rules itself rather than trusting agent instructions:
   everything else is dropped and audited.
 - **Hooks don't decide.** They never return allow/deny. The one block is
   `Stop`: when I've replied in Slack, it hands the agent my replies (labelled
-  as mine) so it keeps going, at most 6 times per session per hour.
+  as mine) so it keeps going, at most 6 times per session per hour. It may
+  also hand over agent-bus's own fixed task notices ("approved",
+  "completed", …), never another agent's text.
 - **Minimal data leaves the machine.** Hooks send only the fields in
   [`src/shared/hook-protocol.ts`](src/shared/hook-protocol.ts), with size
   limits.
@@ -429,6 +432,23 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.19.0 (2026-11-22)
+
+- **Task delivery** ([#60](https://github.com/nickmagruder/agent-bus/issues/60)):
+  - `check_inbox` and `wait_for_reply` take the session key and then also
+    return task offers, messages and notices from other agents. They come
+    in their own section and arrays, each labelled with its sender and
+    `trust: untrusted` (or `agent-bus` for notices), never as mine. Without
+    the key they say how many task items wait.
+  - Each approved, unclaimed pool task is offered once to each session in
+    its pool. `wait_for_reply` takes `task` to wait for one task.
+  - `send_message` carries messages between a task's creator and the
+    session working on it, at most 20 per task, with the size and secret
+    checks, mirrored into the task's thread.
+  - The Stop hook hands over the fixed task notices (approved, canceled,
+    input-required, completed, failed, rejected) within its cap, never
+    offers or messages.
 
 ### 0.18.0 (2026-11-22)
 

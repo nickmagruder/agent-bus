@@ -110,8 +110,11 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
     editor,
     humanUserId: config.slack.userId,
     log,
+    wake: (sessionId) => notifier.notify(sessionId),
   });
-  const tasks = new TaskService(store, service, undefined, taskSlack);
+  const tasks = new TaskService(store, service, undefined, taskSlack, (sessionId) =>
+    notifier.notify(sessionId),
+  );
   const inbox = new Inbox({
     store,
     queue,

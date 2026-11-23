@@ -414,7 +414,25 @@ export class TaskStore {
     });
   }
 
-  /** A session's queued notices, oldest first (for tests until #60 delivers them). */
+  /** Points a session at a new message on a task (#60). */
+  addMessagePointer(sessionId: string, taskId: string, messageId: number): void {
+    this.store.db
+      .prepare(
+        `INSERT INTO task_inbox (session_id, task_id, kind, message_id, created_at)
+         VALUES (?, ?, 'message', ?, ?)`,
+      )
+      .run(sessionId, taskId, messageId, this.timestamp());
+  }
+
+  /** Messages on a task so far, for the per-task cap (Q17). */
+  countMessages(taskId: string): number {
+    const row = this.store.db
+      .prepare('SELECT COUNT(*) AS n FROM task_messages WHERE task_id = ?')
+      .get(taskId) as Row;
+    return Number(row.n);
+  }
+
+  /** A session's queued notices, oldest first. */
   notices(sessionId: string): { taskId: string; notice: TaskNotice }[] {
     const rows = this.store.db
       .prepare(
