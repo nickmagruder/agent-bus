@@ -233,7 +233,22 @@ describe('my replies in a task thread', () => {
       .prepare('UPDATE tasks SET thread_post_id = ? WHERE id = ?')
       .run(store.enqueue({ target: 'agents', text: 'root' }).id, t.id);
     woken = [];
-    expect(reply(t.thread, 'Thanks!')).toEqual({ action: 'dropped', reason: 'task_closed' });
+    const thanks = {
+      channel: CHANNEL,
+      channelType: 'channel',
+      ts: '1800000999.000003',
+      threadTs: t.thread,
+      user: USER_ID,
+      text: 'Thanks!',
+      hasFiles: false,
+    };
+    expect(inbox.receive(thanks)).toEqual({ action: 'dropped', reason: 'task_closed' });
+    // A Slack retry of it adds no second line or event.
+    expect(inbox.receive(thanks)).toEqual({ action: 'dropped', reason: 'task_closed' });
+    const lines = store.db
+      .prepare("SELECT COUNT(*) AS n FROM outbox WHERE text LIKE '%aren''t passed on%'")
+      .get();
+    expect(lines).toEqual({ n: 1 });
     expect(woken).toEqual([]);
     expect(records.taskMessages(t.id)).toEqual([]);
     expect(taskInbox.countWaiting(claude.id) + taskInbox.countWaiting(codex.id)).toBe(1); // the completed notice

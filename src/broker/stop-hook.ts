@@ -98,10 +98,14 @@ export class StopDelivery implements StopOffers {
   confirm(session: SessionRecord): void {
     const offer = this.openOffer(session);
     if (!offer) return;
-    this.closeOffer(session, OFFER.confirmed, 'stop_hook_active');
+    // Closing the offer and marking its pointers read commit together, so a
+    // failure can't leave a confirmed reply short of its ✅ for good.
+    this.store.transaction(() => {
+      this.closeOffer(session, OFFER.confirmed, 'stop_hook_active');
+      this.taskInbox?.confirmStop(offer.taskItemIds);
+    });
     this.inbox.confirmIds(offer.messageIds, offer.questionIds);
     if (this.taskInbox) {
-      this.taskInbox.confirmStop(offer.taskItemIds);
       this.inbox.reactDelivered(this.taskInbox.fullyDeliveredRepliesByPointer(offer.taskItemIds));
     }
   }

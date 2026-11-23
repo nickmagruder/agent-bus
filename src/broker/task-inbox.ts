@@ -46,8 +46,12 @@ export const OFFER_BRIEF_CHARS = 300;
 
 type Row = Record<string, unknown>;
 
-/** `delivered_via` of a Stop-hook pointer once the app confirmed the block reached the agent. */
-export const STOP_CONFIRMED = 'stop_hook_confirmed';
+/**
+ * `delivered_via` of a Stop-hook pointer once the app confirmed the block
+ * reached the agent. Only `task_inbox` uses it, and nothing reads the column
+ * back as a `DeliveryVia`.
+ */
+const STOP_CONFIRMED = 'stop_hook_confirmed';
 
 /** A task item that is my own reply in the task's Slack thread: my words, not an agent's. */
 export function isNickReply(item: TaskInboxItem): boolean {
@@ -171,6 +175,15 @@ export class TaskInbox {
         return { task, recipients: this.pointedAt(stored.id), inserted: false };
       }
       if (TERMINAL_TASK_STATES.has(task.state)) {
+        // A Slack retry of a reply already dropped adds nothing.
+        const seen = this.store.db
+          .prepare(
+            `SELECT 1 FROM events WHERE kind = 'inbound.dropped'
+               AND json_extract(data, '$.reason') = 'task_closed'
+               AND json_extract(data, '$.channel') = ? AND json_extract(data, '$.ts') = ?`,
+          )
+          .get(reply.slackChannelId, reply.slackTs);
+        if (seen) return { task, recipients: [], inserted: false, closed: true };
         this.store.appendEvent({
           kind: 'inbound.dropped',
           sessionId: task.createdBy,
@@ -236,10 +249,10 @@ export class TaskInbox {
     if (pointerIds.length === 0) return;
     this.store.db
       .prepare(
-        `UPDATE task_inbox SET delivered_via = '${STOP_CONFIRMED}'
+        `UPDATE task_inbox SET delivered_via = ?
          WHERE id IN (${pointerIds.map(() => '?').join(', ')}) AND delivered_via = 'stop_hook'`,
       )
-      .run(...pointerIds);
+      .run(STOP_CONFIRMED, ...pointerIds);
   }
 
   /** `fullyDeliveredReplies` for pointer IDs (a confirmed Stop-hook offer). */
