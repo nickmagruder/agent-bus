@@ -1,5 +1,6 @@
 import { fromSlackText } from '../shared/slack-text.ts';
 import type { Notifier, Questions } from './questions.ts';
+import type { TaskInbox } from './task-inbox.ts';
 import {
   DM_TARGET,
   type DeliveryVia,
@@ -24,10 +25,12 @@ export interface InboundMessage {
   hasFiles: boolean;
 }
 
-export type DropReason = 'bot' | 'subtype' | 'not_human' | 'empty';
+export type DropReason = 'bot' | 'subtype' | 'not_human' | 'empty' | 'task_closed';
 
 export type InboundOutcome =
   | { action: 'routed' | 'duplicate'; sessionId: string; inboxId: number; questionId?: string }
+  /** A reply in a task's thread (#61): to the task's creator and its other side. */
+  | { action: 'task' | 'task_duplicate'; taskId: string; recipients: string[] }
   | { action: 'dropped'; reason: DropReason }
   | { action: 'unrouted'; hinted: boolean };
 
@@ -74,6 +77,7 @@ export class Inbox {
 
   private readonly questions: Questions;
   private readonly notifier: Notifier;
+  private readonly taskInbox: TaskInbox | undefined;
 
   constructor(options: {
     store: Store;
@@ -82,9 +86,12 @@ export class Inbox {
     reactions: Reactions;
     questions: Questions;
     notifier: Notifier;
+    /** Routes my replies in task threads (#61); without it they're unrouted. */
+    taskInbox?: TaskInbox;
     now?: () => Date;
   }) {
     this.store = options.store;
+    this.taskInbox = options.taskInbox;
     this.queue = options.queue;
     this.questions = options.questions;
     this.notifier = options.notifier;
@@ -109,6 +116,8 @@ export class Inbox {
       return { action: 'dropped', reason };
     }
 
+    const task = this.taskReply(message);
+    if (task) return task;
     const session = this.sessionFor(message);
     if (!session) return this.unrouted(message);
 
@@ -243,11 +252,41 @@ export class Inbox {
     for (const id of questionIds) this.reactDelivered(this.store.questionReplies(id));
   }
 
-  /** ✅ on my messages the agent has now read. */
-  reactDelivered(messages: readonly InboxRecord[]): void {
+  /** ✅ on my messages the agent (every agent, for a task-thread reply) has now read. */
+  reactDelivered(
+    messages: readonly { slackChannelId: string | null; slackTs: string | null }[],
+  ): void {
     for (const message of messages) {
+      if (!message.slackChannelId || !message.slackTs) continue;
       this.reactions.add(message.slackChannelId, message.slackTs, REACTION.delivered);
     }
+  }
+
+  /**
+   * A reply in a task's thread (#61): my message on the task, for both
+   * sides. It's sender-gated like every reply (dropReason ran first), so it's
+   * labelled as mine when handed over.
+   */
+  private taskReply(message: InboundMessage): InboundOutcome | undefined {
+    const { threadTs, channel, ts } = message;
+    if (!this.taskInbox || !threadTs || threadTs === ts) return undefined;
+    const routed = this.taskInbox.routeNickReply({
+      slackChannelId: channel,
+      threadTs,
+      slackTs: ts,
+      slackUser: this.humanUserId,
+      body: messageBody(message),
+    });
+    if (!routed) return undefined;
+    if (routed.closed) {
+      this.queue.kick();
+      return { action: 'dropped', reason: 'task_closed' };
+    }
+    const outcome = { taskId: routed.task.id, recipients: routed.recipients };
+    if (!routed.inserted) return { action: 'task_duplicate', ...outcome };
+    this.reactions.add(channel, ts, REACTION.routed);
+    for (const sessionId of routed.recipients) this.notifier.notify(sessionId);
+    return { action: 'task', ...outcome };
   }
 
   private dropReason(message: InboundMessage): DropReason | undefined {

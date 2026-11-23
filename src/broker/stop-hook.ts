@@ -2,7 +2,7 @@ import type { Inbox, InboxTake } from './inbox.ts';
 import { inboxText, noticeText } from './mcp.ts';
 import { LIMITS, type StopInboxCheck, type StopOffers } from './service.ts';
 import type { SessionRecord, Store } from './store.ts';
-import type { TaskInbox, TaskInboxItem } from './task-inbox.ts';
+import { isNickReply, type TaskInbox, type TaskInboxItem } from './task-inbox.ts';
 
 /** Audit events for one Stop-hook offer of my replies. */
 const OFFER = {
@@ -14,8 +14,12 @@ const OFFER = {
 interface Offer {
   messageIds: number[];
   questionIds: string[];
-  /** Task notices (#60): the fixed broker words of D3, never agent text. */
-  noticeIds: number[];
+  /**
+   * Task inbox pointers (#60, #61): the fixed broker notices of D3 and my
+   * replies in task threads, never agent text. Offers recorded before 0.20.0
+   * call it `noticeIds`.
+   */
+  taskItemIds: number[];
 }
 
 /**
@@ -48,11 +52,11 @@ export class StopDelivery implements StopOffers {
     // failure can't leave either taken but unoffered.
     const { take, notices } = this.store.transaction(() => ({
       take: this.inbox.take(session, 'stop_hook', LIMITS.stopTakePerBlock, { react: false }),
-      // Only the fixed broker notices ride the Stop hook; task offers and
-      // messages are agent text and wait for check_inbox (D3, T6).
+      // Only the fixed broker notices and my task-thread replies ride the
+      // Stop hook; task offers and agents' messages wait for check_inbox (D3, T6).
       notices:
         this.taskInbox?.take(session, 'stop_hook', {
-          kinds: ['notice'],
+          stopSafe: true,
           limit: LIMITS.stopTakePerBlock,
         }).items ?? [],
     }));
@@ -63,7 +67,7 @@ export class StopDelivery implements StopOffers {
     const offer: Offer = {
       messageIds: take.messages.map((m) => m.id),
       questionIds: take.outcomes.map((q) => q.id),
-      noticeIds: notices.map((n) => n.id),
+      taskItemIds: notices.map((n) => n.id),
     };
     this.store.appendEvent({
       kind: OFFER.offered,
@@ -94,8 +98,16 @@ export class StopDelivery implements StopOffers {
   confirm(session: SessionRecord): void {
     const offer = this.openOffer(session);
     if (!offer) return;
-    this.closeOffer(session, OFFER.confirmed, 'stop_hook_active');
+    // Closing the offer and marking its pointers read commit together, so a
+    // failure can't leave a confirmed reply short of its ✅ for good.
+    this.store.transaction(() => {
+      this.closeOffer(session, OFFER.confirmed, 'stop_hook_active');
+      this.taskInbox?.confirmStop(offer.taskItemIds);
+    });
     this.inbox.confirmIds(offer.messageIds, offer.questionIds);
+    if (this.taskInbox) {
+      this.inbox.reactDelivered(this.taskInbox.fullyDeliveredRepliesByPointer(offer.taskItemIds));
+    }
   }
 
   putBack(session: SessionRecord, reason: string): void {
@@ -103,7 +115,7 @@ export class StopDelivery implements StopOffers {
     if (!offer) return;
     this.store.transaction(() => {
       this.inbox.untakeIds(session, offer.messageIds, offer.questionIds, 'stop_hook');
-      this.taskInbox?.untakeIds(session, offer.noticeIds, 'stop_hook');
+      this.taskInbox?.untakeIds(session, offer.taskItemIds, 'stop_hook');
       this.closeOffer(session, OFFER.returned, reason);
     });
   }
@@ -112,11 +124,13 @@ export class StopDelivery implements StopOffers {
   private openOffer(session: SessionRecord): Offer | undefined {
     const last = this.store.latestSessionEvent(session.id, Object.values(OFFER));
     if (last?.kind !== OFFER.offered) return undefined;
-    const { messageIds, questionIds, noticeIds } = last.data as Partial<Offer>;
+    const { messageIds, questionIds, taskItemIds, noticeIds } = last.data as Partial<
+      Offer & { noticeIds: number[] }
+    >;
     return {
       messageIds: messageIds ?? [],
       questionIds: questionIds ?? [],
-      noticeIds: noticeIds ?? [],
+      taskItemIds: taskItemIds ?? noticeIds ?? [],
     };
   }
 
@@ -135,10 +149,12 @@ export class StopDelivery implements StopOffers {
  * "Nick replied" only when something in it is from Nick (a message or an
  * answered question); an expiry is agent-bus's own status, not his words.
  */
-export function stopReason(take: InboxTake, notices: readonly TaskInboxItem[] = []): string {
-  const parts = [stopHeading(take, notices.length)];
-  if (take.messages.length > 0 || take.outcomes.length > 0) {
-    parts.push(inboxText(take.messages, take.outcomes, take.remaining));
+export function stopReason(take: InboxTake, items: readonly TaskInboxItem[] = []): string {
+  const replies = items.filter(isNickReply);
+  const notices = items.filter((item) => item.kind === 'notice');
+  const parts = [stopHeading(take, notices.length, replies.length)];
+  if (take.messages.length > 0 || take.outcomes.length > 0 || replies.length > 0) {
+    parts.push(inboxText(take.messages, take.outcomes, take.remaining, replies));
   }
   if (notices.length > 0) {
     parts.push(
@@ -149,8 +165,9 @@ export function stopReason(take: InboxTake, notices: readonly TaskInboxItem[] = 
   return parts.join('\n\n');
 }
 
-function stopHeading(take: InboxTake, notices = 0): string {
-  const fromNick = take.messages.length > 0 || take.outcomes.some((q) => q.state === 'answered');
+function stopHeading(take: InboxTake, notices = 0, replies = 0): string {
+  const fromNick =
+    take.messages.length > 0 || replies > 0 || take.outcomes.some((q) => q.state === 'answered');
   const expired = take.outcomes.filter((q) => q.state === 'expired').length;
   const questions =
     expired === 1 ? 'a question you asked' : `${String(expired)} questions you asked`;

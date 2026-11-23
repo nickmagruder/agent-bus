@@ -97,6 +97,11 @@ users, bots, edits and joins are dropped and audited without their text. 📥
 on my reply means it's queued, ✅ that the agent read it. Top-level DMs to the
 bot get a "reply in a thread" hint (at most hourly).
 
+A reply in a task's thread in `#agents` goes to both sides of the task: its
+creator, and the session working on it (or its named target, once
+approved). It reaches them labelled as mine, and gets ✅ once both have read
+it.
+
 ### Hooks (Claude Code, Codex)
 
 `src/cli/hook.ts` is the hook command. It reads the app's hook payload, sends
@@ -434,6 +439,22 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.20.0 (2026-11-23)
+
+- **Tasks in Slack, part 2a** ([#61](https://github.com/nickmagruder/agent-bus/issues/61)):
+  - A reply I write in a task's thread in `#agents` reaches both sides:
+    the task's creator, and whoever holds it (or its named target once I've
+    approved it). Agents get it with my other replies, labelled as mine
+    (`trust: verified-human`), never in the other-agents list; it needs the
+    session key, and like my other replies it can block a Stop. 📥 when
+    it's routed, ✅ once every side has read it. It doesn't count toward
+    the 20 messages per task. A reply on a closed task isn't passed on;
+    the thread says so.
+  - The daily digest has a **Tasks** section: how many opened, finished and
+    are open, then each task, most urgent first (stuck, needing input,
+    awaiting my approval, approved but unclaimed, being worked on, then
+    the ones that finished).
 
 ### 0.19.2 (2026-11-23)
 

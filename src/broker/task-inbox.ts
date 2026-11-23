@@ -1,3 +1,5 @@
+import { TERMINAL_TASK_STATES } from '../shared/task-states.ts';
+import { FALLBACK_CHANNEL } from './slack/directory.ts';
 import type { DeliveryVia, SessionRecord, Store } from './store.ts';
 import {
   TaskStore,
@@ -44,6 +46,28 @@ export const OFFER_BRIEF_CHARS = 300;
 
 type Row = Record<string, unknown>;
 
+/**
+ * `delivered_via` of a Stop-hook pointer once the app confirmed the block
+ * reached the agent. Only `task_inbox` uses it, and nothing reads the column
+ * back as a `DeliveryVia`.
+ */
+const STOP_CONFIRMED = 'stop_hook_confirmed';
+
+/** A task item that is my own reply in the task's Slack thread: my words, not an agent's. */
+export function isNickReply(item: TaskInboxItem): boolean {
+  return item.kind === 'message' && item.message?.sender === 'human';
+}
+
+/**
+ * Who hears my reply in a task's thread: its creator, and whoever holds it,
+ * or (before a claim) its named target once I've approved it. A pool task
+ * nobody has claimed has no other side yet.
+ */
+export function replyRecipients(task: TaskRecord): string[] {
+  const other = task.holder ?? (task.approval === 'approved' ? task.targetSession : null);
+  return other && other !== task.createdBy ? [task.createdBy, other] : [task.createdBy];
+}
+
 export class TaskInbox {
   private readonly store: Store;
   private readonly tasks: TaskStore;
@@ -59,26 +83,29 @@ export class TaskInbox {
    * Takes a session's undelivered pointers, oldest first, marking them
    * delivered via `via`. First it offers the session, once each, the
    * approved and unclaimed pool tasks for its platform and project (D7, Q13):
-   * a pool has no session to address until one checks in. `kinds` limits
-   * what's taken (the Stop hook takes notices only, D3); `task` limits it to
+   * a pool has no session to address until one checks in. `stopSafe` limits
+   * what's taken to what may ride the Stop hook (notices and my replies,
+   * never agent text, D3); `task` limits it to
    * one task (wait_for_reply's `task`).
    */
   take(
     session: SessionRecord,
     via: DeliveryVia,
-    options: { limit?: number; kinds?: readonly TaskInboxKind[]; task?: string } = {},
+    options: { limit?: number; stopSafe?: boolean; task?: string } = {},
   ): TaskInboxTake {
     return this.store.transaction(() => {
-      // A narrowed take (one task, or notices only) creates no offers: they'd
-      // wait undelivered and could go stale.
-      if (!options.task && (!options.kinds || options.kinds.includes('offer'))) {
-        this.offerPoolTasks(session);
-      }
+      // A narrowed take (one task, or the Stop hook's) creates no offers:
+      // they'd wait undelivered and could go stale.
+      if (!options.task && !options.stopSafe) this.offerPoolTasks(session);
       const where = ['session_id = ?', 'delivered_at IS NULL'];
       const values: (string | number)[] = [session.id];
-      if (options.kinds) {
-        where.push(`kind IN (${options.kinds.map(() => '?').join(', ')})`);
-        values.push(...options.kinds);
+      if (options.stopSafe) {
+        // Only what may ride the Stop hook (D3): the broker's fixed notices
+        // and my own replies in task threads, never agent text.
+        where.push(
+          `(kind = 'notice' OR (kind = 'message' AND EXISTS (SELECT 1 FROM task_messages m
+             WHERE m.id = task_inbox.message_id AND m.sender = 'human')))`,
+        );
       }
       if (options.task !== undefined) {
         where.push('task_id = ?');
@@ -121,6 +148,131 @@ export class TaskInbox {
       }
       return { items, remaining: rows.length - taken.length };
     });
+  }
+
+  /**
+   * My reply in a task's Slack thread (#61): stored once as my message on
+   * the task and pointed at each side, the creator and whoever holds it (or
+   * the named target of an approved task before a claim). Undefined when the
+   * thread isn't a task's. A Slack retry of a stored reply changes nothing
+   * (`inserted: false`, with the recipients it went to then). A reply on a
+   * closed task isn't passed on (`closed: true`): the agents have moved on,
+   * so it would only wake them or block a Stop. Its thread gets one line
+   * saying so, and the drop is audited.
+   */
+  routeNickReply(reply: {
+    slackChannelId: string;
+    threadTs: string;
+    slackTs: string;
+    slackUser: string;
+    body: string;
+  }): { task: TaskRecord; recipients: string[]; inserted: boolean; closed?: true } | undefined {
+    return this.store.transaction(() => {
+      const task = this.tasks.findByThread(reply.slackChannelId, reply.threadTs);
+      if (!task) return undefined;
+      const stored = this.tasks.findSlackMessage(reply.slackChannelId, reply.slackTs);
+      if (stored) {
+        return { task, recipients: this.pointedAt(stored.id), inserted: false };
+      }
+      if (TERMINAL_TASK_STATES.has(task.state)) {
+        // A Slack retry of a reply already dropped adds nothing.
+        const seen = this.store.db
+          .prepare(
+            `SELECT 1 FROM events WHERE kind = 'inbound.dropped'
+               AND json_extract(data, '$.reason') = 'task_closed'
+               AND json_extract(data, '$.channel') = ? AND json_extract(data, '$.ts') = ?`,
+          )
+          .get(reply.slackChannelId, reply.slackTs);
+        if (seen) return { task, recipients: [], inserted: false, closed: true };
+        this.store.appendEvent({
+          kind: 'inbound.dropped',
+          sessionId: task.createdBy,
+          data: {
+            reason: 'task_closed',
+            task: task.id,
+            channel: reply.slackChannelId,
+            ts: reply.slackTs,
+          },
+        });
+        if (task.threadPostId !== null) {
+          this.store.enqueue({
+            target: FALLBACK_CHANNEL,
+            replyTo: task.threadPostId,
+            text:
+              `:information_source: \`${task.id}\` is ${task.state}, so replies here aren't ` +
+              'passed on to the agents.',
+          });
+        }
+        return { task, recipients: [], inserted: false, closed: true };
+      }
+      const recipients = replyRecipients(task);
+      const message = this.tasks.addTaskMessage({
+        taskId: task.id,
+        sender: 'human',
+        slackUser: reply.slackUser,
+        role: 'user',
+        body: reply.body,
+        slackChannelId: reply.slackChannelId,
+        slackTs: reply.slackTs,
+      });
+      for (const sessionId of recipients) {
+        this.tasks.addMessagePointer(sessionId, task.id, message.id);
+      }
+      this.store.appendEvent({
+        kind: 'inbound.routed',
+        sessionId: task.createdBy,
+        data: {
+          task: task.id,
+          message: message.id,
+          recipients,
+          channel: reply.slackChannelId,
+          ts: reply.slackTs,
+        },
+      });
+      return { task, recipients, inserted: true };
+    });
+  }
+
+  /** My replies among these items that every recipient now has (each earns its ✅). */
+  fullyDeliveredReplies(items: readonly TaskInboxItem[]): TaskMessageRecord[] {
+    return this.tasks.fullyDeliveredReplies(
+      items.filter(isNickReply).map((item) => item.message?.id ?? -1),
+    );
+  }
+
+  /**
+   * Marks Stop-hook pointers as read: the app confirmed the block reached the
+   * agent. Until then a Stop-hook delivery can still be put back, so it
+   * doesn't count toward a reply's ✅ (review of #94).
+   */
+  confirmStop(pointerIds: readonly number[]): void {
+    if (pointerIds.length === 0) return;
+    this.store.db
+      .prepare(
+        `UPDATE task_inbox SET delivered_via = ?
+         WHERE id IN (${pointerIds.map(() => '?').join(', ')}) AND delivered_via = 'stop_hook'`,
+      )
+      .run(STOP_CONFIRMED, ...pointerIds);
+  }
+
+  /** `fullyDeliveredReplies` for pointer IDs (a confirmed Stop-hook offer). */
+  fullyDeliveredRepliesByPointer(pointerIds: readonly number[]): TaskMessageRecord[] {
+    if (pointerIds.length === 0) return [];
+    const rows = this.store.db
+      .prepare(
+        `SELECT message_id FROM task_inbox
+         WHERE id IN (${pointerIds.map(() => '?').join(', ')}) AND message_id IS NOT NULL`,
+      )
+      .all(...pointerIds) as Row[];
+    return this.tasks.fullyDeliveredReplies(rows.map((row) => Number(row.message_id)));
+  }
+
+  /** The sessions a stored message was pointed at. */
+  private pointedAt(messageId: number): string[] {
+    const rows = this.store.db
+      .prepare('SELECT session_id FROM task_inbox WHERE message_id = ? ORDER BY id')
+      .all(messageId) as Row[];
+    return rows.map((row) => String(row.session_id));
   }
 
   /** Puts pointers back as undelivered; only ones delivered via `via` (a cancelled call or block). */
