@@ -389,7 +389,7 @@ function when(iso: string): string {
 
 /** Feedback for a Break click that changed nothing, shown only to the clicker. */
 export const BREAK_REPLIES: Partial<Record<BreakOutcome, string>> = {
-  changed: 'That lease was already released, broken or taken over: nothing to break.',
+  changed: 'That lease was already released, broken, lapsed or taken over: nothing to break.',
   not_human: 'Only Nick can break leases.',
 };
 
