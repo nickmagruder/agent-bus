@@ -125,7 +125,9 @@ export type BusErrorCode =
   | 'not_allowed'
   | 'task_taken'
   | 'bad_state'
-  | 'bad_result';
+  | 'bad_result'
+  // Repo leases (#31)
+  | 'not_leased';
 
 export interface AskInput {
   platform: Platform;
@@ -427,6 +429,13 @@ export class BusService {
     this.channels = channels;
   }
 
+  private leases: LeaseHooks | undefined;
+
+  /** Turns on repo leases at SessionStart and the broken-lease notice on a prompt (#31). */
+  useLeases(leases: LeaseHooks): void {
+    this.leases = leases;
+  }
+
   // MCP tools
 
   register(input: RegisterInput): RegisterResult {
@@ -632,16 +641,21 @@ export class BusService {
     switch (input.event) {
       case 'SessionStart':
         action = 'context';
-        context = sessionContext(session, this.issueKey(session, 'hook'));
+        context = joinContext(
+          sessionContext(session, this.issueKey(session, 'hook')),
+          this.leases?.atSessionStart(session),
+        );
         break;
-      case 'UserPromptSubmit':
+      case 'UserPromptSubmit': {
         // The sign-in race: SessionStart ran before the broker was up, so the
         // agent never got its bus ID. Hand it over on the first prompt instead.
-        if (!this.contextDelivered(session)) {
-          action = 'context';
-          context = sessionContext(session, this.issueKey(session, 'hook'));
-        }
+        const id = this.contextDelivered(session)
+          ? undefined
+          : sessionContext(session, this.issueKey(session, 'hook'));
+        context = joinContext(id, this.leases?.atPrompt(session));
+        if (context) action = 'context';
         break;
+      }
       case 'PermissionRequest':
         action = this.holdPermission(session, input);
         break;
@@ -1237,6 +1251,17 @@ export function sessionStartText(session: SessionRecord): string {
 /** `mrkdwn` must already be escaped. */
 export function urgentText(session: SessionRecord, mrkdwn: string): string {
   return `:rotating_light: \`${session.id}\` needs you\n${mrkdwn}`;
+}
+
+/** What leases add to a hook's context (#31): see `leases.ts`. */
+export interface LeaseHooks {
+  atSessionStart(session: SessionRecord): string | undefined;
+  atPrompt(session: SessionRecord): string | undefined;
+}
+
+function joinContext(...parts: (string | undefined)[]): string | undefined {
+  const present = parts.filter((part): part is string => Boolean(part));
+  return present.length > 0 ? present.join('\n\n') : undefined;
 }
 
 export function sessionContext(session: SessionRecord, key: string): string {

@@ -2,6 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { PLATFORMS, type Platform } from './platform.ts';
+import { NO_PROJECT, PROJECT_PATTERN } from './session-id.ts';
 
 export const DEFAULT_PORT = 47823;
 
@@ -34,6 +35,27 @@ const repoList = z
     'AGENT_BUS_DIGEST_REPOS must be comma-separated owner/name repos',
   );
 
+/**
+ * `AGENT_BUS_LEASE_REPOS` (#31): comma-separated project names (the repo
+ * folder name sessions report) whose repos are leased to one session at a time.
+ */
+const leaseRepoList = z
+  .string()
+  .optional()
+  .transform((value) =>
+    (value ?? '')
+      .split(',')
+      .map((repo) => repo.trim())
+      .filter((repo) => repo.length > 0),
+  )
+  .refine(
+    // As sessions report them (projectSlug): lowercase letters, digits and
+    // hyphens, so a name that could never match fails at startup.
+    (repos) => repos.every((repo) => PROJECT_PATTERN.test(repo) && repo !== NO_PROJECT),
+    'AGENT_BUS_LEASE_REPOS must be comma-separated project names as sessions report them ' +
+      '(lowercase letters, digits and hyphens, e.g. code-notes)',
+  );
+
 const platformToken = (name: string) =>
   z
     .string({ error: `${name} is not set (open a new terminal after setting it)` })
@@ -57,6 +79,7 @@ const envSchema = z
     AGENT_BUS_DATA_DIR: z.string().min(1).optional(),
     AGENT_BUS_DIGEST_REPOS: repoList,
     AGENT_BUS_GITHUB_TOKEN: z.string().min(1).optional(),
+    AGENT_BUS_LEASE_REPOS: leaseRepoList,
     AGENT_BUS_HOLD_SECONDS: z.coerce
       .number()
       .int()
@@ -83,6 +106,8 @@ export interface BrokerConfig {
   github?: { repos: string[]; token?: string | undefined };
   /** ask_human / wait_for_reply hold limit; unset keeps the 150 s default. */
   holdSeconds?: number | undefined;
+  /** Project names whose repos are leased (#31); empty: no leases. */
+  leaseRepos?: string[];
 }
 
 export function defaultDataDir(localAppData: string | undefined): string {
@@ -107,5 +132,6 @@ export function loadBrokerConfig(env: NodeJS.ProcessEnv = process.env): BrokerCo
     slack: { botToken: e.SLACK_BOT_TOKEN, appToken: e.SLACK_APP_TOKEN, userId: e.SLACK_USER_ID },
     github: { repos: e.AGENT_BUS_DIGEST_REPOS, token: e.AGENT_BUS_GITHUB_TOKEN },
     holdSeconds: e.AGENT_BUS_HOLD_SECONDS,
+    leaseRepos: e.AGENT_BUS_LEASE_REPOS,
   };
 }

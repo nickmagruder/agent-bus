@@ -257,6 +257,9 @@ export const MIGRATIONS: readonly string[] = [
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
+/** A lease lapses this long after its holder's last activity (#31, Q22). */
+export const LEASE_IDLE_MS = 2 * 60 * 60_000;
+
 /** Outbox target for a DM to me; anything else is a channel name without `#`. */
 export const DM_TARGET = '@me';
 
@@ -522,12 +525,26 @@ export class Store {
 
   /** Updates purpose/branch when given, and marks the session as seen. */
   touchSession(id: string, changes: { purpose?: string; branch?: string } = {}): void {
+    const at = this.now();
     this.db
       .prepare(
         `UPDATE sessions SET purpose = COALESCE(?, purpose), branch = COALESCE(?, branch),
          last_seen_at = ? WHERE id = ?`,
       )
-      .run(changes.purpose ?? null, changes.branch ?? null, this.timestamp(), id);
+      .run(changes.purpose ?? null, changes.branch ?? null, at.toISOString(), id);
+    // A session's activity keeps its leases (#31, Q22), but only ones still
+    // live: a lapsed lease stays lapsed until it's claimed again.
+    this.db
+      .prepare(
+        `UPDATE leases SET renewed_at = ?, expires_at = ?
+         WHERE holder = ? AND expires_at > ?`,
+      )
+      .run(
+        at.toISOString(),
+        new Date(at.getTime() + LEASE_IDLE_MS).toISOString(),
+        id,
+        at.toISOString(),
+      );
   }
 
   /**

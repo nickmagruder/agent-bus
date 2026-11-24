@@ -9,6 +9,7 @@ import { TASK_STATES } from '../shared/task-states.ts';
 import { HeldCalls } from './held-calls.ts';
 import { startHeartbeat, type HeartbeatTarget } from './heartbeat.ts';
 import type { Inbox } from './inbox.ts';
+import { contendedText, heldText, type Leases } from './leases.ts';
 import { outcomeText, QUESTION_LIMITS, type Notifier, type Questions } from './questions.ts';
 import { AGENT_CARDS, BusError, URGENCIES, type AgentCard, type BusService } from './service.ts';
 import type { InboxRecord, QuestionRecord } from './store.ts';
@@ -37,6 +38,8 @@ export interface McpDeps {
   tasks: TaskService;
   /** Task offers, messages and notices for agents (#60); made like `tasks`. */
   taskInbox: TaskInbox;
+  /** Repo leases (#31); none leased when not given. */
+  leases?: Leases | undefined;
 }
 
 const sessionArg = z
@@ -585,6 +588,82 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
   );
 
   server.registerTool(
+    'claim_lease',
+    {
+      title: 'Claim the lease on a repo',
+      description:
+        "Claim the lease on a leased repo (by project name; default: your session's project) before " +
+        "editing it, or call again to keep it while you're idle. Leases only warn: if another session " +
+        "holds it, you're told who and since when, Nick is told, and you shouldn't edit there. Claude " +
+        'Code and Codex sessions claim at startup; Copilot claims with this. Needs your session key.',
+      inputSchema: {
+        session: sessionArg,
+        key: keyArg.optional().describe('Your secret session key. Required.'),
+        repo: z
+          .string()
+          .max(100)
+          .optional()
+          .describe("Project name; default and only allowed value: your session's project."),
+      },
+    },
+    async ({ session, key, repo }) =>
+      run(() => {
+        const caller = service.requireKeyedSession(platform, session, key, 'claim_lease');
+        // A session leases only the repo it works in, so a stray agent can't
+        // warn the real ones off another project.
+        if (repo !== undefined && repo !== caller.project) {
+          throw new BusError(
+            'not_allowed',
+            `You can only lease your own project (${caller.project}), not ${repo.slice(0, 100)}.`,
+          );
+        }
+        const leases = requireLeased(deps.leases, caller.project);
+        const outcome = leases.claim(caller, caller.project, 'tool');
+        const text = outcome.held ? heldText(outcome.lease.repo) : contendedText(outcome.lease);
+        return {
+          content: [{ type: 'text', text }],
+          structuredContent: {
+            repo: outcome.lease.repo,
+            held: outcome.held,
+            holder: outcome.lease.holder,
+            since: outcome.lease.claimedAt,
+            from: FROM.broker,
+            trust: TRUST.broker,
+          },
+        };
+      }),
+  );
+
+  server.registerTool(
+    'release_lease',
+    {
+      title: 'Release your lease on a repo',
+      description:
+        'Release your lease on a repo (default: your project) when you finish editing it, so another ' +
+        'session can claim it. Needs your session key.',
+      inputSchema: {
+        session: sessionArg,
+        key: keyArg.optional().describe('Your secret session key. Required.'),
+        repo: z.string().max(100).optional().describe('Project name; default: your project.'),
+      },
+    },
+    async ({ session, key, repo }) =>
+      run(() => {
+        const caller = service.requireKeyedSession(platform, session, key, 'release_lease');
+        const name = repo ?? caller.project;
+        const leases = requireLeased(deps.leases, name);
+        const released = leases.release(caller, name);
+        const text = released
+          ? `Released your lease on ${name}.`
+          : `You don't hold the lease on ${name}: nothing to release.`;
+        return {
+          content: [{ type: 'text', text }],
+          structuredContent: { repo: name, released },
+        };
+      }),
+  );
+
+  server.registerTool(
     'send_message',
     {
       title: 'Message the other side of a task',
@@ -647,6 +726,17 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
   }
 
   return server;
+}
+
+/** Leases, if this repo is one; a `not_leased` refusal otherwise. */
+function requireLeased(leases: Leases | undefined, repo: string): Leases {
+  if (!leases?.isLeased(repo)) {
+    throw new BusError(
+      'not_leased',
+      `${repo.slice(0, 100)} isn't a leased repo (AGENT_BUS_LEASE_REPOS): no lease is needed.`,
+    );
+  }
+  return leases;
 }
 
 /** wait_for_reply's answer when nothing arrived. */
