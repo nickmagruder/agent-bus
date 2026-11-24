@@ -1,9 +1,12 @@
 # Phase 3: Agents hand work to each other
 
-Status: **planned** (2026-11-19), and grilled the same day (see "Grilling
-outcomes"). The Phase 2 live check
-([#25](https://github.com/nickmagruder/agent-bus/issues/25)) passed on
-2026-11-22, so Phase 3 code can start. Decisions settled (below); the work is
+Status: **in progress** (2026-11-23). Built: records, agent cards, tasks,
+delivery, and tasks in Slack (#57–#61, 0.13.0–0.21.0; see "Build notes").
+Left: leases ([#31](https://github.com/nickmagruder/agent-bus/issues/31)),
+clankers agent-comms ([#62](https://github.com/nickmagruder/agent-bus/issues/62))
+and the live check ([#63](https://github.com/nickmagruder/agent-bus/issues/63)).
+Planned 2026-11-19 and grilled the same day (see "Grilling outcomes").
+Decisions settled (below); the work is
 tracked in the [Phase 3 milestone](https://github.com/nickmagruder/agent-bus/milestone/4). Design:
 [design.md](design.md); previous phase: [phase-2.md](phase-2.md).
 
