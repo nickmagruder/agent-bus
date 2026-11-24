@@ -229,7 +229,7 @@ User environment variables, never files:
 | `AGENT_BUS_DATA_DIR`      | Optional; default `%LOCALAPPDATA%\agent-bus`                                                                                                      |
 | `AGENT_BUS_DIGEST_REPOS`  | Optional; comma-separated `owner/name` repos whose merged PRs the daily digest lists                                                              |
 | `AGENT_BUS_GITHUB_TOKEN`  | Optional; read-only token (fine-grained: Pull requests: read) for private digest repos. Public repos need none                                    |
-| `AGENT_BUS_LEASE_REPOS`   | Optional; comma-separated project (repo folder) names leased to one session at a time                                                             |
+| `AGENT_BUS_LEASE_REPOS`   | Optional; comma-separated project names (as sessions report them: lowercase letters, digits, hyphens) leased to one session at a time             |
 | `AGENT_BUS_HOLD_SECONDS`  | Optional, 30-900; how long `ask_human`/`wait_for_reply` hold a call (default 150). Live checks only: above a client's timeout a reply can be lost |
 
 The hook CLI reads `AGENT_BUS_TOKEN_<PLATFORM>` and `AGENT_BUS_PORT` too.
