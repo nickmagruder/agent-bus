@@ -644,9 +644,10 @@ Built in [`src/broker/leases.ts`](../src/broker/leases.ts), on the
   the holder's first claim time. A claim is one upsert inside a
   transaction, so two sessions racing get one holder. Audited
   `lease.claimed` / `lease.renewed`.
-- **Alive:** a lease is held while its expiry (claim + 2 h) or its holder's
-  last sign of life (`last_seen_at`, from any hook or tool call) + 2 h is
-  ahead (Q22). No writes per hook: activity renews it implicitly.
+- **Alive:** a lease is held while its expiry is ahead. Every hook or tool
+  call from the holder (`Store.touchSession`) pushes a still-live lease's
+  expiry to now + 2 h (Q22); a lapsed one stays lapsed until claimed again,
+  so the SessionStart that re-claims it starts a new claim time.
 - **Contention:** the second session is told who holds it and since when,
   and not to edit (read-only work is fine). I get a DM with **Break** the
   first time that session meets that holder (`lease.contended`).
@@ -661,6 +662,22 @@ Built in [`src/broker/leases.ts`](../src/broker/leases.ts), on the
 - **Digest:** a **Leases** section lists held leases.
 - By design: leases never block anything (Q7), and a Copilot holder that
   was broken hears only at its next lease call.
+
+After the [#99](https://github.com/nickmagruder/agent-bus/pull/99) review:
+
+- **`AGENT_BUS_LEASE_REPOS` must hold names sessions can report**
+  (lowercase letters, digits, hyphens, as `projectSlug` makes them); any
+  other name fails at startup instead of leasing nothing.
+- **A session leases only its own project:** `claim_lease` refuses another
+  repo (`not_allowed`), so a stray agent can't warn the real ones off.
+- **A lapsed lease** re-claimed by its old holder starts a new claim time,
+  and Break on a lapsed lease clears it without telling the holder to stop.
+- Accepted: the broken notice counts as told when the hook answers, not
+  when the app confirms it (a dropped response loses it; leases only warn,
+  and prompt context is still unverified live, #82). A Break DM isn't
+  edited when the lease is released or lapses; a click then changes
+  nothing, or breaks a re-claim by the same holder, which the DM names.
+  A clean session exit doesn't release its lease: it lapses within 2 h.
 
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 

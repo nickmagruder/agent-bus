@@ -2,6 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { PLATFORMS, type Platform } from './platform.ts';
+import { NO_PROJECT, PROJECT_PATTERN } from './session-id.ts';
 
 export const DEFAULT_PORT = 47823;
 
@@ -48,8 +49,11 @@ const leaseRepoList = z
       .filter((repo) => repo.length > 0),
   )
   .refine(
-    (repos) => repos.every((repo) => /^(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/.test(repo)),
-    'AGENT_BUS_LEASE_REPOS must be comma-separated project (repo folder) names',
+    // As sessions report them (projectSlug): lowercase letters, digits and
+    // hyphens, so a name that could never match fails at startup.
+    (repos) => repos.every((repo) => PROJECT_PATTERN.test(repo) && repo !== NO_PROJECT),
+    'AGENT_BUS_LEASE_REPOS must be comma-separated project names as sessions report them ' +
+      '(lowercase letters, digits and hyphens, e.g. code-notes)',
   );
 
 const platformToken = (name: string) =>

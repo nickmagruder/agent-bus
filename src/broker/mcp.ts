@@ -599,14 +599,26 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
       inputSchema: {
         session: sessionArg,
         key: keyArg.optional().describe('Your secret session key. Required.'),
-        repo: z.string().max(100).optional().describe('Project name; default: your project.'),
+        repo: z
+          .string()
+          .max(100)
+          .optional()
+          .describe("Project name; default and only allowed value: your session's project."),
       },
     },
     async ({ session, key, repo }) =>
       run(() => {
         const caller = service.requireKeyedSession(platform, session, key, 'claim_lease');
-        const leases = requireLeased(deps.leases, repo ?? caller.project);
-        const outcome = leases.claim(caller, repo ?? caller.project, 'tool');
+        // A session leases only the repo it works in, so a stray agent can't
+        // warn the real ones off another project.
+        if (repo !== undefined && repo !== caller.project) {
+          throw new BusError(
+            'not_allowed',
+            `You can only lease your own project (${caller.project}), not ${repo.slice(0, 100)}.`,
+          );
+        }
+        const leases = requireLeased(deps.leases, caller.project);
+        const outcome = leases.claim(caller, caller.project, 'tool');
         const text = outcome.held ? heldText(outcome.lease.repo) : contendedText(outcome.lease);
         return {
           content: [{ type: 'text', text }],

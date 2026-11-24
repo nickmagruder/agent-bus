@@ -165,8 +165,34 @@ describe('expiry and renewal', () => {
   });
 });
 
+describe('a lapsed lease', () => {
+  it('re-claimed by its old holder starts a new claim time', () => {
+    const first = start('claude', 'app-1');
+    now = new Date(now.getTime() + 5 * HOUR);
+    const again = start('claude', 'app-1');
+    expect(again.context).toContain('you hold the lease');
+    expect(leases.current('code-notes')).toMatchObject({
+      holder: first.id,
+      claimedAt: now.toISOString(),
+    });
+    expect(events('lease.claimed')).toHaveLength(2);
+  });
+
+  it('is cleared by Break without telling the old holder to stop', () => {
+    start('claude', 'app-1');
+    start('codex', 'app-2');
+    const [dm] = dms();
+    if (!dm) throw new Error('no DM');
+    now = new Date(now.getTime() + 5 * HOUR);
+    expect(leases.breakByButton(breakBlock(dm) ?? '', USER_ID)).toBe('changed');
+    expect(events('lease.broken')).toEqual([]);
+    expect(prompt('claude', 'app-1').context ?? '').not.toContain('broke your lease');
+    expect(JSON.stringify(store.getPost(dm.id)?.blocks)).toContain('no longer holds it');
+  });
+});
+
 describe('claiming directly', () => {
-  it('gives one holder when two sessions race', () => {
+  it('gives one holder to two claims in a row (the upsert re-checks the live holder)', () => {
     const a = sessionOf(start('claude', 'app-a', 'agent-bus').id);
     const b = sessionOf(start('codex', 'app-b', 'agent-bus').id);
     const outcomes = [leases.claim(a, 'vault', 'tool'), leases.claim(b, 'vault', 'tool')];
@@ -304,9 +330,22 @@ describe('the lease tools over MCP', () => {
     expect((await call('claim_lease', {})).isError).toBe(true); // no key
     const claimed = await call('claim_lease', { key: registered.key });
     expect(claimed.structuredContent).toMatchObject({ repo: 'vault', held: true });
-    const other = await call('claim_lease', { key: registered.key, repo: 'agent-bus' });
+    // Only its own project: a stray agent can't warn the real ones off another repo.
+    const other = await call('claim_lease', { key: registered.key, repo: 'code-notes' });
     expect(other.isError).toBe(true);
-    expect(JSON.stringify(other.content)).toContain("isn't a leased repo");
+    expect(JSON.stringify(other.content)).toContain('You can only lease your own project');
+    expect(leases.current('code-notes')).toBeUndefined();
+    // A project that isn't leased needs no lease.
+    const elsewhere = service.register({
+      platform: 'copilot',
+      purpose: 'Bus',
+      project: 'agent-bus',
+    });
+    const unleased = await client.callTool({
+      name: 'claim_lease',
+      arguments: { session: elsewhere.session.id, key: elsewhere.key },
+    });
+    expect(JSON.stringify(unleased.content)).toContain("isn't a leased repo");
 
     const released = await call('release_lease', { key: registered.key });
     expect(released.structuredContent).toEqual({ repo: 'vault', released: true });
@@ -358,9 +397,11 @@ describe('the digest and config', () => {
     };
     expect(loadBrokerConfig(env).leaseRepos).toEqual([]);
     expect(
-      loadBrokerConfig({ ...env, AGENT_BUS_LEASE_REPOS: ' code-notes , my.vault_2 ,' }).leaseRepos,
-    ).toEqual(['code-notes', 'my.vault_2']);
-    for (const bad of ['owner/repo', 'a b', '..']) {
+      loadBrokerConfig({ ...env, AGENT_BUS_LEASE_REPOS: ' code-notes , vault-2 ,' }).leaseRepos,
+    ).toEqual(['code-notes', 'vault-2']);
+    // Names sessions could never report (projectSlug lowercases and keeps only
+    // letters, digits and hyphens) fail at startup instead of leasing nothing.
+    for (const bad of ['owner/repo', 'a b', '..', 'Code-Notes', 'code_notes', 'my.vault', 'misc']) {
       expect(() => loadBrokerConfig({ ...env, AGENT_BUS_LEASE_REPOS: bad })).toThrow(
         /AGENT_BUS_LEASE_REPOS/,
       );

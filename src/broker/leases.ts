@@ -1,7 +1,7 @@
 import type { Logger } from './log.ts';
 import type { MessageEditor } from './questions.ts';
 import type { LeaseHooks } from './service.ts';
-import { DM_TARGET, type SessionRecord, type Store } from './store.ts';
+import { DM_TARGET, LEASE_IDLE_MS, type SessionRecord, type Store } from './store.ts';
 
 /**
  * Repo leases (#31, D6, Q7, Q22): in a repo listed in
@@ -13,7 +13,7 @@ import { DM_TARGET, type SessionRecord, type Store } from './store.ts';
  */
 export const LEASES = {
   /** A lease lapses this long after its holder's last sign of life (Q22). */
-  idleMs: 2 * 60 * 60_000,
+  idleMs: LEASE_IDLE_MS,
 } as const;
 
 /** The Break button's `action_id`; its block ID is `<repo>|<holder>`. */
@@ -27,7 +27,7 @@ export interface LeaseRecord {
   source: LeaseSource;
   claimedAt: string;
   renewedAt: string;
-  /** When it lapses unless the holder shows life: the later of this and its last-seen + 2 h. */
+  /** When it lapses unless the holder shows life (each hook or tool call pushes it to now + 2 h). */
   expiresAt: string;
 }
 
@@ -112,17 +112,19 @@ export class Leases implements LeaseHooks {
       const at = this.now();
       const iso = at.toISOString();
       const expires = new Date(at.getTime() + LEASES.idleMs).toISOString();
+      // A live lease of its own keeps its first claim time; a fresh or lapsed
+      // one starts now (`existing` is live-checked).
+      const claimedAt = existing ? existing.claimedAt : iso;
       this.store.db
         .prepare(
           `INSERT INTO leases (repo, holder, source, claimed_at, renewed_at, expires_at)
            VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT (repo) DO UPDATE SET
-             claimed_at = CASE WHEN leases.holder = excluded.holder
-                               THEN leases.claimed_at ELSE excluded.claimed_at END,
-             holder = excluded.holder, source = excluded.source,
-             renewed_at = excluded.renewed_at, expires_at = excluded.expires_at`,
+             claimed_at = excluded.claimed_at, holder = excluded.holder,
+             source = excluded.source, renewed_at = excluded.renewed_at,
+             expires_at = excluded.expires_at`,
         )
-        .run(repo, session.id, source, iso, iso, expires);
+        .run(repo, session.id, source, claimedAt, iso, expires);
       this.store.appendEvent({
         kind: existing ? 'lease.renewed' : 'lease.claimed',
         platform: session.platform,
@@ -172,10 +174,14 @@ export class Leases implements LeaseHooks {
       return 'not_human';
     }
     const broken = this.store.transaction(() => {
+      const lease = this.lease(repo);
+      // Only a live lease of the holder the DM named is broken. One that
+      // already lapsed is just cleared: the holder isn't told to stop.
+      const live = lease?.holder === holder && this.live(lease);
       const changed = this.store.db
         .prepare('DELETE FROM leases WHERE repo = ? AND holder = ?')
         .run(repo, holder).changes;
-      if (changed === 0) return false;
+      if (changed === 0 || !live) return false;
       this.store.appendEvent({
         kind: 'lease.broken',
         sessionId: holder,
@@ -219,13 +225,9 @@ export class Leases implements LeaseHooks {
     return lease?.holder === session.id ? lease : undefined;
   }
 
-  /** Live: the later of its expiry and its holder's last sign of life + idle time is still ahead. */
+  /** Live: its expiry, pushed on by the holder's activity (Store.touchSession), is ahead. */
   private live(lease: LeaseRecord): boolean {
-    const now = this.now().toISOString();
-    if (lease.expiresAt > now) return true;
-    const holder = this.store.getSession(lease.holder);
-    if (!holder) return false;
-    return new Date(new Date(holder.lastSeenAt).getTime() + LEASES.idleMs).toISOString() > now;
+    return lease.expiresAt > this.now().toISOString();
   }
 
   private lease(repo: string): LeaseRecord | undefined {
