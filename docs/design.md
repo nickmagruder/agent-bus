@@ -1,8 +1,8 @@
 # agent-bus design
 
 Status (2026-11-23): Phases 0, 1 and 2 complete (Phase 2 checked live on
-all three apps, #25); Phase 3 in progress (tasks built through Slack;
-leases, agent-comms and the live check left). Each phase's plan,
+all three apps, #25); Phase 3 in progress (tasks built through Slack, and
+repo leases; agent-comms and the live check left). Each phase's plan,
 decisions and live results live in its own doc: [Phase 0](spikes/phase-0.md),
 [Phase 1](phase-1.md), [Phase 2](phase-2.md), [Phase 3](phase-3.md).
 

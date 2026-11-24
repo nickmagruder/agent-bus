@@ -3,6 +3,7 @@ import type { GitHubApi, MergedPr } from './github.ts';
 import { errorMessage, type Logger } from './log.ts';
 import { FALLBACK_CHANNEL } from './slack/directory.ts';
 import type { DigestItemRecord, QuestionRecord, SessionRecord, Store } from './store.ts';
+import type { LeaseRecord } from './leases.ts';
 import { title as taskTitle } from './task-slack.ts';
 import { TaskStore, type TaskRecord } from './task-store.ts';
 
@@ -81,6 +82,7 @@ export class Digest {
   private readonly hour: number;
   private readonly github: GitHubApi | undefined;
   private readonly repos: readonly string[];
+  private readonly leases: (() => readonly LeaseRecord[]) | undefined;
   private timer: NodeJS.Timeout | undefined;
   private running = false;
   private stopped = false;
@@ -96,7 +98,10 @@ export class Digest {
     /** Repos (`owner/name`) whose merged PRs the digest lists. */
     repos?: readonly string[];
     github?: GitHubApi;
+    /** Leases still held (#31), for the digest's Leases section. */
+    leases?: () => readonly LeaseRecord[];
   }) {
+    this.leases = options.leases;
     this.store = options.store;
     this.queue = options.queue;
     this.log = options.log;
@@ -162,6 +167,7 @@ export class Digest {
         questions,
         sessions,
         tasks,
+        leases: this.leases?.() ?? [],
         prs,
         prsTruncated: github.truncated,
         sessionById: (id) => this.store.getSession(id),
@@ -242,13 +248,15 @@ export interface DigestInput {
   sessions: readonly SessionRecord[];
   /** Tasks opened or closed in the window, and every open one (#61). */
   tasks?: readonly TaskRecord[];
+  /** Leases still held (#31). */
+  leases?: readonly LeaseRecord[];
   prs?: readonly MergedPr[];
   /** GitHub had more than the page limit: older merged PRs aren't listed. */
   prsTruncated?: boolean;
   sessionById: (id: string) => SessionRecord | undefined;
 }
 
-type LineKind = 'question' | 'task' | 'pr' | 'fyi' | 'session' | 'other';
+type LineKind = 'question' | 'task' | 'lease' | 'pr' | 'fyi' | 'session' | 'other';
 
 /**
  * The digest post (Slack mrkdwn), or undefined when there's nothing to report.
@@ -261,8 +269,10 @@ export function digestText(input: DigestInput): string | undefined {
   const { items, questions, sessions } = input;
   const prs = input.prs ?? [];
   const tasks = input.tasks ?? [];
+  const leases = input.leases ?? [];
   const prsTruncated = input.prsTruncated ?? false;
-  const count = items.length + questions.length + sessions.length + prs.length + tasks.length;
+  const count =
+    items.length + questions.length + sessions.length + prs.length + tasks.length + leases.length;
   if (count === 0 && !prsTruncated) {
     return undefined;
   }
@@ -282,6 +292,17 @@ export function digestText(input: DigestInput): string | undefined {
     plan('other', '');
     plan('other', tasksHeading(tasks, input.since));
     for (const task of [...tasks].sort(byUrgency)) plan('task', taskLine(task, input.timeZone));
+  }
+  if (leases.length > 0) {
+    plan('other', '');
+    plan('other', `*Leases* (${leases.length})`);
+    for (const lease of leases) {
+      plan(
+        'lease',
+        `• :lock: \`${lease.repo}\` held by \`${lease.holder}\` since ` +
+          formatTime(new Date(lease.claimedAt), input.timeZone),
+      );
+    }
   }
   // Agents merge these without my review, so they come right after tasks.
   if (prs.length > 0 || prsTruncated) {
@@ -336,6 +357,7 @@ function leftOutFooter(rest: readonly { kind: LineKind }[]): string {
   const parts = [
     plural(count('question'), 'question'),
     plural(count('task'), 'task'),
+    plural(count('lease'), 'lease'),
     plural(count('pr'), 'merged PR'),
     plural(count('fyi'), 'fyi item'),
     plural(count('session'), 'session'),

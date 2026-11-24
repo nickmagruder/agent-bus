@@ -9,6 +9,7 @@ import { Digest } from './digest.ts';
 import { createGitHubApi, type GitHubApi } from './github.ts';
 import { HeldCalls } from './held-calls.ts';
 import { Inbox } from './inbox.ts';
+import { Leases } from './leases.ts';
 import { createFileWriter, createLogger, errorMessage, type Logger } from './log.ts';
 import { APPROVAL, BusService } from './service.ts';
 import { createWebSlackApi, type SlackApi } from './slack/api.ts';
@@ -18,6 +19,7 @@ import {
   registerActions,
   registerFlagActions,
   registerInbound,
+  registerLeaseActions,
   registerTaskActions,
 } from './slack/inbound.ts';
 import { Notifier, Questions } from './questions.ts';
@@ -122,6 +124,16 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
     notifier.notify(sessionId),
   );
   const taskInbox = new TaskInbox(store, service.clock);
+  const leases = new Leases({
+    store,
+    queue,
+    repos: config.leaseRepos ?? [],
+    humanUserId: config.slack.userId,
+    editor,
+    log,
+    now: service.clock,
+  });
+  service.useLeases(leases);
   const inbox = new Inbox({
     store,
     queue,
@@ -151,6 +163,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
     registerActions(connection.app, questions, log);
     registerTaskActions(connection.app, taskSlack, log);
     registerFlagActions(connection.app, taskSlack, log);
+    registerLeaseActions(connection.app, leases, log);
   }
 
   let http: RunningHttpServer | undefined;
@@ -165,6 +178,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
       notifier,
       tasks,
       taskInbox,
+      leases,
       holdMs,
       heldCalls,
       log,
@@ -209,6 +223,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
           queue,
           log,
           repos: config.github?.repos ?? [],
+          leases: () => leases.held(),
           github:
             deps.digest?.github ??
             (config.github?.repos.length

@@ -1,5 +1,6 @@
 import type { App } from '@slack/bolt';
 import type { InboundMessage, Inbox } from '../inbox.ts';
+import { BREAK_REPLIES, LEASE_ACTION, type Leases } from '../leases.ts';
 import { errorMessage, type Logger } from '../log.ts';
 import { ANSWER_ACTION, type ButtonOutcome, type Questions } from '../questions.ts';
 import {
@@ -185,6 +186,49 @@ export function registerFlagActions(app: App, taskSlack: TaskSlack, log: Logger)
         response_type: 'ephemeral',
         replace_original: false,
         text: 'Something went wrong; the task is unchanged. Try again, or see the broker log.',
+      }).catch(() => undefined);
+    }
+  });
+}
+
+export interface BreakClick {
+  /** `<repo>|<holder>`: the lease the DM was about. */
+  blockId: string;
+  userId: string;
+}
+
+/** Reads a lease Break click from a `block_actions` payload. */
+export function toBreakClick(body: unknown, action: unknown): BreakClick | undefined {
+  if (typeof action !== 'object' || action === null) return undefined;
+  const a = action as Record<string, unknown>;
+  const blockId = str(a.block_id);
+  const user = (body as { user?: { id?: unknown } } | null)?.user?.id;
+  if (a.type !== 'button' || !LEASE_ACTION.test(str(a.action_id) ?? '')) return undefined;
+  if (!blockId || typeof user !== 'string') return undefined;
+  return { blockId, userId: user };
+}
+
+/**
+ * Handles Break on lease DMs (#31). The lease comes from the block ID; only
+ * Nick's clicks count (T5). Acks first, then breaks.
+ */
+export function registerLeaseActions(app: App, leases: Leases, log: Logger): void {
+  app.action(LEASE_ACTION, async ({ ack, body, action, respond }) => {
+    await ack();
+    const click = toBreakClick(body, action);
+    if (!click) return;
+    try {
+      const outcome = leases.breakByButton(click.blockId, click.userId);
+      const reply = BREAK_REPLIES[outcome];
+      if (reply)
+        await respond({ response_type: 'ephemeral', replace_original: false, text: reply });
+      else log('info', 'lease broken by button', { repo: click.blockId.split('|')[0] });
+    } catch (error) {
+      log('error', 'Slack lease button handling failed', { error: errorMessage(error) });
+      await respond({
+        response_type: 'ephemeral',
+        replace_original: false,
+        text: 'Something went wrong; the lease is unchanged. Try again, or see the broker log.',
       }).catch(() => undefined);
     }
   });

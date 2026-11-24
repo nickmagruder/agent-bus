@@ -1,9 +1,8 @@
 # Phase 3: Agents hand work to each other
 
 Status: **in progress** (2026-11-23). Built: the session key (#65),
-records, agent cards, tasks, delivery, and tasks in Slack (#57–#61;
-0.13.0–0.21.0; see "Build notes"). Left: leases
-([#31](https://github.com/nickmagruder/agent-bus/issues/31)), clankers
+records, agent cards, tasks, delivery, tasks in Slack and repo leases
+(#57–#61, #31; 0.13.0–0.22.0; see "Build notes"). Left: clankers
 agent-comms ([#62](https://github.com/nickmagruder/agent-bus/issues/62)) and
 the live check ([#63](https://github.com/nickmagruder/agent-bus/issues/63)),
 plus the open follow-ups in the milestone (#66, #70, #82, #97).
@@ -623,6 +622,45 @@ After the [#95](https://github.com/nickmagruder/agent-bus/pull/95) review:
   inside a transaction (here and in `refreshApproval`) can still show a
   change that later rolled back; queuing them after commit is a later
   cleanup.
+
+### Repo leases ([#31](https://github.com/nickmagruder/agent-bus/issues/31), 0.22.0, 2026-11-23)
+
+Decided with Nick before building (all as recommended):
+
+- **Contention** warns the new agent (its SessionStart context, or
+  `claim_lease`'s answer) and DMs me once per session and holder with
+  **Break**.
+- **After Break** the old holder is told once, in its next prompt's
+  context (Claude Code, Codex), in agent-bus's own words.
+- **Repos** are project names (the repo folder name sessions report) in
+  `AGENT_BUS_LEASE_REPOS`; held leases show in the digest. No
+  `list_leases` tool.
+
+Built in [`src/broker/leases.ts`](../src/broker/leases.ts), on the
+`leases` table from migration 8:
+
+- **Claim:** SessionStart in a leased repo claims a free lease (source
+  `hook`); Copilot calls `claim_lease` (source `tool`). Claiming again keeps
+  the holder's first claim time. A claim is one upsert inside a
+  transaction, so two sessions racing get one holder. Audited
+  `lease.claimed` / `lease.renewed`.
+- **Alive:** a lease is held while its expiry (claim + 2 h) or its holder's
+  last sign of life (`last_seen_at`, from any hook or tool call) + 2 h is
+  ahead (Q22). No writes per hook: activity renews it implicitly.
+- **Contention:** the second session is told who holds it and since when,
+  and not to edit (read-only work is fine). I get a DM with **Break** the
+  first time that session meets that holder (`lease.contended`).
+- **Break:** the block ID is `<repo>|<holder>`; only my click counts
+  (others dropped, audited via `lease_button`). It deletes the lease only
+  if that holder still has it (compare and swap), audits `lease.broken`
+  against the old holder, and edits every DM about it. The old holder's
+  next `UserPromptSubmit` adds the notice once (`lease.broken_told`).
+- **Tools:** `claim_lease` and `release_lease` need the key; a repo that
+  isn't leased is refused (`not_leased`). `claim_lease` from the holder
+  stands in for a renew tool.
+- **Digest:** a **Leases** section lists held leases.
+- By design: leases never block anything (Q7), and a Copilot holder that
+  was broken hears only at its next lease call.
 
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 

@@ -84,6 +84,7 @@ and decisions) is in [docs/design.md](docs/design.md).
 | `ask_human(session, question, options?, default_action, timeout_minutes?)`        | DMs me the question with buttons for up to five options (a reply in its thread works too) and waits up to 150 s (default), then returns `pending` with a question ID. A pointer goes in the session thread                     |
 | `wait_for_reply(session, question_id?, key?, task?)`                              | Waits again, for one question, for anything new, or (with the key) for task items, optionally about one task                                                                                                                   |
 | `send_message(session, key, task, body)`                                          | A message on a task between its creator and the session working on it, to the other's inbox and the task's thread (Phase 3)                                                                                                    |
+| `claim_lease(session, key, repo?)`, `release_lease(session, key, repo?)`          | Claims (or keeps) the lease on a leased repo, default the session's project, or lets it go; a second claimant is told who holds it (Phase 3)                                                                                   |
 
 Questions get one reminder at 15 minutes. At the timeout (default 60) the
 question expires and the agent takes its own `default_action`. The first
@@ -228,6 +229,7 @@ User environment variables, never files:
 | `AGENT_BUS_DATA_DIR`      | Optional; default `%LOCALAPPDATA%\agent-bus`                                                                                                      |
 | `AGENT_BUS_DIGEST_REPOS`  | Optional; comma-separated `owner/name` repos whose merged PRs the daily digest lists                                                              |
 | `AGENT_BUS_GITHUB_TOKEN`  | Optional; read-only token (fine-grained: Pull requests: read) for private digest repos. Public repos need none                                    |
+| `AGENT_BUS_LEASE_REPOS`   | Optional; comma-separated project (repo folder) names leased to one session at a time                                                             |
 | `AGENT_BUS_HOLD_SECONDS`  | Optional, 30-900; how long `ask_human`/`wait_for_reply` hold a call (default 150). Live checks only: above a client's timeout a reply can be lost |
 
 The hook CLI reads `AGENT_BUS_TOKEN_<PLATFORM>` and `AGENT_BUS_PORT` too.
@@ -439,6 +441,20 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.22.0 (2026-11-23)
+
+- **Repo leases** ([#31](https://github.com/nickmagruder/agent-bus/issues/31)):
+  - Repos named in `AGENT_BUS_LEASE_REPOS` (project names) are leased to
+    one session at a time. A Claude Code or Codex session that starts there
+    claims a free lease and is told it holds it; the holder's activity keeps
+    it, and it lapses after 2 hours idle. Copilot claims with `claim_lease`.
+    `release_lease` lets go.
+  - Leases only warn: a second session is told who holds it and not to
+    edit there, and I get a DM with **Break** (once per session and
+    holder). Break frees the lease; the old holder hears at its next prompt.
+    Only my clicks count.
+  - The daily digest lists held leases.
 
 ### 0.21.0 (2026-11-23)
 
