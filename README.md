@@ -217,20 +217,20 @@ npm install   # also installs the git hooks (husky)
 
 User environment variables, never files:
 
-| Variable                  | Purpose                                                                                                                                           |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AGENT_BUS_TOKEN_CLAUDE`  | Bearer token for Claude Code (≥ 32 chars, unique per platform)                                                                                    |
-| `AGENT_BUS_TOKEN_CODEX`   | Bearer token for Codex                                                                                                                            |
-| `AGENT_BUS_TOKEN_COPILOT` | Bearer token for Copilot                                                                                                                          |
-| `SLACK_BOT_TOKEN`         | `xoxb-` bot token                                                                                                                                 |
-| `SLACK_APP_TOKEN`         | `xapp-` Socket Mode token                                                                                                                         |
-| `SLACK_USER_ID`           | Your Slack member ID (urgent DMs go here; only you can answer)                                                                                    |
-| `AGENT_BUS_PORT`          | Optional; default `47823`                                                                                                                         |
-| `AGENT_BUS_DATA_DIR`      | Optional; default `%LOCALAPPDATA%\agent-bus`                                                                                                      |
-| `AGENT_BUS_DIGEST_REPOS`  | Optional; comma-separated `owner/name` repos whose merged PRs the daily digest lists                                                              |
-| `AGENT_BUS_GITHUB_TOKEN`  | Optional; read-only token (fine-grained: Pull requests: read) for private digest repos. Public repos need none                                    |
-| `AGENT_BUS_LEASE_REPOS`   | Optional; comma-separated project names (as sessions report them: lowercase letters, digits, hyphens) leased to one session at a time             |
-| `AGENT_BUS_HOLD_SECONDS`  | Optional, 30-900; how long `ask_human`/`wait_for_reply` hold a call (default 150). Live checks only: above a client's timeout a reply can be lost |
+| Variable                  | Purpose                                                                                                                                                                |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AGENT_BUS_TOKEN_CLAUDE`  | Bearer token for Claude Code (≥ 32 chars, unique per platform)                                                                                                         |
+| `AGENT_BUS_TOKEN_CODEX`   | Bearer token for Codex                                                                                                                                                 |
+| `AGENT_BUS_TOKEN_COPILOT` | Bearer token for Copilot                                                                                                                                               |
+| `SLACK_BOT_TOKEN`         | `xoxb-` bot token                                                                                                                                                      |
+| `SLACK_APP_TOKEN`         | `xapp-` Socket Mode token                                                                                                                                              |
+| `SLACK_USER_ID`           | Your Slack member ID (urgent DMs go here; only you can answer)                                                                                                         |
+| `AGENT_BUS_PORT`          | Optional; default `47823`                                                                                                                                              |
+| `AGENT_BUS_DATA_DIR`      | Optional; default `%LOCALAPPDATA%\agent-bus`                                                                                                                           |
+| `AGENT_BUS_DIGEST_REPOS`  | Optional; comma-separated `owner/name` repos whose merged PRs the daily digest lists                                                                                   |
+| `AGENT_BUS_GITHUB_TOKEN`  | Optional; read-only token (fine-grained: Pull requests: read) for private digest repos. Public repos need none                                                         |
+| `AGENT_BUS_LEASE_REPOS`   | Optional; comma-separated project names (as sessions report them: lowercase letters, digits, hyphens, up to 40 characters, not `misc`) leased to one session at a time |
+| `AGENT_BUS_HOLD_SECONDS`  | Optional, 30-900; how long `ask_human`/`wait_for_reply` hold a call (default 150). Live checks only: above a client's timeout a reply can be lost                      |
 
 The hook CLI reads `AGENT_BUS_TOKEN_<PLATFORM>` and `AGENT_BUS_PORT` too.
 
