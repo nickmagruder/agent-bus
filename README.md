@@ -119,6 +119,7 @@ and a short message snippet are sent.
 | `PermissionRequest` | Urgent DM with the tool and command, held for 60 s first: if I answer the prompt in the app in that time (any later hook event from the session, or an agent-bus call from it), no DM is sent. At most one per session per 2 minutes. The hook prints nothing: the app's own prompt decides. No DM for agent-bus's own tools (`mcp__agent-bus__*`, Codex `mcp__agent_bus__*`), or for tools that only read: Claude Code's `Read`, `Glob`, `Grep`, `LS`, `WebFetch`, `WebSearch` and similar; MCP tools whose name starts with `get`, `list`, `read`, `search`, `find`, `fetch`, `describe` or `view` and has no write word in it (so `find_and_replace` still DMs); the browser tab listing; and browser screenshots and zooms, judged by the call's own `action` argument. Shell commands always DM. |
 | `Notification`      | Claude `permission_prompt` only: same DM, sharing the 2-minute throttle with `PermissionRequest`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `Stop`              | When I've replied in Slack: blocks the stop and hands the agent my replies (up to 5, at most 6 blocks per session per hour). Otherwise "Turn finished; waiting for you" with a snippet in the session's thread; at most one per 10 minutes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `SessionEnd`        | Releases the session's repo leases at once instead of letting them lapse after 2 hours idle, and drops any held approval DM. Nothing is posted or printed; an app session the broker never saw is ignored. Claude Code sends it on exit, `/clear`, `/resume` and logout; Codex when a conversation closes, is archived or sits idle 30 minutes. Optional: without it, leases lapse as before.                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 | Event               | What happens                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -321,6 +322,13 @@ headers) and hooks in `~/.claude/settings.json`:
           { "type": "command", "command": "node \"<repo>/src/cli/hook.ts\" claude", "timeout": 30 }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"<repo>/src/cli/hook.ts\" claude", "timeout": 3 }
+        ]
+      }
     ]
   }
 }
@@ -329,7 +337,8 @@ headers) and hooks in `~/.claude/settings.json`:
 `Notification` is optional: it shares the 2-minute throttle with
 `PermissionRequest`, so wiring both never sends two DMs for one prompt.
 Give `Stop` a timeout above 15 s: the hook waits up to 15 s for a busy
-broker before letting the agent stop.
+broker before letting the agent stop. Give `SessionEnd` 3 s: the apps allow
+it only 1 to 1.5 s by default, and the hook waits up to 2 s.
 
 Optional: wire `PostToolUse` too (Codex: `PreToolUse`), with the same command
 and a 5 s timeout. A prompt I approve in the app then cancels its held DM at
@@ -338,7 +347,7 @@ permission request or agent-bus call, and is sent if none comes within 60 s.
 The cost is one short hook process per tool call.
 
 **Codex:** MCP server in `~/.codex/config.toml`, and the `SessionStart`,
-`UserPromptSubmit`, `PermissionRequest` and `Stop` hooks in `~/.codex/hooks.json` with `codex` in
+`UserPromptSubmit`, `PermissionRequest`, `Stop` and `SessionEnd` hooks in `~/.codex/hooks.json` with `codex` in
 place of `claude` (the broker handles `Notification` for Claude only). Codex
 asks you to
 review and trust the hooks once (Settings › Hooks).
@@ -441,6 +450,17 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.23.0 (2026-11-25)
+
+- **A session's leases end with it**
+  ([#100](https://github.com/nickmagruder/agent-bus/issues/100)): a
+  `SessionEnd` hook (Claude Code: exit, `/clear`, `/resume`, logout; Codex:
+  a conversation closed, archived or idle 30 minutes) releases the
+  session's repo leases at once, so the next session in that repo isn't
+  warned off for up to 2 hours. It also drops any held approval DM. Wire
+  `SessionEnd` with a 3 s timeout (see Setup); without it, and on Copilot,
+  leases lapse as before.
 
 ### 0.22.0 (2026-11-23)
 

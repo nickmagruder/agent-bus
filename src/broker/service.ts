@@ -209,6 +209,8 @@ export type HookAction =
   | 'throttled'
   | 'rate_limited'
   | 'ignored'
+  /** SessionEnd only: the ended session's leases were released (#100). */
+  | 'released'
   /** An approval prompt for agent-bus's own tools: no DM (see isOwnToolPrompt). */
   | 'own_tool'
   /** An approval prompt for a tool that only reads: no DM (see isReadOnlyToolPrompt). */
@@ -621,6 +623,7 @@ export class BusService {
     stopInbox?: StopInboxCheck,
     offers?: StopOffers,
   ): HookResult {
+    if (input.event === 'SessionEnd') return this.sessionEnd(platform, input);
     const session = this.hookSession(platform, input);
     // Settle the last Stop block's offer first: a Stop that puts it back can
     // then offer the same replies again.
@@ -815,6 +818,23 @@ export class BusService {
   }
 
   /** Finds the bus session for an app session, creating it on first sight. */
+  /**
+   * SessionEnd (Claude Code: exit, /clear, /resume, logout; Codex: close,
+   * archive, 30 min idle): the session's leases are released at once instead
+   * of lapsing after 2 h idle (#100), and any held approval DM is dropped.
+   * Advisory in both apps, so nothing comes back. An app session the broker
+   * never saw creates nothing. Apps without the event (Copilot) are unchanged.
+   */
+  private sessionEnd(platform: Platform, input: HookInput): HookResult {
+    const session = this.store.findByAppSession(platform, input.appSessionId);
+    if (!session) return { session: '', action: 'ignored' };
+    this.cancelHeldPings(session, input.event);
+    const released = this.leases?.atSessionEnd(session) ?? [];
+    const action: HookAction = released.length > 0 ? 'released' : 'ignored';
+    this.auditHook(platform, session, input, action);
+    return { session: session.id, action };
+  }
+
   private hookSession(platform: Platform, input: HookInput): SessionRecord {
     const existing = this.store.findByAppSession(platform, input.appSessionId);
     if (existing) {
@@ -1257,6 +1277,8 @@ export function urgentText(session: SessionRecord, mrkdwn: string): string {
 export interface LeaseHooks {
   atSessionStart(session: SessionRecord): string | undefined;
   atPrompt(session: SessionRecord): string | undefined;
+  /** Releases the ended session's leases; the repos it let go (#100). */
+  atSessionEnd(session: SessionRecord): string[];
 }
 
 function joinContext(...parts: (string | undefined)[]): string | undefined {

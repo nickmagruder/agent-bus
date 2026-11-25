@@ -82,6 +82,21 @@ export class Leases implements LeaseHooks {
     return this.takeBrokenNotice(session);
   }
 
+  /**
+   * SessionEnd (#100): the session lets go of every lease it holds, live or
+   * lapsed, so the next session needn't wait out the 2 h idle.
+   */
+  atSessionEnd(session: SessionRecord): string[] {
+    return this.store.transaction(() => {
+      const rows = this.store.db
+        .prepare('SELECT repo FROM leases WHERE holder = ? ORDER BY repo')
+        .all(session.id) as Row[];
+      const repos = rows.map((row) => String(row.repo));
+      for (const repo of repos) this.release(session, repo, 'session_end');
+      return repos;
+    });
+  }
+
   /** The repo's lease, if it's held and hasn't lapsed. */
   current(repo: string): LeaseRecord | undefined {
     const row = this.store.db.prepare('SELECT * FROM leases WHERE repo = ?').get(repo) as
@@ -138,7 +153,7 @@ export class Leases implements LeaseHooks {
   }
 
   /** Lets go of a session's own lease; false when it didn't hold it. */
-  release(session: SessionRecord, repo: string): boolean {
+  release(session: SessionRecord, repo: string, via?: 'session_end'): boolean {
     return this.store.transaction(() => {
       const changed = this.store.db
         .prepare('DELETE FROM leases WHERE repo = ? AND holder = ?')
@@ -148,7 +163,7 @@ export class Leases implements LeaseHooks {
         kind: 'lease.released',
         platform: session.platform,
         sessionId: session.id,
-        data: { repo },
+        data: via ? { repo, via } : { repo },
       });
       return true;
     });

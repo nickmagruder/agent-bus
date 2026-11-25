@@ -201,6 +201,8 @@ describe('runHook against the broker', () => {
     expect(timeoutFor('Stop')).toBe(15_000);
     expect(timeoutFor('SessionStart')).toBe(2000);
     expect(timeoutFor('UserPromptSubmit')).toBe(2000);
+    // Inside the apps' short SessionEnd budget (#100).
+    expect(timeoutFor('SessionEnd')).toBe(2000);
     expect(timeoutFor('PermissionRequest')).toBe(3000);
   });
 

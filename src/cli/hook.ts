@@ -25,6 +25,8 @@ const TIMEOUT_MS = { SessionStart: 2000, Stop: 15_000, default: 3000 } as const;
 export function timeoutFor(event: string): number {
   // Both delay the agent: SessionStart its first turn, UserPromptSubmit every prompt.
   if (event === 'SessionStart' || event === 'UserPromptSubmit') return TIMEOUT_MS.SessionStart;
+  // The app gives SessionEnd hooks a short budget (Claude Code 1.5 s, Codex 1 s by default).
+  if (event === 'SessionEnd') return TIMEOUT_MS.SessionStart;
   if (event === 'Stop') return TIMEOUT_MS.Stop;
   return TIMEOUT_MS.default;
 }

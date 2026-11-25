@@ -36,6 +36,30 @@ describe('extractHookRequest', () => {
     });
   });
 
+  it('keeps a SessionEnd to its event and session, and prints nothing for it (#100)', () => {
+    // Claude Code's and Codex's documented SessionEnd input.
+    const request = extractHookRequest(
+      {
+        hook_event_name: 'SessionEnd',
+        session_id: 'thr_123',
+        transcript_path: 'C:/secret/rollout.jsonl',
+        cwd: 'C:/repo',
+        reason: 'other',
+      },
+      { repo: { project: 'repo', branch: 'main' } },
+    );
+    expect(request).toEqual({
+      event: 'SessionEnd',
+      appSessionId: 'thr_123',
+      project: 'repo',
+      branch: 'main',
+      cwd: 'C:/repo',
+    });
+    expect(
+      renderHookOutput('claude', 'SessionEnd', { session: 'claude/repo/1', action: 'released' }),
+    ).toBe('');
+  });
+
   it('reads Stop and Notification fields', () => {
     expect(
       extractHookRequest({
