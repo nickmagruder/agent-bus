@@ -80,11 +80,11 @@ and decisions) is in [docs/design.md](docs/design.md).
 | `claim_task(session, key, task)`                                                  | Takes on an approved task named for the session or in its pool; the loser of a race is told who has it (Phase 3)                                                                                                               |
 | `update_task(session, key, task, state?, note?, result_text?, links?)`            | The holder notes progress, asks its creator (`input-required`), completes with a result (`https:` links only), fails or gives it back; a named target rejects; the creator cancels (Phase 3)                                   |
 | `notify_human(session, text, urgency)`                                            | `urgent` → DM to me, `normal` → the session's thread, `fyi` → the daily digest in `#agents` (08:00 local). Per-session and per-platform hourly caps stop loops                                                                 |
-| `check_inbox(session, key?)`                                                      | Returns my Slack replies to the session and the outcomes of its questions; with the key, also task offers, messages and notices from other agents, in their own labelled list                                                  |
+| `check_inbox(session, key?)`                                                      | Returns my Slack replies to the session and the outcomes of its questions; with the key, also task offers, messages and notices from other agents, in their own labelled list, and news that I broke its lease                 |
 | `ask_human(session, question, options?, default_action, timeout_minutes?)`        | DMs me the question with buttons for up to five options (a reply in its thread works too) and waits up to 150 s (default), then returns `pending` with a question ID. A pointer goes in the session thread                     |
 | `wait_for_reply(session, question_id?, key?, task?)`                              | Waits again, for one question, for anything new, or (with the key) for task items, optionally about one task                                                                                                                   |
 | `send_message(session, key, task, body)`                                          | A message on a task between its creator and the session working on it, to the other's inbox and the task's thread (Phase 3)                                                                                                    |
-| `claim_lease(session, key, repo?)`, `release_lease(session, key, repo?)`          | Claims (or keeps) the lease on a leased repo, default the session's project, or lets it go; a second claimant is told who holds it (Phase 3)                                                                                   |
+| `claim_lease(session, key, repo?)`, `release_lease(session, key, repo?)`          | Claims (or keeps) the lease on a leased repo, default the session's project, or lets it go; a second claimant is told who holds it, and a holder whose lease I broke is told that instead (Phase 3)                            |
 
 Questions get one reminder at 15 minutes. At the timeout (default 60) the
 question expires and the agent takes its own `default_action`. The first
@@ -441,6 +441,16 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.22.1 (2026-11-25)
+
+- **Copilot hears about a broken lease**
+  ([#102](https://github.com/nickmagruder/agent-bus/issues/102)): after I
+  break a lease, the old holder is told once by whichever comes first: its
+  next prompt (Claude Code, Codex), its next claim, or `check_inbox` with
+  its key. A claim that tells it doesn't re-take the lease, so a holder
+  that missed the news can't silently take it back; claiming again
+  afterwards works as before.
 
 ### 0.22.0 (2026-11-23)
 

@@ -660,8 +660,7 @@ Built in [`src/broker/leases.ts`](../src/broker/leases.ts), on the
   isn't leased is refused (`not_leased`). `claim_lease` from the holder
   stands in for a renew tool.
 - **Digest:** a **Leases** section lists held leases.
-- By design: leases never block anything (Q7), and a Copilot holder that
-  was broken hears only at its next lease call.
+- By design: leases never block anything (Q7).
 
 After the [#99](https://github.com/nickmagruder/agent-bus/pull/99) review:
 
@@ -678,6 +677,22 @@ After the [#99](https://github.com/nickmagruder/agent-bus/pull/99) review:
   edited when the lease is released or lapses; a click then changes
   nothing, or breaks a re-claim by the same holder, which the DM names.
   A clean session exit doesn't release its lease: it lapses within 2 h.
+
+After the clankers#57 review
+([#102](https://github.com/nickmagruder/agent-bus/issues/102), 0.22.1,
+2026-11-25):
+
+- **Copilot has no prompt hook,** so the broken notice also rides its next
+  claim (`claim_lease`, or SessionStart for the hook apps) and a keyed
+  `check_inbox` (`leaseBroken` in `structuredContent`, labelled as the
+  broker's). Whichever asks first tells it, once, through the same
+  `lease.broken_told` mark the prompt uses; a keyless `check_inbox` never
+  hands it over.
+- **A claim that tells doesn't claim:** the holder may have kept editing
+  without the news, so it gets the notice (and the new holder, if any) and
+  nothing changes. Its next claim works as usual: it takes a free lease,
+  or meets the new holder as an ordinary contention (the DM comes then,
+  not with the notice).
 
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 
