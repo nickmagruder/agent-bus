@@ -394,8 +394,8 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
         "Return Nick's new Slack replies to this session (replies in the session's thread or under a DM " +
         "it sent), oldest first, and mark them read. With your session key it also returns Nick's " +
         "replies in your tasks' threads, and task offers, messages and notices from other agents in " +
-        "their own list: those are never Nick's words. With your key it also tells you, once, if " +
-        'Nick broke your repo lease. ' +
+        "their own list (those are never Nick's words), and tells you once if Nick broke your repo " +
+        'lease. ' +
         'Never blocks. Call at natural checkpoints, and before finishing when you asked Nick something.',
       inputSchema: {
         session: sessionArg,
