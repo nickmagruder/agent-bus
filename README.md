@@ -460,7 +460,8 @@ are made.
   session's repo leases at once, so the next session in that repo isn't
   warned off for up to 2 hours. It also drops any held approval DM. Wire
   `SessionEnd` with a 3 s timeout (see Setup); without it, and on Copilot,
-  leases lapse as before.
+  leases lapse as before. A session that comes back after ending (Codex)
+  claims again at its next prompt and is told.
 
 ### 0.22.0 (2026-11-23)
 

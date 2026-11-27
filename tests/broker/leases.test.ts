@@ -251,6 +251,56 @@ describe('SessionEnd (#100)', () => {
     });
   });
 
+  it('re-claims at the next prompt of a session that comes back (Codex idle end), once', () => {
+    const first = start('codex', 'app-1');
+    end('codex', 'app-1');
+    const back = prompt('codex', 'app-1');
+    expect(back.context).toContain('this session ended earlier, which released its lease');
+    expect(back.context).toContain('you hold the lease on code-notes');
+    expect(leases.current('code-notes')?.holder).toBe(first.id);
+    expect(events('lease.resumed')).toEqual([{ repo: 'code-notes', held: true }]);
+    // Once per release: later prompts add nothing.
+    expect(prompt('codex', 'app-1').context ?? '').not.toContain('lease');
+  });
+
+  it('tells a returning session who took the lease meanwhile, once', () => {
+    const first = start('codex', 'app-1');
+    end('codex', 'app-1');
+    const second = start('claude', 'app-2');
+    const back = prompt('codex', 'app-1');
+    expect(back.context).toContain(`code-notes is leased to another session, ${second.id}`);
+    expect(leases.current('code-notes')?.holder).toBe(second.id);
+    expect(events('lease.resumed')).toEqual([{ repo: 'code-notes', held: false }]);
+    expect(dms()).toHaveLength(1);
+    expect(prompt('codex', 'app-1').context ?? '').not.toContain('lease');
+    expect(leases.current('code-notes')?.holder).not.toBe(first.id);
+  });
+
+  it('adds nothing at the prompt when SessionStart already re-claimed (/clear)', () => {
+    const first = start('claude', 'app-1');
+    end('claude', 'app-1');
+    start('claude', 'app-1');
+    expect(prompt('claude', 'app-1').context ?? '').not.toContain('lease');
+    expect(leases.current('code-notes')?.holder).toBe(first.id);
+    expect(events('lease.resumed')).toEqual([]);
+  });
+
+  it('recovers at the prompt if SessionStart arrived before its SessionEnd', () => {
+    const first = start('claude', 'app-1');
+    start('claude', 'app-1');
+    end('claude', 'app-1');
+    expect(leases.current('code-notes')).toBeUndefined();
+    expect(prompt('claude', 'app-1').context).toContain('you hold the lease on code-notes');
+    expect(leases.current('code-notes')?.holder).toBe(first.id);
+  });
+
+  it('leaves a lease released with release_lease alone at the next prompt', () => {
+    const first = sessionOf(start('claude', 'app-1').id);
+    leases.release(first, 'code-notes');
+    expect(prompt('claude', 'app-1').context ?? '').not.toContain('lease');
+    expect(leases.current('code-notes')).toBeUndefined();
+  });
+
   it('creates no session for an app session the broker never saw', () => {
     expect(end('claude', 'never-seen')).toEqual({ session: '', action: 'ignored' });
     expect(store.findByAppSession('claude', 'never-seen')).toBeUndefined();

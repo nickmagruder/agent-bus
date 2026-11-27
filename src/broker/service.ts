@@ -817,13 +817,14 @@ export class BusService {
     return last?.event === 'Stop' && last.action === 'blocked';
   }
 
-  /** Finds the bus session for an app session, creating it on first sight. */
   /**
    * SessionEnd (Claude Code: exit, /clear, /resume, logout; Codex: close,
    * archive, 30 min idle): the session's leases are released at once instead
    * of lapsing after 2 h idle (#100), and any held approval DM is dropped.
    * Advisory in both apps, so nothing comes back. An app session the broker
    * never saw creates nothing. Apps without the event (Copilot) are unchanged.
+   * A session that comes back (Codex after idling) re-claims at its next
+   * prompt (`Leases.atPrompt`).
    */
   private sessionEnd(platform: Platform, input: HookInput): HookResult {
     const session = this.store.findByAppSession(platform, input.appSessionId);
@@ -835,6 +836,7 @@ export class BusService {
     return { session: session.id, action };
   }
 
+  /** Finds the bus session for an app session, creating it on first sight. */
   private hookSession(platform: Platform, input: HookInput): SessionRecord {
     const existing = this.store.findByAppSession(platform, input.appSessionId);
     if (existing) {

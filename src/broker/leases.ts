@@ -77,9 +77,50 @@ export class Leases implements LeaseHooks {
     return outcome.held ? heldText(session.project) : contendedText(outcome.lease);
   }
 
-  /** A prompt: once, the news that I broke this session's lease. */
+  /**
+   * A prompt: once, the news that I broke this session's lease; and for a
+   * session whose lease SessionEnd released, a fresh claim (#100).
+   */
   atPrompt(session: SessionRecord): string | undefined {
-    return this.takeBrokenNotice(session);
+    const parts = [this.takeBrokenNotice(session), this.reclaimAfterEnd(session)];
+    const present = parts.filter((part): part is string => Boolean(part));
+    return present.length > 0 ? present.join('\n\n') : undefined;
+  }
+
+  /**
+   * Codex ends a conversation that sits idle 30 min (SessionEnd), which
+   * releases its lease, yet the user can come back to it. Its next prompt
+   * claims again, once per release, and tells the agent either way, so it
+   * never edits on a lease it no longer holds without knowing.
+   */
+  private reclaimAfterEnd(session: SessionRecord): string | undefined {
+    const repo = session.project;
+    if (!this.isLeased(repo)) return undefined;
+    return this.store.transaction(() => {
+      const ended = this.store.latestEvent({
+        kind: 'lease.released',
+        sessionId: session.id,
+        dataField: { name: 'via', value: 'session_end' },
+      });
+      if (!ended) return undefined;
+      const since = this.store.db
+        .prepare(
+          `SELECT 1 FROM events WHERE session_id = ? AND id > ?
+             AND kind IN ('lease.claimed', 'lease.renewed', 'lease.resumed')
+             AND json_extract(data, '$.repo') = ?`,
+        )
+        .get(session.id, Number(ended.eventId), repo);
+      if (since) return undefined;
+      const outcome = this.claim(session, repo, 'hook');
+      this.store.appendEvent({
+        kind: 'lease.resumed',
+        platform: session.platform,
+        sessionId: session.id,
+        data: { repo, held: outcome.held },
+      });
+      const lead = `agent-bus: this session ended earlier, which released its lease on ${repo}.`;
+      return `${lead} ${outcome.held ? heldText(repo) : contendedText(outcome.lease)}`;
+    });
   }
 
   /**
