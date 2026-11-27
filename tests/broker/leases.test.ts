@@ -442,6 +442,10 @@ describe('the lease tools over MCP', () => {
       });
     // Without the key: not handed over (anyone may know a session ID).
     expect(JSON.stringify(await inboxCall())).not.toContain('broke your lease');
+    // Nor with a wrong key, which falls back to the keyless answer.
+    const wrong = await inboxCall(`abk_${'x'.repeat(43)}`);
+    expect(wrong.structuredContent).toMatchObject({ keyRejected: true });
+    expect(JSON.stringify(wrong)).not.toContain('broke your lease');
     const told = await inboxCall(registered.key);
     expect(told.structuredContent).toMatchObject({
       leaseBroken: { from: 'agent-bus', trust: 'agent-bus' },

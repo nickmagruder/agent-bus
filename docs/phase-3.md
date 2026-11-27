@@ -686,8 +686,10 @@ After the clankers#57 review
   claim (`claim_lease`, or SessionStart for the hook apps) and a keyed
   `check_inbox` (`leaseBroken` in `structuredContent`, labelled as the
   broker's). Whichever asks first tells it, once, through the same
-  `lease.broken_told` mark the prompt uses; a keyless `check_inbox` never
-  hands it over.
+  `lease.broken_told` mark the prompt uses; a keyless `check_inbox` (or
+  one with a wrong key) never hands it over. As with the prompt, it counts
+  as told when the answer is written, so a dropped response loses it
+  (accepted after #99).
 - **A claim that tells doesn't claim:** the holder may have kept editing
   without the news, so it gets the notice (and the new holder, if any) and
   nothing changes. Its next claim works as usual: it takes a free lease,
