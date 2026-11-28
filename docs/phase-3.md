@@ -765,7 +765,9 @@ that session had moved on and never checked its inbox again.
    minutes after waking from sleep on 11-27 lost the reminder DM, the
    expiry's thread line and DM edit, and the stuck DM, so I had no Release
    button until it was requeued. The broker's own state was right
-   throughout; only Slack missed it. Follow-up: [#105](https://github.com/nickmagruder/agent-bus/issues/105).
+   throughout; only Slack missed it. Follow-up: [#105](https://github.com/nickmagruder/agent-bus/issues/105),
+   fixed in 0.23.0: network failures are retried for up to 24 h, and DM
+   edits go through the outbox (which also closes #97).
 2. **Timers fire late after sleep, on catch-up.** The broker doesn't run
    while the machine sleeps. A brief wake at 1:14 AM on 11-26 ran the
    expiry, and the machine slept again mid-tick, before the stuck check in

@@ -46,6 +46,8 @@ export class FakeSlack implements SlackApi {
   readonly updates: { channel: string; ts: string; text: string; blocks?: unknown[] }[] = [];
 
   async updateMessage(channel: string, ts: string, text: string, blocks?: unknown[]) {
+    const failure = this.failures.shift();
+    if (failure) throw failure;
     this.updates.push({ channel, ts, text, ...(blocks ? { blocks } : {}) });
   }
 }

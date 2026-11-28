@@ -51,7 +51,9 @@ talks to one Slack workspace, and answers only to one Slack user.
   to `POST /hook`, so pings happen even when the agent doesn't think to send
   one.
 - **SQLite** (`node:sqlite`) keeps sessions, inboxes, questions, the outgoing
-  post queue and an append-only audit log, so nothing is lost on a restart.
+  post queue (posts and edits of sent messages) and an append-only audit
+  log, so nothing is lost on a restart. A post or edit that hits a network
+  failure is retried for up to 24 hours, backing off to every 5 minutes.
 - **Slack layout:** one thread per session in `#proj-<project>` (or
   `#agents` when the bot isn't in that channel); urgent items DM me.
 
@@ -457,6 +459,29 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.23.0 (2026-11-28)
+
+- **Posts and edits survive network outages**
+  ([#105](https://github.com/nickmagruder/agent-bus/issues/105)): a Slack
+  call that gets no answer (offline, DNS, a timeout) or a Slack server
+  error (HTTP 5xx) no longer fails after five tries. The post stays queued
+  and is retried with a backoff that doubles from 1 s to a 5-minute cap,
+  and lanes waiting on the network try again as soon as any post gets
+  through. It fails only after 24 hours of failing, counted from its first
+  network failure, so time asleep doesn't count. Errors Slack itself
+  returns keep their own limit, whatever came before: permanent ones fail
+  at once, others after five tries, as do unexpected errors. A post Slack
+  accepted but the broker couldn't record fails rather than posting again.
+- **DM edits go through the outbox**
+  ([#105](https://github.com/nickmagruder/agent-bus/issues/105),
+  [#97](https://github.com/nickmagruder/agent-bus/issues/97)): the
+  Approved, Expired, Released and similar outcomes on question, task, flag
+  and lease DMs are queued in the same transaction as the change they show,
+  sent after it commits, retried like posts and kept across a restart. A
+  newer edit of the same message replaces one still waiting, and one that
+  arrives mid-send goes out next. Schema v11 adds `outbox.edit_ts` and
+  `outbox.failing_since`.
 
 ### 0.22.4 (2026-11-27)
 

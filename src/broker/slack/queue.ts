@@ -1,16 +1,23 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { errorMessage, type Logger } from '../log.ts';
 import type { OutboxRecord, Store } from '../store.ts';
-import { classifySlackError, type SlackApi } from './api.ts';
+import { classifySlackError, SlackSendError, type SlackApi } from './api.ts';
 import type { ChannelDirectory } from './directory.ts';
 
 export interface PostQueueOptions {
   /** Gap between posts to one target; Slack allows about 1 message/s per channel. */
   minIntervalMs?: number;
-  /** Attempts before a post that keeps failing transiently is given up. */
+  /** Attempts before a post Slack keeps answering with a transient error is given up. */
   maxAttempts?: number;
-  /** First retry delay after a transient failure; doubles each time. */
+  /** First retry delay after a failure; doubles each time. */
   backoffMs?: number;
+  /** The longest retry delay (#105). */
+  maxBackoffMs?: number;
+  /**
+   * A post still unsent this long after it was queued is given up when the
+   * network fails again (#105): a day-old reminder confuses more than it helps.
+   */
+  maxAgeMs?: number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   now?: () => number;
   log: Logger;
@@ -19,18 +26,36 @@ export interface PostQueueOptions {
 const defaultSleep = (ms: number, signal: AbortSignal) =>
   delay(ms, undefined, { signal }).catch(() => undefined);
 
+/** Retry limits (#105). */
+export const QUEUE_RETRY = {
+  maxAttempts: 5,
+  backoffMs: 1000,
+  maxBackoffMs: 5 * 60_000,
+  maxAgeMs: 24 * 60 * 60_000,
+};
+
 /**
- * Sends outbox posts to Slack: one lane per target, in order, paced and
- * retried. The outbox is in SQLite, so queued posts survive a restart
- * (delivery is at-least-once: a crash between send and mark can repeat one).
+ * Sends outbox posts and edits to Slack: one lane per target, in order,
+ * paced and retried. The outbox is in SQLite, so queued posts survive a
+ * restart (delivery is at-least-once: a crash between send and mark can
+ * repeat one).
+ *
+ * Failures (#105): a permanent Slack error fails the post at once; one Slack
+ * answers with but may pass is tried `maxAttempts` times; a network failure
+ * (no answer) is retried with a capped backoff until the post is `maxAgeMs`
+ * old. A lane backing off wakes early when any other lane gets through.
  */
 export class PostQueue {
   private readonly lanes = new Map<string, Promise<void>>();
   private readonly lastSent = new Map<string, number>();
   private readonly abort = new AbortController();
+  /** Aborted (and replaced) when a send succeeds, to wake lanes backing off. */
+  private wake = new AbortController();
   private readonly minIntervalMs: number;
   private readonly maxAttempts: number;
   private readonly backoffMs: number;
+  private readonly maxBackoffMs: number;
+  private readonly maxAgeMs: number;
   private readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
   private readonly now: () => number;
   private readonly log: Logger;
@@ -43,8 +68,10 @@ export class PostQueue {
     this.api = api;
     this.directory = directory;
     this.minIntervalMs = options.minIntervalMs ?? 1100;
-    this.maxAttempts = options.maxAttempts ?? 5;
-    this.backoffMs = options.backoffMs ?? 1000;
+    this.maxAttempts = options.maxAttempts ?? QUEUE_RETRY.maxAttempts;
+    this.backoffMs = options.backoffMs ?? QUEUE_RETRY.backoffMs;
+    this.maxBackoffMs = options.maxBackoffMs ?? QUEUE_RETRY.maxBackoffMs;
+    this.maxAgeMs = options.maxAgeMs ?? QUEUE_RETRY.maxAgeMs;
     this.sleep = options.sleep ?? defaultSleep;
     this.now = options.now ?? Date.now;
     this.log = options.log;
@@ -84,7 +111,10 @@ export class PostQueue {
   }
 
   private async runLane(target: string): Promise<void> {
+    // For the post at the head of the lane: Slack-answered errors (capped),
+    // and all failures (for the backoff).
     let transientFailures = 0;
+    let failures = 0;
     for (;;) {
       if (this.abort.signal.aborted) return;
       const post = this.store.nextQueued(target);
@@ -97,6 +127,10 @@ export class PostQueue {
       try {
         await this.deliver(post);
         transientFailures = 0;
+        failures = 0;
+        // Slack is reachable: lanes backing off after network failures try again now.
+        this.wake.abort();
+        this.wake = new AbortController();
       } catch (raw) {
         const error = classifySlackError(raw);
         if (error.kind === 'rate_limited') {
@@ -110,9 +144,14 @@ export class PostQueue {
           await this.sleep(Math.max(error.retryAfterMs, this.minIntervalMs), this.abort.signal);
           continue;
         }
-        transientFailures++;
-        const final = error.kind === 'permanent' || transientFailures >= this.maxAttempts;
-        this.store.markAttemptFailed(post.id, error.message, final);
+        const network = error.kind === 'network';
+        failures++;
+        if (error.kind === 'transient') transientFailures++;
+        const final =
+          error.kind === 'permanent' ||
+          (error.kind === 'transient' && transientFailures >= this.maxAttempts) ||
+          (network && this.outageTooLong(post));
+        this.store.markAttemptFailed(post.id, error.message, final, network);
         this.log(final ? 'error' : 'warn', 'Slack post failed', {
           target,
           postId: post.id,
@@ -126,8 +165,17 @@ export class PostQueue {
             data: { postId: post.id, target, error: error.message },
           });
           transientFailures = 0;
+          failures = 0;
         } else {
-          await this.sleep(this.backoffMs * 2 ** (transientFailures - 1), this.abort.signal);
+          const backoff = Math.min(
+            this.backoffMs * 2 ** Math.min(failures - 1, 30),
+            this.maxBackoffMs,
+          );
+          // Only a network wait ends early when another lane gets through.
+          const signal = network
+            ? AbortSignal.any([this.abort.signal, this.wake.signal])
+            : this.abort.signal;
+          await this.sleep(backoff, signal);
         }
       } finally {
         this.lastSent.set(target, this.now());
@@ -135,7 +183,40 @@ export class PostQueue {
     }
   }
 
+  /** Failing on the network for `maxAgeMs` (time asleep before the first failure doesn't count). */
+  private outageTooLong(post: OutboxRecord): boolean {
+    if (post.failingSince === null) return false;
+    return this.now() - Date.parse(post.failingSince) >= this.maxAgeMs;
+  }
+
+  /**
+   * Store work after Slack accepted the call. If it throws, the post must not
+   * be retried (that would post it again): it fails with a clear error.
+   */
+  private record(work: () => void): void {
+    try {
+      this.store.transaction(work);
+    } catch (error) {
+      throw new SlackSendError(
+        'permanent',
+        `sent to Slack, but recording it failed: ${errorMessage(error)}`,
+      );
+    }
+  }
+
   private async deliver(post: OutboxRecord): Promise<void> {
+    if (post.editTs !== null) {
+      await this.api.updateMessage(post.target, post.editTs, post.text, post.blocks ?? undefined);
+      this.record(() => {
+        // A newer edit replaced the text mid-send: leave it queued to go next.
+        if (!this.store.markEdited(post.id, post)) return;
+        this.store.appendEvent({
+          kind: 'post.edited',
+          data: { postId: post.id, channel: post.target, ts: post.editTs },
+        });
+      });
+      return;
+    }
     const session = post.sessionId ? this.store.getSession(post.sessionId) : undefined;
     const sessionThread = post.inThread && session?.threadTs ? session : undefined;
     // A reply under another post (a task's thread). If that post failed for
@@ -168,7 +249,7 @@ export class PostQueue {
       ...(post.blocks ? { blocks: post.blocks } : {}),
     });
 
-    this.store.transaction(() => {
+    this.record(() => {
       this.store.markSent(post.id, result.channel, result.ts);
       this.store.linkTaskThread(post.id, result.channel, result.ts);
       if (post.inThread && session && !session.threadTs) {
