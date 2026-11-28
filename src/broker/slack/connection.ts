@@ -2,6 +2,16 @@ import { App, LogLevel, SocketModeReceiver } from '@slack/bolt';
 import type { Logger } from '../log.ts';
 import type { Store } from '../store.ts';
 
+/** Socket Mode client settings (#106). */
+export const SOCKET_MODE = {
+  /**
+   * How long the client waits for Slack's pong before dropping the link and
+   * reconnecting. Slack's default, 5 s, dropped it every minute or so on a
+   * flaky network, and clicks made during a drop are lost.
+   */
+  clientPingTimeoutMs: 15_000,
+};
+
 export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 
 export interface SlackConnection {
@@ -25,7 +35,11 @@ export function createSlackConnection(options: {
   log: Logger;
 }): SlackConnection {
   const logger = boltLogger(options.log);
-  const receiver = new SocketModeReceiver({ appToken: options.appToken, logger });
+  const receiver = new SocketModeReceiver({
+    appToken: options.appToken,
+    logger,
+    clientPingTimeout: SOCKET_MODE.clientPingTimeoutMs,
+  });
   const app = new App({ token: options.botToken, receiver, logger });
   let state: ConnectionState = 'disconnected';
 

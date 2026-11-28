@@ -783,7 +783,9 @@ that session had moved on and never checked its inbox again.
    six times on ping timeouts ("A pong wasn't received… 5000ms") and came
    back within seconds each time, then once more at 4:46 PM. The Release
    that landed came at 5:41 PM.
-   Follow-up: [#106](https://github.com/nickmagruder/agent-bus/issues/106).
+   Follow-up: [#106](https://github.com/nickmagruder/agent-bus/issues/106),
+   fixed in 0.22.4: a watchdog DMs Nick and restarts the broker after 5
+   minutes off `connected`, and the ping timeout is 15 s.
 4. **Codex waits silently on its own tool-approval prompt.** The first time
    Codex used `create_task` it sat on the app's approval prompt for 40
    minutes (12:26–1:06 PM on 11-25) while Nick was away. The broker doesn't

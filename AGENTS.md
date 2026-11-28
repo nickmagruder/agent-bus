@@ -92,6 +92,8 @@ into tracked files.
 - `src/shared/hook-protocol.ts`: `/hook` request schema and size limits
 - `src/broker/store.ts`: SQLite (`node:sqlite`) sessions, append-only audit log, outbox, migrations
 - `src/broker/slack/`: Socket Mode connection, Web API adapter, channel directory, post queue
+- `src/broker/slack/watchdog.ts`: Socket Mode watchdog: 5 min off `connected` → DM, exit 1 for the launcher to restart; "back" DM after (#106)
+- `src/broker/shutdown.ts`: the broker's exit path: 0 stops the launcher, 1 restarts it; forced exit after 15 s
 - Held approval DMs (`held_pings`, `APPROVAL` in `src/broker/service.ts`): 60 s grace, cancelled when the session moves on; flushed by the broker every 10 s
 - `src/broker/held-calls.ts`: held `ask_human`/`wait_for_reply` calls, so a cancel (or broker stop) can end them
 - `src/broker/heartbeat.ts`: progress notifications for long tool calls

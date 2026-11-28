@@ -41,7 +41,9 @@ talks to one Slack workspace, and answers only to one Slack user.
 ```
 
 - **One broker process** holds the only Slack connection (Socket Mode via
-  Bolt; outbound WebSocket, so no public URL) and reconnects on its own.
+  Bolt; outbound WebSocket, so no public URL) and reconnects on its own. If
+  it stays off `connected` for 5 minutes, the broker DMs me and exits so the
+  login launcher restarts it, then DMs again once the link is back.
 - **Agents call MCP tools** at `http://127.0.0.1:47823/mcp` (stateless
   streamable HTTP). Each platform has its own bearer token, which tells the
   broker who's calling.
@@ -391,6 +393,11 @@ Held tools (`ask_human`, `wait_for_reply`) wait as they would for an agent.
 - At sign-in the broker can take ~40 s to start listening. An app that starts
   with Windows may show agent-bus as failed (`ECONNREFUSED`): reconnect it
   from the app's MCP menu.
+- `/health` shows `slack: reconnecting` for long, or a ":warning: … no Slack
+  link for clicks and replies" DM arrived: buttons and replies made while
+  it's down are lost. The broker restarts itself after 5 minutes (the
+  launcher must be running it); a broker started by hand just exits, so
+  start it again.
 
 ## Development
 
@@ -431,7 +438,7 @@ src/
   shared/   config (zod), guard (Host/Origin/bearer), hook protocol, session IDs, Slack text escaping
   broker/   main.ts, service (rules, routing, caps), mcp (tools), http (/mcp, /hook, /health),
             store (SQLite), inbox, questions, heartbeat, log
-  broker/slack/  Socket Mode connection, Web API adapter, channel directory, post queue, inbound
+  broker/slack/  Socket Mode connection and watchdog, Web API adapter, channel directory, post queue, inbound
   cli/      hook.ts and hook-extract.ts (the hook command)
 scripts/    install-task.ps1 (Task Scheduler), run-broker.ps1 (launcher with restarts),
             commit-msg.ts, commit-msg-rules.ts and gitleaks-staged.sh (git hooks)
@@ -450,6 +457,21 @@ This is a personal tool, but issues and suggestions are welcome: open a
 are made.
 
 ## Changelog
+
+### 0.22.4 (2026-11-27)
+
+- **Recovers when Slack's link for clicks and replies sticks**
+  ([#106](https://github.com/nickmagruder/agent-bus/issues/106)): if Socket
+  Mode isn't `connected` for 5 minutes (after a network loss it could stay
+  on `reconnecting` for good while posts still went out), the broker DMs me
+  that clicks and replies aren't arriving, then exits with code 1 so the
+  launcher restarts it. One DM per outage, even across restarts (sent again
+  if the first one failed to post), and one more when it's back, with the
+  time span whose clicks were lost. The
+  client's ping timeout goes from Slack's 5 s to 15 s, so a slow network
+  drops the link less often. A shutdown now exits after 15 s even if Slack
+  never finishes closing, with the code it was asked for, so a stuck
+  restart can't exit 0 and stop the launcher.
 
 ### 0.22.3 (2026-11-27)
 
