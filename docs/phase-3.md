@@ -700,14 +700,16 @@ shortened test values.
 | 7   | Does the Copilot app fire hooks?                                                                                         | No: zero `hook` events from Copilot. It registers through MCP only, so Q13 and Q22 (pool tasks only, explicit `claim_lease`) stand.                                                                                                                                                                                                                                                                                                                                                                                |
 | 8   | Codex treats agent text as untrusted and Nick's as his, from `structuredContent`                                         | Passed in runs 1 and 2.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | 9   | Approval reminder (`t-f8a8e7`, 2 h)                                                                                      | Fired on time: 2:23 PM on 11-25 (`task.reminded`). The reminder DM was lost (finding 1).                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| 10  | Approval expiry (`t-f8a8e7`, 8 h)                                                                                        | Due 8:23 PM on 11-25; ran at 1:14 AM on 11-26 when the machine woke (finding 2): `approval = expired`, `state = canceled`, by `agent-bus`, and the creator's session thread got the notice. The task-thread line and the DM edit were lost (finding 1).                                                                                                                                                                                                                                                            |
-| 11  | Stuck flag (`t-e3f29b`, holder silent 4 h)                                                                               | Due about 5:12 PM on 11-25; raised at 10:18 PM on 11-26 (finding 2): `stuck_at`, `task.flagged`, ":warning: Flagged as stuck" in the task thread. The DM with Cancel and Release was lost (finding 1); it was requeued by hand and sent at 11:30 AM on 11-27.                                                                                                                                                                                                                                                      |
+| 10  | Approval expiry (`t-f8a8e7`, 8 h)                                                                                        | Due 8:23 PM on 11-25; ran at 1:14 AM on 11-26 when the machine woke (finding 2): `approval = expired`, `state = canceled`, by `agent-bus`, and the creator's session-thread notice was queued (posted to Slack at 11:25 AM on 11-27, finding 2). The task-thread line and the DM edit were lost (finding 1).                                                                                                                                                                                                       |
+| 11  | Stuck flag (`t-e3f29b`, holder silent 4 h)                                                                               | Due about 5:12 PM on 11-25; raised at 10:18 PM on 11-26 (finding 2): `stuck_at`, `task.flagged`, ":warning: Flagged as stuck" in the task thread (posted at 11:25 AM on 11-27). The DM with Cancel and Release was lost (finding 1); it was requeued by hand and sent at 11:30 AM on 11-27.                                                                                                                                                                                                                        |
 | 12  | Release from Slack                                                                                                       | Passed at 5:41 PM on 11-27, after at least one click was lost to finding 3: `state = submitted`, `holder` null, `open_since` reset, stuck flag cleared, `task.state` by `nick`, and ":arrows_counterclockwise: Given back by `nick`; open to claim again." in the task thread. The DM shows "Released: open to claim again.", but its text now reads "held by its holder… no sign of its holder since" the release time: once the holder is cleared, the old holder's name and last-seen time are lost (cosmetic). |
-| 13  | Daily digest with a Tasks section                                                                                        | Passed: both digests (slots 11-26 and 11-27, posted late, finding 2) list tasks opened, finished and open, with `t-e3f29b` marked stuck. No Leases section (no leases held).                                                                                                                                                                                                                                                                                                                                       |
+| 13  | Daily digest with a Tasks section                                                                                        | Passed: both digests posted at 11:25 AM on 11-27 (finding 2). The 11-26 one lists tasks opened, finished and open; the 11-27 one lists `t-e3f29b`, marked stuck. No Leases section (no leases held).                                                                                                                                                                                                                                                                                                               |
 
 The checklist's "refused task (caps or hop limit)" was seen live as the
 same-platform and loop refusals (checks 4 and 5); the caps and hop limit
-themselves are covered by unit tests, not hit live.
+themselves are covered by unit tests, not hit live. One task-inbox pointer
+stayed undelivered: the creator's completed notice for `t-447a6f`, since
+that session had moved on and never checked its inbox again.
 
 ### Findings
 
@@ -725,19 +727,21 @@ themselves are covered by unit tests, not hit live.
    11-26 digest). The 11-27 digest posted at 11:25 AM instead of 8:00 AM.
    Catch-up works as designed (missed ticks run on wake), so this is
    expected for a broker on a laptop; noted, not filed.
-3. **Socket Mode can stay stuck reconnecting after a network loss.** On
-   11-27 the Web API worked (posts sent) while Socket Mode showed
-   `reconnecting` in `/health`, so Nick's first Release click (about
-   11:38 AM) never reached the broker and nothing recorded it. A broker
-   restart (`install-task.ps1 -Restart`) fixed it. Clicks and replies are
-   lost silently while it lasts. After the restart, on a flaky network,
-   the connection kept dropping on ping timeouts ("A pong wasn't
-   received… 5000ms") and reconnecting within seconds, every minute or
-   so. The Release that landed came at 5:41 PM.
+3. **Socket Mode can stay stuck reconnecting after a network loss.** It
+   went to `reconnecting` at 1:36 PM on 11-25 and never recovered by
+   itself, through both sleeps and wakes, for about 46 hours, until a
+   broker restart (`install-task.ps1 -Restart`) at 11:40 AM on 11-27.
+   Meanwhile the Web API worked (posts sent), so Nick's first Release click
+   (about 11:38 AM on 11-27) never reached the broker and nothing recorded
+   it. Clicks and replies are lost silently while it lasts. For about five
+   minutes after the restart, on a flaky network, the connection dropped
+   six times on ping timeouts ("A pong wasn't received… 5000ms") and came
+   back within seconds each time, then once more at 4:46 PM. The Release
+   that landed came at 5:41 PM.
    Follow-up: [#106](https://github.com/nickmagruder/agent-bus/issues/106).
 4. **Codex waits silently on its own tool-approval prompt.** The first time
    Codex used `create_task` it sat on the app's approval prompt for 40
-   minutes (20:26–21:06Z on 11-25) while Nick was away. The broker doesn't
+   minutes (12:26–1:06 PM on 11-25) while Nick was away. The broker doesn't
    ping for prompts on its own tools (`PermissionRequest` → `own_tool`), so
    Slack showed nothing. Codex asks once per new agent-bus tool, by
    design. Follow-up:
