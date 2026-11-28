@@ -336,6 +336,52 @@ describe('Break from Slack', () => {
     expect(prompt('claude', 'app-1').context ?? '').not.toContain('broke your lease');
   });
 
+  it('tells a broken holder at its next claim instead of re-taking the lease (#102)', () => {
+    const first = start('claude', 'app-1');
+    start('codex', 'app-2');
+    const [dm] = dms();
+    leases.breakByButton(dm ? (breakBlock(dm) ?? '') : '', USER_ID);
+    // SessionStart again (/clear) before any prompt: told, and nothing re-claimed.
+    const again = start('claude', 'app-1');
+    expect(again.context).toContain('Nick broke your lease on code-notes');
+    expect(again.context).toContain("It wasn't re-claimed");
+    expect(leases.current('code-notes')).toBeUndefined();
+    expect(events('lease.claimed')).toHaveLength(1);
+    // Told once, shared with the prompt: the prompt adds nothing, and the
+    // next claim takes the free lease as usual.
+    expect(prompt('claude', 'app-1').context ?? '').not.toContain('broke your lease');
+    expect(start('claude', 'app-1').context).toContain('you hold the lease on code-notes');
+    expect(leases.current('code-notes')?.holder).toBe(first.id);
+  });
+
+  it('names the new holder when the broken holder claims after another took it', () => {
+    const first = sessionOf(start('claude', 'app-1').id);
+    const second = sessionOf(start('codex', 'app-2').id);
+    const [dm] = dms();
+    leases.breakByButton(dm ? (breakBlock(dm) ?? '') : '', USER_ID);
+    expect(leases.claim(second, 'code-notes', 'hook').held).toBe(true);
+    const outcome = leases.claim(first, 'code-notes', 'tool');
+    expect(outcome).toMatchObject({ held: false, broken: expect.any(String) as string });
+    expect(outcome.lease?.holder).toBe(second.id);
+    // The break notice stands in for the contention DM this time.
+    expect(dms()).toHaveLength(1);
+    // Once told, a claim is an ordinary contention.
+    expect(leases.claim(first, 'code-notes', 'tool')).toMatchObject({
+      held: false,
+      lease: { holder: second.id },
+    });
+    expect('broken' in leases.claim(first, 'code-notes', 'tool')).toBe(false);
+  });
+
+  it('counts a prompt as telling: a later claim re-takes a free lease', () => {
+    const first = start('claude', 'app-1');
+    start('codex', 'app-2');
+    const [dm] = dms();
+    leases.breakByButton(dm ? (breakBlock(dm) ?? '') : '', USER_ID);
+    expect(prompt('claude', 'app-1').context).toContain('Nick broke your lease');
+    expect(leases.claim(sessionOf(first.id), 'code-notes', 'tool')).toMatchObject({ held: true });
+  });
+
   it('edits a DM already sent to Slack', () => {
     start('claude', 'app-1');
     start('codex', 'app-2');
@@ -453,6 +499,72 @@ describe('the lease tools over MCP', () => {
 
     const released = await call('release_lease', { key: registered.key });
     expect(released.structuredContent).toEqual({ repo: 'vault', released: true });
+    await client.close();
+  });
+
+  /** A Copilot session holding vault's lease, broken by Nick after a Claude session met it. */
+  function brokenCopilot() {
+    const registered = service.register({
+      platform: 'copilot',
+      purpose: 'Notes',
+      project: 'vault',
+    });
+    leases.claim(registered.session, 'vault', 'tool');
+    start('claude', 'app-1', 'vault');
+    const [dm] = dms();
+    expect(leases.breakByButton(dm ? (breakBlock(dm) ?? '') : '', USER_ID)).toBe('broken');
+    return registered;
+  }
+
+  it('tells a broken Copilot holder at its next claim_lease, once, without re-taking (#102)', async () => {
+    const registered = brokenCopilot();
+    const client = await connect('copilot');
+    const claim = () =>
+      client.callTool({
+        name: 'claim_lease',
+        arguments: { session: registered.session.id, key: registered.key },
+      });
+    const told = await claim();
+    expect(told.structuredContent).toMatchObject({ repo: 'vault', held: false, broken: true });
+    // Codex and Copilot read only structuredContent (#64).
+    expect(JSON.stringify(told.structuredContent)).toContain('Nick broke your lease on vault');
+    expect(leases.current('vault')).toBeUndefined();
+    // Told once: the next claim takes the free lease.
+    const again = await claim();
+    expect(again.structuredContent).toMatchObject({ held: true, holder: registered.session.id });
+    expect(JSON.stringify(again.structuredContent)).not.toContain('broke your lease');
+    await client.close();
+  });
+
+  it('hands the broken-lease notice to a keyed check_inbox, once (#102)', async () => {
+    const registered = brokenCopilot();
+    const client = await connect('copilot');
+    const inboxCall = (key?: string) =>
+      client.callTool({
+        name: 'check_inbox',
+        arguments: { session: registered.session.id, ...(key ? { key } : {}) },
+      });
+    // Without the key: not handed over (anyone may know a session ID).
+    expect(JSON.stringify(await inboxCall())).not.toContain('broke your lease');
+    // Nor with a wrong key, which falls back to the keyless answer.
+    const wrong = await inboxCall(`abk_${'x'.repeat(43)}`);
+    expect(wrong.structuredContent).toMatchObject({ keyRejected: true });
+    expect(JSON.stringify(wrong)).not.toContain('broke your lease');
+    const told = await inboxCall(registered.key);
+    expect(told.structuredContent).toMatchObject({
+      leaseBroken: { from: 'agent-bus', trust: 'agent-bus' },
+    });
+    expect(JSON.stringify(told.structuredContent)).toContain('Nick broke your lease on vault');
+    expect(JSON.stringify(told.content)).toContain('Nick broke your lease on vault');
+    expect(JSON.stringify((await inboxCall(registered.key)).structuredContent)).not.toContain(
+      'leaseBroken',
+    );
+    // Already told, so a claim re-takes the free lease.
+    const claimed = await client.callTool({
+      name: 'claim_lease',
+      arguments: { session: registered.session.id, key: registered.key },
+    });
+    expect(claimed.structuredContent).toMatchObject({ held: true });
     await client.close();
   });
 

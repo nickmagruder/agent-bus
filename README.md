@@ -63,7 +63,7 @@ and decisions) is in [docs/design.md](docs/design.md).
 | 0     | Spikes: MCP, hooks and timeouts on each app                                            | [Done](docs/spikes/phase-0.md) |
 | 1     | Outbound pings, hook pings, start at login; verified on Claude Code, Codex and Copilot | [Done](docs/phase-1.md)        |
 | 2     | Answering from Slack: inbox, `ask_human` with buttons, reminders and expiry            | [Done](docs/phase-2.md)        |
-| 3     | Cross-platform task handoffs between agents                                            | [In progress](docs/phase-3.md) |
+| 3     | Cross-platform task handoffs between agents                                            | [Done](docs/phase-3.md)        |
 | 4     | Approving lower-risk actions from Slack                                                | Planned                        |
 | 5     | CLI agents, true push, optional A2A endpoint                                           | Later                          |
 
@@ -80,11 +80,11 @@ and decisions) is in [docs/design.md](docs/design.md).
 | `claim_task(session, key, task)`                                                  | Takes on an approved task named for the session or in its pool; the loser of a race is told who has it (Phase 3)                                                                                                               |
 | `update_task(session, key, task, state?, note?, result_text?, links?)`            | The holder notes progress, asks its creator (`input-required`), completes with a result (`https:` links only), fails or gives it back; a named target rejects; the creator cancels (Phase 3)                                   |
 | `notify_human(session, text, urgency)`                                            | `urgent` → DM to me, `normal` → the session's thread, `fyi` → the daily digest in `#agents` (08:00 local). Per-session and per-platform hourly caps stop loops                                                                 |
-| `check_inbox(session, key?)`                                                      | Returns my Slack replies to the session and the outcomes of its questions; with the key, also task offers, messages and notices from other agents, in their own labelled list                                                  |
+| `check_inbox(session, key?)`                                                      | Returns my Slack replies to the session and the outcomes of its questions; with the key, also task offers, messages and notices from other agents, in their own labelled list, and news that I broke its lease                 |
 | `ask_human(session, question, options?, default_action, timeout_minutes?)`        | DMs me the question with buttons for up to five options (a reply in its thread works too) and waits up to 150 s (default), then returns `pending` with a question ID. A pointer goes in the session thread                     |
 | `wait_for_reply(session, question_id?, key?, task?)`                              | Waits again, for one question, for anything new, or (with the key) for task items, optionally about one task                                                                                                                   |
 | `send_message(session, key, task, body)`                                          | A message on a task between its creator and the session working on it, to the other's inbox and the task's thread (Phase 3)                                                                                                    |
-| `claim_lease(session, key, repo?)`, `release_lease(session, key, repo?)`          | Claims (or keeps) the lease on a leased repo, default the session's project, or lets it go; a second claimant is told who holds it (Phase 3)                                                                                   |
+| `claim_lease(session, key, repo?)`, `release_lease(session, key, repo?)`          | Claims (or keeps) the lease on a leased repo, default the session's project, or lets it go; a second claimant is told who holds it, and a holder whose lease I broke is told that instead (Phase 3)                            |
 
 Questions get one reminder at 15 minutes. At the timeout (default 60) the
 question expires and the agent takes its own `default_action`. The first
@@ -451,7 +451,7 @@ are made.
 
 ## Changelog
 
-### 0.23.0 (2026-11-25)
+### 0.22.3 (2026-11-27)
 
 - **A session's leases end with it**
   ([#100](https://github.com/nickmagruder/agent-bus/issues/100)): a
@@ -462,6 +462,30 @@ are made.
   `SessionEnd` with a 3 s timeout (see Setup); without it, and on Copilot,
   leases lapse as before. A session that comes back after ending (Codex)
   claims again at its next prompt and is told.
+
+### 0.22.2 (2026-11-27)
+
+- **Copilot hears about a broken lease**
+  ([#102](https://github.com/nickmagruder/agent-bus/issues/102)): after I
+  break a lease, the old holder is told once by whichever comes first: its
+  next prompt (Claude Code, Codex), its next claim, or `check_inbox` with
+  its key. A claim that tells it doesn't re-take the lease, so a holder
+  that missed the news can't silently take it back; claiming again
+  afterwards works as before.
+
+### 0.22.1 (2026-11-27)
+
+- **Phase 3 checked live** ([#63](https://github.com/nickmagruder/agent-bus/issues/63)):
+  a Claude Code → Codex handoff with a question, a Copilot pool claim,
+  task-thread replies, cancel, reminder, expiry, the stuck flag with
+  Release, refusals and the digest's Tasks section, recorded in
+  [docs/phase-3.md](docs/phase-3.md) ("Live check"). Phase 3 is done.
+- Follow-ups from it: Slack posts and edits lost in network outages
+  ([#105](https://github.com/nickmagruder/agent-bus/issues/105)), Socket
+  Mode stuck reconnecting
+  ([#106](https://github.com/nickmagruder/agent-bus/issues/106)), and no
+  ping while Codex waits on approval for an agent-bus tool
+  ([#107](https://github.com/nickmagruder/agent-bus/issues/107)).
 
 ### 0.22.0 (2026-11-23)
 
