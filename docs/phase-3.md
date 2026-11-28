@@ -677,7 +677,36 @@ After the [#99](https://github.com/nickmagruder/agent-bus/pull/99) review:
   and prompt context is still unverified live, #82). A Break DM isn't
   edited when the lease is released or lapses; a click then changes
   nothing, or breaks a re-claim by the same holder, which the DM names.
-  A clean session exit doesn't release its lease: it lapses within 2 h.
+  A clean session exit doesn't release its lease: it lapses within 2 h
+  (fixed below, #100).
+
+On session end ([#100](https://github.com/nickmagruder/agent-bus/issues/100),
+0.22.3, 2026-11-27):
+
+- **Both hook apps send `SessionEnd`:** Claude Code on exit, `/clear`,
+  `/resume` and logout (1.5 s budget by default); Codex when a conversation
+  closes, is archived or sits idle 30 min, never for subagents (1 s
+  default, 3 s max; `reason` is always `other`). Both are advisory: the
+  output is ignored, and the hook can't block anything.
+- **The broker releases every lease the session holds** (audited
+  `lease.released` with `via: session_end`, hook action `released`) and
+  drops its held approval DMs. It looks the session up without touching it,
+  and a `SessionEnd` for an app session it never saw creates nothing.
+- **A session that comes back re-claims at its next prompt** (after the
+  PR 104 review): Codex ends a conversation idle 30 min, which would
+  otherwise cut its lease from 2 h idle (Q22) to 30 min without the agent
+  knowing. The first `UserPromptSubmit` after a `session_end` release
+  claims again (`lease.resumed`, once per release) and tells the agent it
+  holds the lease, or who took it meanwhile. A SessionStart that already
+  re-claimed (Claude Code `/clear`, `/resume`) leaves the prompt alone;
+  `release_lease` never triggers it.
+- **Ordering:** Claude Code runs SessionEnd before the next SessionStart,
+  and the broker handles hooks in arrival order. If a SessionStart ever
+  landed first, its claim would be released, and the next prompt re-claims.
+- **Wiring** is in clankers `settings/agent-bus/` (a separate clankers PR
+  that should land with this one), with a 3 s timeout; the hook CLI waits
+  up to 2 s, and Codex's 1 s default would cut it short. Without the hook,
+  and on Copilot, a lease still lapses after 2 h idle.
 
 After the clankers#57 review
 ([#102](https://github.com/nickmagruder/agent-bus/issues/102), 0.22.2,

@@ -88,9 +88,65 @@ export class Leases implements LeaseHooks {
     return claimText(this.claim(session, session.project, 'hook'));
   }
 
-  /** A prompt: once, the news that I broke this session's lease. */
+  /**
+   * A prompt: once, the news that I broke this session's lease; and for a
+   * session whose lease SessionEnd released, a fresh claim (#100).
+   */
   atPrompt(session: SessionRecord): string | undefined {
-    return this.takeBrokenNotice(session);
+    const parts = [this.takeBrokenNotice(session), this.reclaimAfterEnd(session)];
+    const present = parts.filter((part): part is string => Boolean(part));
+    return present.length > 0 ? present.join('\n\n') : undefined;
+  }
+
+  /**
+   * Codex ends a conversation that sits idle 30 min (SessionEnd), which
+   * releases its lease, yet the user can come back to it. Its next prompt
+   * claims again, once per release, and tells the agent either way, so it
+   * never edits on a lease it no longer holds without knowing.
+   */
+  private reclaimAfterEnd(session: SessionRecord): string | undefined {
+    const repo = session.project;
+    if (!this.isLeased(repo)) return undefined;
+    return this.store.transaction(() => {
+      const ended = this.store.latestEvent({
+        kind: 'lease.released',
+        sessionId: session.id,
+        dataField: { name: 'via', value: 'session_end' },
+      });
+      if (!ended) return undefined;
+      const since = this.store.db
+        .prepare(
+          `SELECT 1 FROM events WHERE session_id = ? AND id > ?
+             AND kind IN ('lease.claimed', 'lease.renewed', 'lease.resumed')
+             AND json_extract(data, '$.repo') = ?`,
+        )
+        .get(session.id, Number(ended.eventId), repo);
+      if (since) return undefined;
+      const outcome = this.claim(session, repo, 'hook');
+      this.store.appendEvent({
+        kind: 'lease.resumed',
+        platform: session.platform,
+        sessionId: session.id,
+        data: { repo, held: outcome.held },
+      });
+      const lead = `agent-bus: this session ended earlier, which released its lease on ${repo}.`;
+      return `${lead} ${claimText(outcome)}`;
+    });
+  }
+
+  /**
+   * SessionEnd (#100): the session lets go of every lease it holds, live or
+   * lapsed, so the next session needn't wait out the 2 h idle.
+   */
+  atSessionEnd(session: SessionRecord): string[] {
+    return this.store.transaction(() => {
+      const rows = this.store.db
+        .prepare('SELECT repo FROM leases WHERE holder = ? ORDER BY repo')
+        .all(session.id) as Row[];
+      const repos = rows.map((row) => String(row.repo));
+      for (const repo of repos) this.release(session, repo, 'session_end');
+      return repos;
+    });
   }
 
   /** The repo's lease, if it's held and hasn't lapsed. */
@@ -153,7 +209,7 @@ export class Leases implements LeaseHooks {
   }
 
   /** Lets go of a session's own lease; false when it didn't hold it. */
-  release(session: SessionRecord, repo: string): boolean {
+  release(session: SessionRecord, repo: string, via?: 'session_end'): boolean {
     return this.store.transaction(() => {
       const changed = this.store.db
         .prepare('DELETE FROM leases WHERE repo = ? AND holder = ?')
@@ -163,7 +219,7 @@ export class Leases implements LeaseHooks {
         kind: 'lease.released',
         platform: session.platform,
         sessionId: session.id,
-        data: { repo },
+        data: via ? { repo, via } : { repo },
       });
       return true;
     });
