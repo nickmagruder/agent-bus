@@ -24,6 +24,7 @@ import {
 } from './slack/inbound.ts';
 import { Notifier, Questions } from './questions.ts';
 import { PostQueue } from './slack/queue.ts';
+import { SlackWatchdog } from './slack/watchdog.ts';
 import { Store } from './store.ts';
 import { TaskInbox } from './task-inbox.ts';
 import { TaskSlack } from './task-slack.ts';
@@ -35,6 +36,9 @@ import { TaskService } from './tasks.ts';
  * failures exit 1 and are retried.
  */
 export const EXIT_CONFIG = 78;
+
+/** How long a shutdown may take before the process exits regardless. */
+const SHUTDOWN_TIMEOUT_MS = 15_000;
 
 export class PortInUseError extends Error {
   constructor(port: number) {
@@ -67,6 +71,13 @@ export interface BrokerDeps {
   slackApi?: SlackApi;
   /** `null` skips the Socket Mode connection (tests). */
   connection?: SlackConnection | null;
+  /**
+   * Socket Mode stuck off `connected` (#106): the process entry point exits
+   * so the launcher restarts the broker. Unset: logged and DMed only.
+   */
+  onSlackStuck?: () => void;
+  /** Socket Mode watchdog check interval (tests). */
+  watchdogTickMs?: number;
   queueOptions?: Partial<ConstructorParameters<typeof PostQueue>[3]>;
   /** How often held approval DMs are checked (tests shorten it). */
   heldPingTickMs?: number;
@@ -232,6 +243,17 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
           ...deps.digest,
         });
   digest?.start(deps.digest?.tickMs);
+  // Socket Mode stuck reconnecting drops my clicks silently: DM me and restart (#106).
+  const watchdog = connection
+    ? new SlackWatchdog({
+        connection,
+        store,
+        kick: () => queue.kick(),
+        log,
+        onStuck: deps.onSlackStuck,
+      })
+    : undefined;
+  watchdog?.start(deps.watchdogTickMs);
   log('info', 'agent-bus broker listening', { url: `http://127.0.0.1:${http.port}/mcp` });
 
   const server = http;
@@ -249,6 +271,7 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
       taskSlack.stop();
       clearInterval(heldPingTimer);
       digest?.stop();
+      watchdog?.stop();
       // Held calls answer "pending" before their connections close, so an
       // agent isn't left waiting out its tool timeout (it calls
       // wait_for_reply again once the broker is back).
@@ -288,17 +311,26 @@ if (import.meta.main) {
       log('error', 'unhandled rejection', { error: errorMessage(reason) });
       process.exit(1);
     });
-    const broker = await startBroker(config, { log });
-    const shutdown = (signal: string) => {
-      log('info', 'shutting down', { signal });
+    let stopping = false;
+    // Exit 0 stops the launcher; any other code makes it restart the broker.
+    const shutdown = (reason: string, code: 0 | 1 = 0) => {
+      if (stopping) return;
+      stopping = true;
+      log('info', 'shutting down', { reason });
+      // A stuck Socket Mode client may never finish stopping: exit anyway.
+      setTimeout(() => process.exit(code), SHUTDOWN_TIMEOUT_MS).unref();
       broker.stop().then(
-        () => process.exit(0),
+        () => process.exit(code),
         (error: unknown) => {
           log('error', 'shutdown failed', { error: errorMessage(error) });
           process.exit(1);
         },
       );
     };
+    const broker = await startBroker(config, {
+      log,
+      onSlackStuck: () => shutdown('Slack link stuck', 1),
+    });
     process.once('SIGINT', () => shutdown('SIGINT'));
     process.once('SIGTERM', () => shutdown('SIGTERM'));
   } catch (error) {
