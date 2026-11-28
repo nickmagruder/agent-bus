@@ -15,7 +15,7 @@ export const SLACK_WATCHDOG = {
   stuckAfterMs: 5 * 60_000,
 };
 
-/** Audit kind for an outage: `state` is `down` (DM sent) or `back` (link restored). */
+/** Audit kind for an outage: `state` is `down` (DM queued) or `back` (link restored). */
 export const OUTAGE_EVENT = 'slack.outage';
 
 export interface SlackWatchdogOptions {
@@ -30,6 +30,14 @@ export interface SlackWatchdogOptions {
   stuckAfterMs?: number;
 }
 
+/** The newest outage event, kept in memory so connected ticks don't query. */
+interface Outage {
+  state: 'down' | 'back';
+  since: string;
+  /** The "down" DM's outbox row. */
+  post?: number;
+}
+
 export class SlackWatchdog {
   private readonly options: SlackWatchdogOptions;
   private readonly now: () => Date;
@@ -37,6 +45,7 @@ export class SlackWatchdog {
   /** When the link was last seen not connected after being connected (or at start). */
   private downSince: Date | undefined;
   private stuck = false;
+  private outage: Outage | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
 
   constructor(options: SlackWatchdogOptions) {
@@ -45,6 +54,8 @@ export class SlackWatchdog {
     this.stuckAfterMs = options.stuckAfterMs ?? SLACK_WATCHDOG.stuckAfterMs;
     // Startup counts: a link that never connects is as stuck as one that dropped.
     this.downSince = this.now();
+    // An outage DMed before a restart is still open: don't DM it again, and say when it ends.
+    this.outage = readOutage(options.store);
   }
 
   start(tickMs: number = SLACK_WATCHDOG.tickMs): void {
@@ -69,39 +80,48 @@ export class SlackWatchdog {
     this.downSince ??= now;
     if (this.stuck || now.getTime() - this.downSince.getTime() < this.stuckAfterMs) return;
     this.stuck = true;
-    // One DM per outage, across restarts: skip it while the last one is unanswered by a "back".
-    if (store.latestEventOfKind(OUTAGE_EVENT)?.data.state !== 'down') {
-      const since = this.downSince.toISOString();
-      store.transaction(() => {
-        store.enqueue({ target: DM_TARGET, text: downText(since) });
+    const since = this.downSince.toISOString();
+    if (this.needsDownDm()) {
+      // A retry after a failed DM keeps the outage's first start.
+      const outageSince = this.outage?.state === 'down' ? this.outage.since : since;
+      this.outage = store.transaction(() => {
+        const post = store.enqueue({ target: DM_TARGET, text: downText(outageSince) });
         store.appendEvent({
           kind: OUTAGE_EVENT,
-          data: { state: 'down', since, slack: connection.state },
+          data: { state: 'down', since: outageSince, slack: connection.state, post: post.id },
         });
+        return { state: 'down' as const, since: outageSince, post: post.id };
       });
       this.options.kick();
     }
     this.options.log('warn', 'Slack link stuck; restarting the broker', {
       state: connection.state,
-      since: this.downSince.toISOString(),
+      since,
     });
-    store.appendEvent({
-      kind: 'slack.stuck',
-      data: { state: connection.state, since: this.downSince.toISOString() },
-    });
+    store.appendEvent({ kind: 'slack.stuck', data: { state: connection.state, since } });
     this.options.onStuck?.();
+  }
+
+  /**
+   * One "down" DM per outage, across restarts. A DM the queue gave up on
+   * (the Web API failing too) doesn't count: it's queued again.
+   */
+  private needsDownDm(): boolean {
+    if (this.outage?.state !== 'down') return true;
+    if (this.outage.post === undefined) return false;
+    return this.options.store.getPost(this.outage.post)?.state === 'failed';
   }
 
   /** Connected again after a "down" DM (maybe from before a restart): tell me, once. */
   private announceBack(): void {
+    if (this.outage?.state !== 'down') return;
     const { store } = this.options;
-    const last = store.latestEventOfKind(OUTAGE_EVENT);
-    if (last?.data.state !== 'down') return;
-    const since = typeof last.data.since === 'string' ? last.data.since : last.at;
+    const { since } = this.outage;
     const until = this.now().toISOString();
-    store.transaction(() => {
+    this.outage = store.transaction(() => {
       store.enqueue({ target: DM_TARGET, text: backText(since, until) });
       store.appendEvent({ kind: OUTAGE_EVENT, data: { state: 'back', since, until } });
+      return { state: 'back' as const, since };
     });
     this.options.kick();
   }
@@ -115,6 +135,17 @@ export class SlackWatchdog {
       });
     }
   }
+}
+
+function readOutage(store: Store): Outage | undefined {
+  const last = store.latestEventOfKind(OUTAGE_EVENT);
+  if (!last) return undefined;
+  const { state, since, post } = last.data;
+  return {
+    state: state === 'down' ? 'down' : 'back',
+    since: typeof since === 'string' ? since : last.at,
+    ...(typeof post === 'number' ? { post } : {}),
+  };
 }
 
 export function downText(since: string): string {
@@ -132,10 +163,12 @@ export function backText(since: string, until: string): string {
   );
 }
 
-/** A day and time for Slack ("Mon 3:05 PM"). */
+/** A date and time for Slack ("Mon, Nov 23, 3:05 PM"). */
 function when(iso: string): string {
   return new Date(iso).toLocaleString('en-US', {
     weekday: 'short',
+    month: 'short',
+    day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
   });

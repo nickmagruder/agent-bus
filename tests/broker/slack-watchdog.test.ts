@@ -119,9 +119,16 @@ describe('Slack watchdog (#106)', () => {
     expect(dms()).toHaveLength(1);
     expect(dm).toContain('no Slack link for clicks and replies');
     expect(dm).toContain('Restarting the broker');
-    expect(outages()).toEqual([
-      { state: 'down', since: droppedAt.toISOString(), slack: 'reconnecting' },
-    ]);
+    const [down] = outages();
+    expect(outages()).toHaveLength(1);
+    expect(down).toEqual({
+      state: 'down',
+      since: droppedAt.toISOString(),
+      slack: 'reconnecting',
+      post: expect.any(Number) as number,
+    });
+    // Dated, so a DM read days later isn't ambiguous.
+    expect(dm).toMatch(/since [A-Z][a-z]{2}, [A-Z][a-z]{2} \d+, \d+:\d{2}\s[AP]M/);
     expect(warnings).toContain('Slack link stuck; restarting the broker');
     // Still stuck: no second DM or restart request from this process.
     advance(10 * MINUTE);
@@ -195,5 +202,46 @@ describe('Slack watchdog (#106)', () => {
       dog.tick();
     }).not.toThrow();
     expect(dms()).toHaveLength(1);
+  });
+
+  it('queues the "down" DM again after a restart when the first one failed to post', () => {
+    const first = watchdog();
+    const startedAt = now.toISOString();
+    advance(SLACK_WATCHDOG.stuckAfterMs);
+    first.tick();
+    // The Web API was down too: the queue gave up on it (#105).
+    store.db.prepare("UPDATE outbox SET state = 'failed' WHERE target = ?").run(DM_TARGET);
+    const second = watchdog();
+    advance(SLACK_WATCHDOG.stuckAfterMs);
+    second.tick();
+    expect(dms()).toHaveLength(2);
+    // The retry keeps the outage's first start.
+    expect(outages().map((event) => [event.state, event.since])).toEqual([
+      ['down', startedAt],
+      ['down', startedAt],
+    ]);
+    // Once that one is out (or still queued), a third broker doesn't DM again.
+    const third = watchdog();
+    advance(SLACK_WATCHDOG.stuckAfterMs);
+    third.tick();
+    expect(dms()).toHaveLength(2);
+    expect(stuckCalls).toBe(3);
+  });
+
+  it('reads the open outage once at start, not on every connected tick', () => {
+    const dog = watchdog();
+    connection.state = 'connected';
+    const prepare = store.db.prepare.bind(store.db);
+    let queries = 0;
+    store.db.prepare = ((sql: string) => {
+      if (sql.includes('FROM events')) queries += 1;
+      return prepare(sql);
+    }) as typeof store.db.prepare;
+    for (let i = 0; i < 10; i += 1) {
+      advance(30_000);
+      dog.tick();
+    }
+    store.db.prepare = prepare;
+    expect(queries).toBe(0);
   });
 });

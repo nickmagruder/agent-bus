@@ -24,6 +24,7 @@ import {
 } from './slack/inbound.ts';
 import { Notifier, Questions } from './questions.ts';
 import { PostQueue } from './slack/queue.ts';
+import { makeShutdown } from './shutdown.ts';
 import { SlackWatchdog } from './slack/watchdog.ts';
 import { Store } from './store.ts';
 import { TaskInbox } from './task-inbox.ts';
@@ -36,9 +37,6 @@ import { TaskService } from './tasks.ts';
  * failures exit 1 and are retried.
  */
 export const EXIT_CONFIG = 78;
-
-/** How long a shutdown may take before the process exits regardless. */
-const SHUTDOWN_TIMEOUT_MS = 15_000;
 
 export class PortInUseError extends Error {
   constructor(port: number) {
@@ -76,8 +74,8 @@ export interface BrokerDeps {
    * so the launcher restarts the broker. Unset: logged and DMed only.
    */
   onSlackStuck?: () => void;
-  /** Socket Mode watchdog check interval (tests). */
-  watchdogTickMs?: number;
+  /** Socket Mode watchdog timing (tests shorten it). */
+  watchdog?: { tickMs?: number; stuckAfterMs?: number };
   queueOptions?: Partial<ConstructorParameters<typeof PostQueue>[3]>;
   /** How often held approval DMs are checked (tests shorten it). */
   heldPingTickMs?: number;
@@ -251,9 +249,10 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
         kick: () => queue.kick(),
         log,
         onStuck: deps.onSlackStuck,
+        stuckAfterMs: deps.watchdog?.stuckAfterMs,
       })
     : undefined;
-  watchdog?.start(deps.watchdogTickMs);
+  watchdog?.start(deps.watchdog?.tickMs);
   log('info', 'agent-bus broker listening', { url: `http://127.0.0.1:${http.port}/mcp` });
 
   const server = http;
@@ -311,25 +310,22 @@ if (import.meta.main) {
       log('error', 'unhandled rejection', { error: errorMessage(reason) });
       process.exit(1);
     });
-    let stopping = false;
-    // Exit 0 stops the launcher; any other code makes it restart the broker.
-    const shutdown = (reason: string, code: 0 | 1 = 0) => {
-      if (stopping) return;
-      stopping = true;
-      log('info', 'shutting down', { reason });
-      // A stuck Socket Mode client may never finish stopping: exit anyway.
-      setTimeout(() => process.exit(code), SHUTDOWN_TIMEOUT_MS).unref();
-      broker.stop().then(
-        () => process.exit(code),
-        (error: unknown) => {
-          log('error', 'shutdown failed', { error: errorMessage(error) });
-          process.exit(1);
-        },
-      );
-    };
-    const broker = await startBroker(config, {
+    // Set once started; a shutdown asked for before then has nothing to stop.
+    const running: { broker?: Broker } = {};
+    // Exit 0 stops the launcher; 1 makes it restart the broker.
+    const shutdown = makeShutdown({
+      stop: () => running.broker?.stop() ?? Promise.resolve(),
+      exit: (code) => process.exit(code),
+      setExitCode: (code) => {
+        process.exitCode = code;
+      },
       log,
-      onSlackStuck: () => shutdown('Slack link stuck', 1),
+    });
+    running.broker = await startBroker(config, {
+      log,
+      onSlackStuck: () => {
+        shutdown('Slack link stuck', 1);
+      },
     });
     process.once('SIGINT', () => shutdown('SIGINT'));
     process.once('SIGTERM', () => shutdown('SIGTERM'));
