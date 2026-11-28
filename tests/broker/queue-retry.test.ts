@@ -208,3 +208,80 @@ describe('edits through the outbox (#105, #97)', () => {
     expect(slack.updates.map((u) => u.text)).toEqual(['Expired']);
   });
 });
+
+describe('review cases (PR 110)', () => {
+  it('lets a Slack error after a long outage still have its own tries', async () => {
+    const queue = makeQueue();
+    for (let i = 0; i < 6; i += 1) slack.failures.push(network());
+    slack.failures.push(new SlackSendError('transient', 'internal_error'));
+    const post = store.enqueue({ target: 'agents', text: 'x' });
+    queue.kick();
+    await queue.idle();
+    expect(store.getPost(post.id)).toMatchObject({ state: 'sent', attempts: 8 });
+  });
+
+  it('sends a newer edit that arrives while an older one is being sent', async () => {
+    let first = true;
+    const send = slack.updateMessage.bind(slack);
+    slack.updateMessage = async (channel, ts, text, blocks) => {
+      if (first) {
+        first = false;
+        store.enqueueEdit({ channel, ts, text: 'NEW', blocks: null });
+      }
+      await send(channel, ts, text, blocks);
+    };
+    const edit = store.enqueueEdit({ channel: 'D1', ts: '1.1', text: 'OLD', blocks: null });
+    const queue = makeQueue();
+    queue.kick();
+    await queue.idle();
+    expect(slack.updates.map((u) => u.text)).toEqual(['OLD', 'NEW']);
+    expect(store.getPost(edit.id)).toMatchObject({ state: 'sent', text: 'NEW' });
+    expect(store.countEvents({ kind: 'post.edited', since: new Date(0) })).toBe(1);
+  });
+
+  it('fails, rather than posts again, when recording a sent post fails', async () => {
+    const markSent = store.markSent.bind(store);
+    store.markSent = () => {
+      throw new Error('SQLITE_BUSY');
+    };
+    const post = store.enqueue({ target: 'agents', text: 'once' });
+    const queue = makeQueue();
+    queue.kick();
+    await queue.idle();
+    store.markSent = markSent;
+    expect(slack.posts.map((p) => p.text)).toEqual(['once']);
+    expect(store.getPost(post.id)).toMatchObject({ state: 'failed' });
+    expect(store.getPost(post.id)?.lastError).toContain('sent to Slack, but recording it failed');
+  });
+
+  it('starts the 24 h clock at the first network failure, not when queued', async () => {
+    const post = store.enqueue({ target: 'agents', text: 'before the weekend' });
+    // The laptop sleeps for three days; the first send after waking fails once.
+    clock += 3 * 24 * 60 * 60_000;
+    slack.failures.push(network());
+    const queue = makeQueue();
+    queue.kick();
+    await queue.idle();
+    expect(store.getPost(post.id)).toMatchObject({
+      state: 'sent',
+      failingSince: new Date(clock - 1000).toISOString(),
+    });
+  });
+
+  it('does not wake a lane backing off after a Slack error', async () => {
+    const signals: AbortSignal[] = [];
+    const queue = makeQueue(async (ms, signal) => {
+      sleeps.push(ms);
+      signals.push(signal);
+      clock += ms;
+    });
+    slack.failures.push(new SlackSendError('transient', 'internal_error'));
+    store.enqueue({ target: 'agents', text: 'x' });
+    queue.kick();
+    await queue.idle();
+    store.enqueue({ target: DM_TARGET, text: 'y' });
+    queue.kick();
+    await queue.idle();
+    expect(signals[0]?.aborted).toBe(false);
+  });
+});
