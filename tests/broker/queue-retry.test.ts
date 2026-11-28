@@ -1,3 +1,4 @@
+import { WebAPIHTTPError, WebAPIRequestError } from '@slack/web-api';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { silentLogger } from '../../src/broker/log.ts';
 import { classifySlackError, SlackSendError } from '../../src/broker/slack/api.ts';
@@ -38,8 +39,13 @@ const network = () => new SlackSendError('network', 'fetch failed');
 
 describe('retries through a network outage (#105)', () => {
   it('classifies a call Slack never answered as a network failure', () => {
-    expect(classifySlackError(new TypeError('fetch failed')).kind).toBe('network');
-    expect(classifySlackError(new Error('getaddrinfo ENOTFOUND slack.com')).kind).toBe('network');
+    expect(classifySlackError(new WebAPIRequestError(new Error('fetch failed'))).kind).toBe(
+      'network',
+    );
+    expect(classifySlackError(new WebAPIHTTPError(503, 'Unavailable', {})).kind).toBe('network');
+    expect(classifySlackError(new WebAPIHTTPError(400, 'Bad Request', {})).kind).toBe('transient');
+    // A bug or store error isn't the network: a few tries, not a day.
+    expect(classifySlackError(new Error('SQLITE_BUSY')).kind).toBe('transient');
   });
 
   it('keeps a post through a long outage and sends it once Slack is back', async () => {

@@ -1,6 +1,8 @@
 import {
+  WebAPIHTTPError,
   WebAPIPlatformError,
   WebAPIRateLimitedError,
+  WebAPIRequestError,
   WebClient,
   type ConversationsOpenResponse,
 } from '@slack/web-api';
@@ -79,9 +81,17 @@ export function classifySlackError(error: unknown): SlackSendError {
     const code = error.data.error;
     return new SlackSendError(PERMANENT_ERRORS.has(code) ? 'permanent' : 'transient', code);
   }
-  // No answer from Slack at all (fetch failed, ENOTFOUND, a timeout): the network.
+  // No answer from Slack (offline, DNS, the 15 s timeout), or Slack's servers failing (5xx).
+  if (error instanceof WebAPIRequestError) {
+    return new SlackSendError('network', error.original.message);
+  }
+  if (error instanceof WebAPIHTTPError) {
+    const kind = error.statusCode >= 500 ? 'network' : 'transient';
+    return new SlackSendError(kind, `HTTP ${String(error.statusCode)}`);
+  }
+  // Anything else (a bug, a store error) gets the few tries a Slack error gets, not a day's.
   return new SlackSendError(
-    'network',
+    'transient',
     error instanceof Error ? error.message : 'unknown Slack error',
   );
 }

@@ -256,8 +256,10 @@ export const MIGRATIONS: readonly string[] = [
   // v11: edits of sent messages go through the outbox too (#105, #97), so
   // they're retried, survive a restart and commit with the change they show.
   // An edit row's target is the message's channel; edit_ts is its ts.
+  // failing_since: the first network failure, so 24 h means 24 h of outage.
   `
   ALTER TABLE outbox ADD COLUMN edit_ts TEXT;
+  ALTER TABLE outbox ADD COLUMN failing_since TEXT;
   `,
 ];
 
@@ -337,6 +339,8 @@ export interface OutboxRecord {
   /** An edit: replaces message `editTs` in channel `target` rather than posting. */
   editTs: string | null;
   createdAt: string;
+  /** When the network first failed this post (#105); null while it hasn't. */
+  failingSince: string | null;
 }
 
 export interface NewPost {
@@ -1114,7 +1118,9 @@ export class Store {
 
   /**
    * Queues an edit of a message already in Slack (#105). A newer edit of the
-   * same message replaces one still queued: only the latest text matters.
+   * same message replaces one still queued: only the latest text matters (it
+   * keeps that row's age). One being sent right then is sent again with the
+   * new text, since `markEdited` only marks the text it sent.
    */
   enqueueEdit(edit: {
     channel: string;
@@ -1143,14 +1149,19 @@ export class Store {
     return found(this.getPost(Number(result.lastInsertRowid)), 'new outbox edit');
   }
 
-  /** An edit went through. Its channel and ts stay on the message it edited, not here. */
-  markEdited(id: number): void {
-    this.db
+  /**
+   * An edit went through. Its channel and ts stay on the message it edited,
+   * not here. False, and left queued, when a newer edit replaced its text
+   * while it was being sent: that one still has to go.
+   */
+  markEdited(id: number, sent: { text: string; blocks: unknown[] | null }): boolean {
+    const result = this.db
       .prepare(
         `UPDATE outbox SET state = 'sent', attempts = attempts + 1, sent_at = ?, last_error = NULL
-         WHERE id = ?`,
+         WHERE id = ? AND state = 'queued' AND text = ? AND blocks IS ?`,
       )
-      .run(this.timestamp(), id);
+      .run(this.timestamp(), id, sent.text, sent.blocks ? JSON.stringify(sent.blocks) : null);
+    return Number(result.changes) === 1;
   }
 
   /** Rewrites a post that hasn't been sent yet; false once it's sent (edit it in Slack instead). */
@@ -1197,14 +1208,16 @@ export class Store {
       .run(this.timestamp(), slackChannelId, slackTs, id);
   }
 
-  /** Records a failed attempt; `final` gives up on the post. */
-  markAttemptFailed(id: number, error: string, final: boolean): void {
+  /** Records a failed attempt; `final` gives up on the post; `network` starts its outage clock. */
+  markAttemptFailed(id: number, error: string, final: boolean, network = false): void {
     this.db
       .prepare(
         `UPDATE outbox SET attempts = attempts + 1, last_error = ?,
-         state = CASE WHEN ? THEN 'failed' ELSE state END WHERE id = ?`,
+         state = CASE WHEN ? THEN 'failed' ELSE state END,
+         failing_since = CASE WHEN ? THEN COALESCE(failing_since, ?) ELSE failing_since END
+         WHERE id = ?`,
       )
-      .run(error, final ? 1 : 0, id);
+      .run(error, final ? 1 : 0, network ? 1 : 0, this.timestamp(), id);
   }
 }
 
@@ -1246,6 +1259,7 @@ function toOutbox(row: Row): OutboxRecord {
     replyTo: row.reply_to === null || row.reply_to === undefined ? null : Number(row.reply_to),
     editTs: nullableString(row.edit_ts),
     createdAt: String(row.created_at),
+    failingSince: nullableString(row.failing_since),
   };
 }
 
