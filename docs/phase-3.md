@@ -1,11 +1,12 @@
 # Phase 3: Agents hand work to each other
 
-Status: **in progress** (2026-11-23). Built: the session key (#65),
+Status: **done** (2026-11-27). Built: the session key (#65),
 records, agent cards, tasks, delivery, tasks in Slack and repo leases
-(#57–#61, #31; 0.13.0–0.22.0; see "Build notes"). Left: clankers
-agent-comms ([#62](https://github.com/nickmagruder/agent-bus/issues/62)) and
-the live check ([#63](https://github.com/nickmagruder/agent-bus/issues/63)),
-plus the open follow-ups in the milestone (#66, #70, #82, #97).
+(#57–#61, #31; 0.13.0–0.22.0; see "Build notes"); clankers agent-comms
+([#62](https://github.com/nickmagruder/agent-bus/issues/62)); checked live
+across Claude Code, Codex and Copilot
+([#63](https://github.com/nickmagruder/agent-bus/issues/63); see "Live
+check"). Open follow-ups stay in the milestone.
 Planned 2026-11-19 and grilled the same day (see "Grilling outcomes").
 Decisions settled (below); the work is
 tracked in the [Phase 3 milestone](https://github.com/nickmagruder/agent-bus/milestone/4). Design:
@@ -679,8 +680,8 @@ After the [#99](https://github.com/nickmagruder/agent-bus/pull/99) review:
   A clean session exit doesn't release its lease: it lapses within 2 h.
 
 After the clankers#57 review
-([#102](https://github.com/nickmagruder/agent-bus/issues/102), 0.22.1,
-2026-11-25):
+([#102](https://github.com/nickmagruder/agent-bus/issues/102), 0.22.2,
+2026-11-27):
 
 - **Copilot has no prompt hook,** so the broken notice also rides its next
   claim (`claim_lease`, or SessionStart for the hook apps) and a keyed
@@ -695,6 +696,72 @@ After the clankers#57 review
   nothing changes. Its next claim works as usual: it takes a free lease,
   or meets the new holder as an ordinary contention (the DM comes then,
   not with the notice).
+
+## Live check ([#63](https://github.com/nickmagruder/agent-bus/issues/63), 2026-11-25 to 2026-11-27)
+
+Run on the live broker (0.22.0) with Claude Code, Codex and the Copilot
+desktop app. Nick approved, cancelled and released tasks from Slack himself;
+the agents only watched. Evidence is the broker's DB (tasks, task inbox,
+outbox, audit events) and logs. Times are Pacific unless marked Z. All timers
+ran at their real lengths (2 h reminder, 4 h stuck, 8 h expiry), not
+shortened test values.
+
+| #   | Check                                                                                                                    | Result                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | Claude Code → Codex handoff: create, Nick's Approve, Stop-hook notice, claim, `input-required`, answer, complete         | Passed (`t-4323aa`). Codex's Stop was blocked with the approved notice (`stop.offered`, then `stop_hook_confirmed`); result "24", checked independently; six lines mirrored to the task thread.                                                                                                                                                                                                                                                  |
+| 2   | Nick's task-thread reply reaches both sides as `verified-human`; Codex reports it but doesn't act on "delete the README" | Passed (`t-5c2a50`). Both task-inbox pointers delivered (creator by `check_inbox`, Codex by `wait_for_reply`); README unchanged.                                                                                                                                                                                                                                                                                                                 |
+| 3   | Cancel from Slack before approval                                                                                        | Passed (`t-59e9c2`): `task.approval` and `task.state` by `nick`.                                                                                                                                                                                                                                                                                                                                                                                 |
+| 4   | Same-platform refusal                                                                                                    | Passed: Claude Code → Claude Code refused ("Tasks go to another platform only…").                                                                                                                                                                                                                                                                                                                                                                |
+| 5   | Loop refusal                                                                                                             | Passed (`t-447a6f`): Codex's `create_task` back to the creator refused (`task_loop`).                                                                                                                                                                                                                                                                                                                                                            |
+| 6   | Copilot pool claim                                                                                                       | Passed (`t-e3f29b`): the Copilot app got the offer from `check_inbox`, judged the brief harmless, claimed it and added a note.                                                                                                                                                                                                                                                                                                                   |
+| 7   | Does the Copilot app fire hooks?                                                                                         | No: zero `hook` events from Copilot. It registers through MCP only, so Q13 and Q22 (pool tasks only, explicit `claim_lease`) stand.                                                                                                                                                                                                                                                                                                              |
+| 8   | Codex treats agent text as untrusted and Nick's as his, from `structuredContent`                                         | Passed in runs 1 and 2.                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 9   | Approval reminder (`t-f8a8e7`, 2 h)                                                                                      | Fired on time: 2:23 PM on 11-25 (`task.reminded`). The reminder DM was lost (finding 1).                                                                                                                                                                                                                                                                                                                                                         |
+| 10  | Approval expiry (`t-f8a8e7`, 8 h)                                                                                        | Due 8:23 PM on 11-25; ran at 1:14 AM on 11-26 when the machine woke (finding 2): `approval = expired`, `state = canceled`, by `agent-bus`, and the creator's session-thread notice was queued (posted to Slack at 11:25 AM on 11-27, finding 2). The task-thread line and the DM edit were lost (finding 1).                                                                                                                                     |
+| 11  | Stuck flag (`t-e3f29b`, holder silent 4 h)                                                                               | Due about 5:12 PM on 11-25; raised at 10:18 PM on 11-26 (finding 2): `stuck_at`, `task.flagged`, ":warning: Flagged as stuck" in the task thread (posted at 11:25 AM on 11-27). The DM with Cancel and Release was lost (finding 1); it was requeued by hand and sent at 11:30 AM on 11-27.                                                                                                                                                      |
+| 12  | Release from Slack                                                                                                       | Passed at 5:41 PM on 11-27, after at least one click was lost to finding 3: `state = submitted`, `holder` null, `open_since` reset, stuck flag cleared, `task.state` by `nick`, and ":arrows_counterclockwise: Given back by `nick`; open to claim again." in the task thread. The DM shows "Released: open to claim again.", and its text now says "its holder" with the release time: Release clears the holder and last-seen time (cosmetic). |
+| 13  | Daily digest with a Tasks section                                                                                        | Passed: both digests posted at 11:25 AM on 11-27 (finding 2). The 11-26 one lists tasks opened, finished and open; the 11-27 one lists `t-e3f29b`, marked stuck. No Leases section (no leases held).                                                                                                                                                                                                                                             |
+
+The checklist's "refused task (caps or hop limit)" was seen live as the
+same-platform and loop refusals (checks 4 and 5); the caps and hop limit
+themselves are covered by unit tests, not hit live. One task-inbox pointer
+stayed undelivered: the creator's completed notice for `t-447a6f`, since
+that session had moved on and never checked its inbox again.
+
+### Findings
+
+1. **Slack calls made during a network outage are lost.** The post queue
+   gives up after five attempts with 1–8 s backoff (about 15 s in all),
+   and DM edits are fire-and-forget. A short network drop on 11-25 and the
+   minutes after waking from sleep on 11-27 lost the reminder DM, the
+   expiry's thread line and DM edit, and the stuck DM, so I had no Release
+   button until it was requeued. The broker's own state was right
+   throughout; only Slack missed it. Follow-up: [#105](https://github.com/nickmagruder/agent-bus/issues/105).
+2. **Timers fire late after sleep, on catch-up.** The broker doesn't run
+   while the machine sleeps. A brief wake at 1:14 AM on 11-26 ran the
+   expiry, and the machine slept again mid-tick, before the stuck check in
+   the same tick; it finished at 10:18 PM on 11-26 (stuck flag and the
+   11-26 digest). The 11-27 digest posted at 11:25 AM instead of 8:00 AM.
+   Catch-up works as designed (missed ticks run on wake), so this is
+   expected for a broker on a laptop; noted, not filed.
+3. **Socket Mode can stay stuck reconnecting after a network loss.** It
+   went to `reconnecting` at 1:36 PM on 11-25 and never recovered by
+   itself, through both sleeps and wakes, for about 46 hours, until a
+   broker restart (`install-task.ps1 -Restart`) at 11:40 AM on 11-27.
+   On 11-27 the Web API was working again (posts sent from 11:25 AM) while Socket Mode wasn't, so Nick's first Release click (about 11:38 AM) never reached the broker and nothing recorded
+   it. Clicks and replies are lost silently while it lasts. For about five
+   minutes after the restart, on a flaky network, the connection dropped
+   six times on ping timeouts ("A pong wasn't received… 5000ms") and came
+   back within seconds each time, then once more at 4:46 PM. The Release
+   that landed came at 5:41 PM.
+   Follow-up: [#106](https://github.com/nickmagruder/agent-bus/issues/106).
+4. **Codex waits silently on its own tool-approval prompt.** The first time
+   Codex used `create_task` it sat on the app's approval prompt for 40
+   minutes (12:26–1:06 PM on 11-25) while Nick was away. The broker doesn't
+   ping for prompts on its own tools (`PermissionRequest` → `own_tool`), so
+   Slack showed nothing. Codex asks once per new agent-bus tool, by
+   design. Follow-up:
+   [#107](https://github.com/nickmagruder/agent-bus/issues/107).
 
 ## Research results ([#56](https://github.com/nickmagruder/agent-bus/issues/56), 2026-11-20)
 
