@@ -31,7 +31,12 @@ export interface SlackApi {
   updateMessage(channel: string, ts: string, text: string, blocks?: unknown[]): Promise<void>;
 }
 
-export type SlackFailure = 'rate_limited' | 'permanent' | 'transient';
+/**
+ * `network`: Slack never answered (offline, DNS, timeout): retried until the
+ * post is too old (#105). `transient`: Slack answered with an error that may
+ * pass: retried a few times. `permanent`: won't fix itself.
+ */
+export type SlackFailure = 'rate_limited' | 'permanent' | 'transient' | 'network';
 
 /** A Slack call failed; `kind` tells the queue whether to wait, retry or give up. */
 export class SlackSendError extends Error {
@@ -49,10 +54,13 @@ export class SlackSendError extends Error {
 /** Slack errors that won't fix themselves on retry. */
 const PERMANENT_ERRORS = new Set([
   'account_inactive',
+  'cant_update_message',
   'channel_not_found',
+  'edit_window_closed',
   'invalid_auth',
   'invalid_blocks',
   'is_archived',
+  'message_not_found',
   'missing_scope',
   'msg_too_long',
   'no_text',
@@ -71,8 +79,9 @@ export function classifySlackError(error: unknown): SlackSendError {
     const code = error.data.error;
     return new SlackSendError(PERMANENT_ERRORS.has(code) ? 'permanent' : 'transient', code);
   }
+  // No answer from Slack at all (fetch failed, ENOTFOUND, a timeout): the network.
   return new SlackSendError(
-    'transient',
+    'network',
     error instanceof Error ? error.message : 'unknown Slack error',
   );
 }

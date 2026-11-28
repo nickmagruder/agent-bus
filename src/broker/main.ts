@@ -105,11 +105,17 @@ export async function startBroker(config: BrokerConfig, deps: BrokerDeps = {}): 
   const service = new BusService(store, queue, undefined, directory);
   const notifier = new Notifier();
   const heldCalls = new HeldCalls();
-  /** Edits a message the bot sent (a question or task DM's outcome); fire-and-forget. */
+  /**
+   * Edits a message the bot sent (a question, task, flag or lease DM's
+   * outcome) through the outbox, so it's retried and survives a restart
+   * (#105). Callers edit inside their store transaction; the send starts
+   * after it commits, so an edit never shows a change that rolled back (#97).
+   */
   const editor = {
     update(channel: string, ts: string, text: string, blocks: unknown[]) {
-      slackApi.updateMessage(channel, ts, text, blocks).catch((error: unknown) => {
-        log('warn', 'could not update a Slack message', { error: errorMessage(error) });
+      store.enqueueEdit({ channel, ts, text, blocks });
+      setImmediate(() => {
+        queue.kick();
       });
     },
   };

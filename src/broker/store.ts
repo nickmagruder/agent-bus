@@ -253,6 +253,12 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE tasks ADD COLUMN flag_kind TEXT CHECK (flag_kind IN ('stuck', 'waiting'));
   ALTER TABLE tasks ADD COLUMN open_since TEXT;
   `,
+  // v11: edits of sent messages go through the outbox too (#105, #97), so
+  // they're retried, survive a restart and commit with the change they show.
+  // An edit row's target is the message's channel; edit_ts is its ts.
+  `
+  ALTER TABLE outbox ADD COLUMN edit_ts TEXT;
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -328,6 +334,9 @@ export interface OutboxRecord {
   blocks: unknown[] | null;
   /** Post this as a reply under that post (a task's thread), once it's sent. */
   replyTo: number | null;
+  /** An edit: replaces message `editTs` in channel `target` rather than posting. */
+  editTs: string | null;
+  createdAt: string;
 }
 
 export interface NewPost {
@@ -1103,6 +1112,47 @@ export class Store {
     return found(this.getPost(Number(result.lastInsertRowid)), 'new outbox post');
   }
 
+  /**
+   * Queues an edit of a message already in Slack (#105). A newer edit of the
+   * same message replaces one still queued: only the latest text matters.
+   */
+  enqueueEdit(edit: {
+    channel: string;
+    ts: string;
+    text: string;
+    blocks: unknown[] | null;
+  }): OutboxRecord {
+    const blocks = edit.blocks ? JSON.stringify(edit.blocks) : null;
+    const queued = this.db
+      .prepare(
+        `SELECT id FROM outbox WHERE state = 'queued' AND target = ? AND edit_ts = ?
+         ORDER BY id DESC LIMIT 1`,
+      )
+      .get(edit.channel, edit.ts) as Row | undefined;
+    if (queued) {
+      this.db
+        .prepare('UPDATE outbox SET text = ?, blocks = ? WHERE id = ?')
+        .run(edit.text, blocks, Number(queued.id));
+      return found(this.getPost(Number(queued.id)), 'queued edit');
+    }
+    const result = this.db
+      .prepare(
+        `INSERT INTO outbox (target, text, blocks, edit_ts, created_at) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(edit.channel, edit.text, blocks, edit.ts, this.timestamp());
+    return found(this.getPost(Number(result.lastInsertRowid)), 'new outbox edit');
+  }
+
+  /** An edit went through. Its channel and ts stay on the message it edited, not here. */
+  markEdited(id: number): void {
+    this.db
+      .prepare(
+        `UPDATE outbox SET state = 'sent', attempts = attempts + 1, sent_at = ?, last_error = NULL
+         WHERE id = ?`,
+      )
+      .run(this.timestamp(), id);
+  }
+
   /** Rewrites a post that hasn't been sent yet; false once it's sent (edit it in Slack instead). */
   updateQueuedPost(id: number, text: string, blocks: unknown[] | null): boolean {
     const result = this.db
@@ -1194,6 +1244,8 @@ function toOutbox(row: Row): OutboxRecord {
         ? null
         : (JSON.parse(String(row.blocks)) as unknown[]),
     replyTo: row.reply_to === null || row.reply_to === undefined ? null : Number(row.reply_to),
+    editTs: nullableString(row.edit_ts),
+    createdAt: String(row.created_at),
   };
 }
 
