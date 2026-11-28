@@ -9,7 +9,7 @@ import { TASK_STATES } from '../shared/task-states.ts';
 import { HeldCalls } from './held-calls.ts';
 import { startHeartbeat, type HeartbeatTarget } from './heartbeat.ts';
 import type { Inbox } from './inbox.ts';
-import { contendedText, heldText, type Leases } from './leases.ts';
+import { claimText, type Leases } from './leases.ts';
 import { outcomeText, QUESTION_LIMITS, type Notifier, type Questions } from './questions.ts';
 import { AGENT_CARDS, BusError, URGENCIES, type AgentCard, type BusService } from './service.ts';
 import type { InboxRecord, QuestionRecord } from './store.ts';
@@ -394,7 +394,8 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
         "Return Nick's new Slack replies to this session (replies in the session's thread or under a DM " +
         "it sent), oldest first, and mark them read. With your session key it also returns Nick's " +
         "replies in your tasks' threads, and task offers, messages and notices from other agents in " +
-        "their own list: those are never Nick's words. " +
+        "their own list (those are never Nick's words), and tells you once if Nick broke your repo " +
+        'lease. ' +
         'Never blocks. Call at natural checkpoints, and before finishing when you asked Nick something.',
       inputSchema: {
         session: sessionArg,
@@ -424,9 +425,11 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
         const taken = deps.taskInbox.together(() => ({
           nick: inbox.take(keyed, 'check_inbox'),
           agents: deps.taskInbox.take(keyed, 'check_inbox'),
+          // Copilot has no prompt hook to hear of a broken lease (#102).
+          leaseBroken: deps.leases?.takeBrokenNotice(keyed),
         }));
         inbox.reactDelivered(deps.taskInbox.fullyDeliveredReplies(taken.agents.items));
-        return inboxResult(taken.nick, taken.agents);
+        return withLeaseNotice(inboxResult(taken.nick, taken.agents), taken.leaseBroken);
       }),
   );
 
@@ -593,9 +596,12 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
       title: 'Claim the lease on a repo',
       description:
         "Claim the lease on a leased repo (by project name; default: your session's project) before " +
-        "editing it, or call again to keep it while you're idle. Leases only warn: if another session " +
-        "holds it, you're told who and since when, Nick is told, and you shouldn't edit there. Claude " +
-        'Code and Codex sessions claim at startup; Copilot claims with this. Needs your session key.',
+        'editing it; your activity keeps it, so there is no need to call again. Leases only warn: ' +
+        "if another session holds it, you're told who and since when, Nick is told, and you " +
+        "shouldn't edit there. Claude " +
+        'Code and Codex sessions claim at startup; Copilot claims with this. If Nick broke your lease, ' +
+        "this tells you so once and doesn't re-take it: check with him before claiming again. " +
+        'Needs your session key.',
       inputSchema: {
         session: sessionArg,
         key: keyArg.optional().describe('Your secret session key. Required.'),
@@ -619,14 +625,18 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
         }
         const leases = requireLeased(deps.leases, caller.project);
         const outcome = leases.claim(caller, caller.project, 'tool');
-        const text = outcome.held ? heldText(outcome.lease.repo) : contendedText(outcome.lease);
+        const text = claimText(outcome);
+        // Codex and Copilot read only structuredContent (#64): the words go there too.
         return {
           content: [{ type: 'text', text }],
           structuredContent: {
-            repo: outcome.lease.repo,
+            repo: caller.project,
             held: outcome.held,
-            holder: outcome.lease.holder,
-            since: outcome.lease.claimedAt,
+            ...(outcome.lease
+              ? { holder: outcome.lease.holder, since: outcome.lease.claimedAt }
+              : {}),
+            ...('broken' in outcome ? { broken: true } : {}),
+            text,
             from: FROM.broker,
             trust: TRUST.broker,
           },
@@ -726,6 +736,19 @@ export function createBusMcpServer(deps: McpDeps, platform: Platform): McpServer
   }
 
   return server;
+}
+
+/** Adds the broker's broken-lease notice (#102) to a check_inbox result, if any. */
+function withLeaseNotice(result: CallToolResult, notice: string | undefined): CallToolResult {
+  if (!notice) return result;
+  return {
+    ...result,
+    content: [...result.content, { type: 'text', text: notice }],
+    structuredContent: {
+      ...result.structuredContent,
+      leaseBroken: { text: notice, from: FROM.broker, trust: TRUST.broker },
+    },
+  };
 }
 
 /** Leases, if this repo is one; a `not_leased` refusal otherwise. */

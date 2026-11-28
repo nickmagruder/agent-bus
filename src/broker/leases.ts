@@ -10,6 +10,11 @@ import { DM_TARGET, LEASE_IDLE_MS, type SessionRecord, type Store } from './stor
  * tool call) keeps it, and it lapses after 2 h idle. Copilot, which has no
  * hooks, claims with `claim_lease`. Leases only warn: a second session is
  * told who holds it, and I get a DM with Break. Nothing is ever blocked.
+ *
+ * After a Break the old holder is told once, by whichever comes first: its
+ * next prompt (Claude Code, Codex), its next claim (any app; the claim then
+ * reports the break instead of re-taking the lease), or a keyed
+ * `check_inbox` (#102: Copilot has no prompt hook).
  */
 export const LEASES = {
   /** A lease lapses this long after its holder's last sign of life (Q22). */
@@ -32,7 +37,14 @@ export interface LeaseRecord {
 }
 
 export type ClaimOutcome =
-  { held: true; lease: LeaseRecord; renewed: boolean } | { held: false; lease: LeaseRecord };
+  | { held: true; lease: LeaseRecord; renewed: boolean }
+  | { held: false; lease: LeaseRecord }
+  /**
+   * I broke this session's lease and it hadn't been told: the claim reports
+   * that (now told) instead of re-taking the lease. `lease` is whoever holds
+   * it now, if anyone. Claiming again afterwards works as usual.
+   */
+  | { held: false; broken: string; repo: string; lease: LeaseRecord | undefined };
 
 export type BreakOutcome = 'broken' | 'changed' | 'not_human';
 
@@ -73,8 +85,7 @@ export class Leases implements LeaseHooks {
   /** SessionStart in a leased repo: claim it if free, else warn (Q22). */
   atSessionStart(session: SessionRecord): string | undefined {
     if (!this.isLeased(session.project)) return undefined;
-    const outcome = this.claim(session, session.project, 'hook');
-    return outcome.held ? heldText(session.project) : contendedText(outcome.lease);
+    return claimText(this.claim(session, session.project, 'hook'));
   }
 
   /** A prompt: once, the news that I broke this session's lease. */
@@ -100,10 +111,14 @@ export class Leases implements LeaseHooks {
    * Claims a repo's lease for a session: free (never held, released, broken
    * or lapsed) or already its own. Otherwise reports the holder, and the
    * first time this session meets it, DMs me with Break. Atomic: two
-   * sessions racing get one holder.
+   * sessions racing get one holder. A session whose lease I broke, and that
+   * hasn't heard yet, is told instead and claims nothing this time (#102):
+   * it may have kept editing, so it shouldn't silently take the lease back.
    */
   claim(session: SessionRecord, repo: string, source: LeaseSource): ClaimOutcome {
     const outcome = this.store.transaction((): ClaimOutcome => {
+      const broken = this.takeBrokenNotice(session);
+      if (broken) return { held: false, broken, repo, lease: this.current(repo) };
       const existing = this.current(repo);
       if (existing && existing.holder !== session.id) {
         this.contended(session, existing);
@@ -157,7 +172,7 @@ export class Leases implements LeaseHooks {
   /**
    * My Break click. Only my clicks count (T5): anyone else's is dropped and
    * audited. It breaks the lease only if the holder the DM named still holds
-   * it (compare and swap); the old holder hears at its next prompt.
+   * it (compare and swap); the old holder hears when it next checks in.
    */
   breakByButton(blockId: string, userId: string): BreakOutcome {
     const [repo = '', holder = ''] = blockId.split('|');
@@ -196,7 +211,8 @@ export class Leases implements LeaseHooks {
 
   /**
    * Leases I broke that the old holder hasn't been told about yet, and marks
-   * them told: the words for its next prompt's context (Claude Code, Codex).
+   * them told: the words for its next prompt's context (Claude Code, Codex),
+   * claim, or keyed `check_inbox` (#102), whichever asks first.
    */
   takeBrokenNotice(session: SessionRecord): string | undefined {
     return this.store.transaction(() => {
@@ -298,6 +314,17 @@ export function heldText(repo: string): string {
   );
 }
 
+/** What a claim tells the agent (SessionStart context, claim_lease). */
+export function claimText(outcome: ClaimOutcome): string {
+  if ('broken' in outcome) {
+    const now = outcome.lease
+      ? ` ${outcome.repo} is now leased to ${outcome.lease.holder}.`
+      : ` It wasn't re-claimed: claim it again only once Nick says to go on.`;
+    return `${outcome.broken}${now}`;
+  }
+  return outcome.held ? heldText(outcome.lease.repo) : contendedText(outcome.lease);
+}
+
 /** What a session told off a held lease hears (SessionStart context, claim_lease). */
 export function contendedText(lease: LeaseRecord): string {
   return (
@@ -349,7 +376,7 @@ export function breakMessage(
           {
             type: 'mrkdwn',
             text:
-              'Break frees the lease; the holder is told at its next prompt. Or leave it: ' +
+              'Break frees the lease; the holder is told when it next checks in. Or leave it: ' +
               `it lapses after ${LEASES.idleMs / 3_600_000} hours of the holder being idle.`,
           },
         ],
@@ -367,7 +394,7 @@ function breakOutcome(
 ): { text: string; blocks: unknown[] } {
   const outcome =
     state === 'broken'
-      ? ':unlock: Broken: the holder is told at its next prompt.'
+      ? ':unlock: Broken: the holder is told when it next checks in.'
       : `:information_source: \`${holder}\` no longer holds it: nothing to break.`;
   return {
     text: `${repo} lease (${state})`,
